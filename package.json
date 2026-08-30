@@ -1,0 +1,37 @@
+{
+  "name": "my-acm-helper",
+  "private": true,
+  "version": "0.1.0",
+  "type": "module",
+  "scripts": {
+    "dev": "vite",
+    "build": "vue-tsc --noEmit && vite build",
+    "test": "vitest run",
+    "preview": "vite preview",
+    "tauri": "tauri"
+  },
+  "dependencies": {
+    "@guolao/vue-monaco-editor": "^1.6.0",
+    "@tauri-apps/api": "^2.11.1",
+    "@tauri-apps/plugin-opener": "^2",
+    "@wasm-fmt/clang-format": "^22.1.8",
+    "@wasm-fmt/ruff_fmt": "^0.15.20",
+    "dompurify": "^3.4.14",
+    "katex": "^0.18.4",
+    "lg-markdown-processor": "https://codeload.github.com/Mr-Python-in-China/lg-markdown-processor/tar.gz/e82724321a419ade386bb6e5c1cf8f6df3a06b2c",
+    "monaco-editor": "^0.56.0",
+    "pinia": "^4.0.2",
+    "rehype-stringify": "^10.0.1",
+    "remark-directive": "^3.0.1",
+    "vue": "^3.5.13"
+  },
+  "devDependencies": {
+    "@tauri-apps/cli": "^2",
+    "@vitejs/plugin-vue": "^5.2.1",
+    "sass-embedded": "^1.100.0",
+    "typescript": "~5.6.2",
+    "vite": "^6.0.3",
+    "vitest": "^4.1.11",
+    "vue-tsc": "^2.1.10"
+  }
+}

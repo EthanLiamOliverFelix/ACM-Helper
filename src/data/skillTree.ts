@@ -1,0 +1,161 @@
+import type { SkillNode } from '../types'
+
+export const SKILL_TREE: SkillNode[] = [
+  { id: 'complexity', name: '复杂度分析', category: '基础', description: '估算时间与空间复杂度', prerequisites: [], tags: ['implementation', '语言入门', '基础算法', '顺序结构', '分支结构', '循环结构', '数组', '结构体', 'STL', '均摊分析'], level: 0 },
+  { id: 'sorting', name: '排序与比较器', category: '基础', description: '排序、稳定性与自定义比较', prerequisites: ['complexity'], tags: ['sortings', '排序'], level: 1 },
+  { id: 'binary-search', name: '二分查找', category: '基础', description: '有序查找与答案二分', prerequisites: ['sorting'], tags: ['binary search', '二分'], level: 2 },
+  { id: 'prefix-sum', name: '前缀和与差分', category: '数据处理', description: '区间聚合与批量区间修改', prerequisites: ['complexity'], tags: ['prefix sums', '前缀和', '差分'], level: 1 },
+  { id: 'two-pointers', name: '双指针', category: '数据处理', description: '滑动窗口与单调移动', prerequisites: ['sorting'], tags: ['two pointers', '双指针 two-pointer'], level: 2 },
+  { id: 'stack-queue', name: '栈与队列', category: '数据结构', description: 'LIFO、FIFO 与基础容器', prerequisites: ['complexity'], tags: ['data structures', '线性数据结构', '栈', '队列', '链表'], level: 1 },
+  { id: 'priority-queue', name: '优先队列', category: '数据结构', description: '堆与动态最值维护', prerequisites: ['stack-queue', 'sorting'], tags: ['data structures', '优先队列', '堆'], level: 2 },
+  { id: 'dsu', name: '并查集', category: '数据结构', description: '集合合并与连通性', prerequisites: ['complexity'], tags: ['dsu', '并查集'], level: 2 },
+  { id: 'segment-tree', name: '线段树', category: '数据结构', description: '区间查询与修改', prerequisites: ['prefix-sum', 'complexity'], tags: ['data structures', '树形数据结构', '线段树'], level: 3 },
+  { id: 'graph-storage', name: '图的存储', category: '图论', description: '邻接表、边集与图遍历表示', prerequisites: ['stack-queue'], tags: ['graphs', '图论', '图论建模'], level: 2 },
+  { id: 'bfs-dfs', name: 'BFS / DFS', category: '图论', description: '图搜索、连通块与遍历树', prerequisites: ['graph-storage'], tags: ['dfs and similar', 'graphs', '广度优先搜索 BFS', '深度优先搜索 DFS', '图遍历', '连通块'], level: 3 },
+  { id: 'toposort', name: '拓扑排序', category: '图论', description: 'DAG 顺序与依赖关系', prerequisites: ['bfs-dfs'], tags: ['topological sort', 'graphs', '拓扑排序'], level: 4 },
+  { id: 'dijkstra', name: 'Dijkstra', category: '图论', description: '非负权图最短路', prerequisites: ['graph-storage', 'priority-queue'], tags: ['shortest paths', 'graphs'], level: 4 },
+  { id: 'mst', name: '最小生成树', category: '图论', description: 'Kruskal 与 Prim', prerequisites: ['graph-storage', 'dsu', 'priority-queue'], tags: ['minimum spanning tree', 'graphs', '生成树'], level: 4 },
+  { id: 'greedy', name: '贪心', category: '算法思想', description: '局部选择、交换论证', prerequisites: ['sorting', 'complexity'], tags: ['greedy', '贪心', '反悔贪心'], level: 2 },
+  { id: 'dp-basic', name: '动态规划基础', category: '动态规划', description: '状态、转移、边界与滚动数组', prerequisites: ['complexity'], tags: ['dp', '动态规划 DP'], level: 2 },
+  { id: 'knapsack', name: '背包 DP', category: '动态规划', description: '01、完全与多重背包', prerequisites: ['dp-basic'], tags: ['dp', '背包 DP'], level: 3 },
+  { id: 'tree-dp', name: '树形 DP', category: '动态规划', description: '以树结构组织状态转移', prerequisites: ['dp-basic', 'bfs-dfs'], tags: ['dp', 'trees', '树形 DP'], level: 4 },
+  { id: 'number-theory', name: '数论基础', category: '数学', description: 'GCD、素数、筛法与同余', prerequisites: ['complexity'], tags: ['number theory', 'math', '数学', '素数判断', '最大公约数 gcd', '不定方程', '进制'], level: 2 },
+  { id: 'combinatorics', name: '组合数学', category: '数学', description: '排列组合、计数与容斥', prerequisites: ['number-theory'], tags: ['combinatorics', 'math', '组合数学', '排列组合', '二项式定理', '鸽笼原理', '容斥原理', 'Fibonacci 数列', 'Catalan 数', 'Stirling 数', '生成函数'], level: 3 },
+  { id: 'strings', name: '字符串基础', category: '字符串', description: '字符串处理与模式概念', prerequisites: ['complexity'], tags: ['strings', '字符串', '字符串（入门）'], level: 1 },
+  { id: 'kmp', name: 'KMP', category: '字符串', description: '前缀函数与线性匹配', prerequisites: ['strings'], tags: ['string suffix structures', 'strings', 'KMP 算法'], level: 3 },
+  { id: 'enumeration', name: '枚举与模拟', category: '基础算法', description: '系统枚举、边界处理与过程模拟', prerequisites: ['complexity'], tags: ['枚举', '模拟', 'brute force', 'implementation', '暴力数据结构', '其它技巧', 'Ad-hoc', '分类讨论'], level: 1 },
+  { id: 'recursion', name: '递归与递推', category: '基础算法', description: '递归结构、递推关系与栈深控制', prerequisites: ['complexity'], tags: ['递归', '递推', '函数与递归', '记忆化搜索'], level: 1 },
+  { id: 'bitwise', name: '位运算', category: '基础算法', description: '掩码、位集合与常用位技巧', prerequisites: ['complexity'], tags: ['位运算', 'bitmasks'], level: 2 },
+  { id: 'divide-conquer', name: '分治', category: '算法思想', description: '拆分、递归求解与合并', prerequisites: ['recursion', 'complexity'], tags: ['分治', 'divide and conquer'], level: 2 },
+  { id: 'ternary-search', name: '三分', category: '算法思想', description: '单峰函数极值搜索', prerequisites: ['binary-search'], tags: ['三分', 'ternary search'], level: 3 },
+  { id: 'discretization', name: '离散化', category: '数据处理', description: '保持序关系的值域压缩', prerequisites: ['sorting'], tags: ['离散化', 'data structures'], level: 2 },
+  { id: 'monotonic-structures', name: '单调栈与单调队列', category: '数据结构', description: '线性维护区间极值与支配关系', prerequisites: ['stack-queue'], tags: ['单调队列', '单调栈', 'data structures'], level: 3 },
+  { id: 'fenwick', name: '树状数组', category: '数据结构', description: '前缀信息的对数维护', prerequisites: ['prefix-sum', 'bitwise'], tags: ['树状数组', 'data structures'], level: 3 },
+  { id: 'sparse-table', name: 'ST 表与倍增', category: '数据结构', description: '静态区间查询与倍增跳转', prerequisites: ['prefix-sum', 'binary-search'], tags: ['ST 表', '倍增', 'data structures'], level: 3 },
+  { id: 'block-decomposition', name: '分块', category: '数据结构', description: '根号分块与块内维护', prerequisites: ['prefix-sum', 'complexity'], tags: ['分块', '根号分治', 'data structures'], level: 4 },
+  { id: 'mo-algorithm', name: '莫队', category: '数据结构', description: '离线区间询问的指针转移', prerequisites: ['block-decomposition', 'two-pointers'], tags: ['莫队', 'data structures'], level: 5 },
+  { id: 'balanced-tree', name: '平衡树', category: '高级数据结构', description: 'Treap/Splay 与动态有序集合', prerequisites: ['binary-search', 'recursion'], tags: ['平衡树', 'data structures'], level: 5 },
+  { id: 'persistent-segtree', name: '可持久化线段树', category: '高级数据结构', description: '保留历史版本的权值线段树', prerequisites: ['segment-tree'], tags: ['可持久化线段树', '可持久化', 'data structures'], level: 5 },
+  { id: 'tree-traversal', name: '树的遍历', category: '树论', description: '根树、父子关系、子树序与深度', prerequisites: ['bfs-dfs'], tags: ['树的遍历', 'trees', '树论'], level: 4 },
+  { id: 'lca', name: '最近公共祖先 LCA', category: '树论', description: '倍增与欧拉序求 LCA', prerequisites: ['tree-traversal', 'sparse-table'], tags: ['最近公共祖先 LCA', 'trees'], level: 5 },
+  { id: 'tree-diameter', name: '树的直径', category: '树论', description: '两次遍历与树形 DP 求最长路', prerequisites: ['tree-traversal'], tags: ['树的直径', 'trees'], level: 5 },
+  { id: 'hld', name: '树链剖分', category: '树论', description: '重链划分与路径区间化', prerequisites: ['lca', 'segment-tree'], tags: ['树链剖分', 'trees'], level: 6 },
+  { id: 'centroid-decomposition', name: '点分治', category: '树论', description: '按重心递归处理树上路径', prerequisites: ['tree-traversal', 'divide-conquer'], tags: ['点分治', 'trees', '树的重心'], level: 6 },
+  { id: 'scc', name: '强连通分量', category: '图论', description: 'Tarjan/Kosaraju 缩点', prerequisites: ['bfs-dfs'], tags: ['强连通分量', 'Tarjan', 'graphs'], level: 5 },
+  { id: 'bcc', name: '双连通分量', category: '图论', description: '割点、桥与点/边双连通', prerequisites: ['bfs-dfs'], tags: ['双连通分量', 'Tarjan', 'graphs'], level: 5 },
+  { id: 'euler-path', name: '欧拉回路', category: '图论', description: '欧拉路径判定与 Hierholzer', prerequisites: ['bfs-dfs'], tags: ['欧拉回路', 'graphs'], level: 5 },
+  { id: 'bipartite', name: '二分图与匹配', category: '图论', description: '染色、匈牙利算法与最大匹配', prerequisites: ['bfs-dfs'], tags: ['二分图', 'matchings', 'graphs', 'Dilworth 定理', 'Hall 定理'], level: 5 },
+  { id: 'two-sat', name: '2-SAT', category: '图论', description: '蕴含图、强连通分量与可满足性', prerequisites: ['scc'], tags: ['2-SAT', '2-sat'], level: 6 },
+  { id: 'negative-shortest-path', name: '负权最短路与差分约束', category: '图论', description: 'Bellman-Ford、SPFA 与负环', prerequisites: ['graph-storage'], tags: ['负权环', '差分约束', 'shortest paths'], level: 5 },
+  { id: 'floyd', name: 'Floyd', category: '图论', description: '全源最短路与传递闭包', prerequisites: ['graph-storage', 'dp-basic'], tags: ['最短路', 'shortest paths', 'Floyd 算法'], level: 5 },
+  { id: 'network-flow', name: '最大流', category: '网络流', description: '残量网络、Dinic 与建模', prerequisites: ['bfs-dfs'], tags: ['网络流', 'flows', '最大流最小割定理'], level: 6 },
+  { id: 'min-cut', name: '最小割', category: '网络流', description: '最大流最小割定理及割模型', prerequisites: ['network-flow'], tags: ['最小割', 'flows'], level: 7 },
+  { id: 'min-cost-flow', name: '费用流', category: '网络流', description: '增广路与最小费用最大流', prerequisites: ['network-flow', 'negative-shortest-path'], tags: ['费用流', 'flows', '模拟费用流'], level: 7 },
+  { id: 'interval-dp', name: '区间 DP', category: '动态规划', description: '以区间长度组织状态转移', prerequisites: ['dp-basic'], tags: ['区间 DP', 'dp'], level: 4 },
+  { id: 'digit-dp', name: '数位 DP', category: '动态规划', description: '按位限制与前缀计数', prerequisites: ['dp-basic', 'number-theory'], tags: ['数位 DP', 'dp'], level: 4 },
+  { id: 'state-compression-dp', name: '状态压缩 DP', category: '动态规划', description: '用位掩码表达集合状态', prerequisites: ['dp-basic', 'bitwise'], tags: ['状态合并', 'bitmasks', 'dp', '状压 DP'], level: 4 },
+  { id: 'dp-optimization', name: '动态规划优化', category: '动态规划', description: '单调队列、斜率与分治优化', prerequisites: ['dp-basic', 'monotonic-structures'], tags: ['动态规划优化', '斜率优化', 'dp', '决策单调性', '整体转移', '斜率维护技巧 slope trick'], level: 6 },
+  { id: 'modular-arithmetic', name: '模运算与快速幂', category: '数论', description: '同余、快速幂与模意义运算', prerequisites: ['number-theory', 'bitwise'], tags: ['数论', 'number theory'], level: 3 },
+  { id: 'extended-gcd', name: '扩展欧几里得', category: '数论', description: '裴蜀定理与线性同余方程', prerequisites: ['number-theory'], tags: ['扩展欧几里德算法', 'number theory', 'Bézout 定理'], level: 4 },
+  { id: 'mod-inverse', name: '乘法逆元', category: '数论', description: '费马、扩欧与线性逆元', prerequisites: ['modular-arithmetic', 'extended-gcd'], tags: ['逆元', 'number theory'], level: 5 },
+  { id: 'crt', name: '中国剩余定理', category: '数论', description: '合并同余方程组', prerequisites: ['extended-gcd'], tags: ['中国剩余定理 CRT', 'number theory'], level: 5 },
+  { id: 'mobius', name: '莫比乌斯反演', category: '数论', description: '积性函数、筛法与反演', prerequisites: ['number-theory', 'combinatorics'], tags: ['莫比乌斯反演', 'number theory'], level: 6 },
+  { id: 'matrix', name: '矩阵运算与加速', category: '数学', description: '矩阵乘法、快速幂与线性递推', prerequisites: ['modular-arithmetic'], tags: ['矩阵运算', '矩阵乘法', 'matrix exponentiation', '矩阵加速', '线性代数', '线性递推'], level: 5 },
+  { id: 'gaussian-elimination', name: '高斯消元', category: '数学', description: '线性方程组与异或方程组', prerequisites: ['matrix'], tags: ['高斯消元', 'math', '行列式', '特征值'], level: 6 },
+  { id: 'probability-expectation', name: '概率与期望', category: '数学', description: '概率模型、期望线性性与期望 DP', prerequisites: ['combinatorics', 'dp-basic'], tags: ['概率论', '期望', 'probabilities', '随机游走 Markov Chain', '鞅的停时定理'], level: 5 },
+  { id: 'game-theory', name: '博弈论', category: '数学', description: 'Nim、SG 函数与必胜态', prerequisites: ['recursion', 'number-theory'], tags: ['博弈论', 'games', 'SG 函数', 'Nim 积', '博弈树'], level: 5 },
+  { id: 'trie', name: '字典树 Trie', category: '字符串', description: '前缀集合与字符树', prerequisites: ['strings'], tags: ['字典树 Trie', 'strings'], level: 3 },
+  { id: 'string-hashing', name: '字符串哈希', category: '字符串', description: '滚动哈希与碰撞控制', prerequisites: ['strings', 'modular-arithmetic'], tags: ['哈希 hashing', 'hashing', 'strings'], level: 4 },
+  { id: 'aho-corasick', name: 'AC 自动机', category: '字符串', description: 'Trie、失配边与多模式匹配', prerequisites: ['trie', 'kmp'], tags: ['AC 自动机', 'strings', '有限状态自动机'], level: 5 },
+  { id: 'suffix-array', name: '后缀数组', category: '字符串', description: '后缀排序、LCP 与倍增', prerequisites: ['strings', 'sorting'], tags: ['后缀数组 SA', 'string suffix structures', '后缀树'], level: 5 },
+  { id: 'suffix-automaton', name: '后缀自动机', category: '字符串', description: '子串状态与 endpos 等价类', prerequisites: ['strings'], tags: ['后缀自动机 SAM', 'string suffix structures'], level: 6 },
+  { id: 'manacher', name: 'Manacher', category: '字符串', description: '线性求解回文半径', prerequisites: ['strings', 'two-pointers'], tags: ['Manacher 算法', 'strings'], level: 4 },
+  { id: 'geometry-vector', name: '向量与叉积', category: '计算几何', description: '点线表示、方向与面积', prerequisites: ['complexity'], tags: ['向量', '叉积', 'geometry', '计算几何', '平面几何', '线段相交', '三维计算几何', '极角排序', '闵可夫斯基和 Minkowski sum'], level: 3 },
+  { id: 'convex-hull', name: '凸包', category: '计算几何', description: '极角序与单调链', prerequisites: ['geometry-vector', 'sorting'], tags: ['凸包', 'geometry'], level: 5 },
+  { id: 'fft', name: 'FFT', category: '多项式', description: '复数快速傅里叶变换与卷积', prerequisites: ['divide-conquer', 'polynomial-basics'], tags: ['快速傅里叶变换 FFT', 'fft', '单位根反演'], level: 6 },
+  { id: 'ntt', name: 'NTT', category: '多项式', description: '模意义快速变换与卷积', prerequisites: ['fft', 'modular-arithmetic'], tags: ['快速数论变换 NTT', 'fft'], level: 7 },
+  { id: 'randomized', name: '随机化算法', category: '算法思想', description: '随机采样、洗牌与概率正确性', prerequisites: ['probability-expectation'], tags: ['随机化', 'randomized', '爬山算法 Local search', '模拟退火', '随机调整', '遗传算法', '近似算法'], level: 6 },
+  { id: 'high-precision', name: '高精度计算', category: '基础算法', description: '大整数的加减乘除与进制处理', prerequisites: ['strings', 'enumeration'], tags: ['高精度'], level: 2 },
+  { id: 'search-pruning', name: '搜索剪枝', category: '搜索', description: '可行性、最优性剪枝与搜索顺序设计', prerequisites: ['recursion', 'enumeration'], tags: ['搜索', '剪枝', 'backtracking'], level: 3 },
+  { id: 'ida-star', name: 'A* / IDA*', category: '搜索', description: '启发函数、迭代加深与最短搜索', prerequisites: ['search-pruning', 'priority-queue'], tags: ['启发式搜索', '迭代加深搜索', '启发式迭代加深搜索 IDA*', 'A*  算法'], level: 5 },
+  { id: 'meet-in-middle', name: '折半搜索', category: '搜索', description: '从两侧枚举并合并状态空间', prerequisites: ['enumeration', 'divide-conquer'], tags: ['折半搜索 meet in the middle'], level: 4 },
+  { id: 'cdq', name: 'CDQ 分治', category: '离线算法', description: '按维度分治处理偏序与动态统计', prerequisites: ['divide-conquer', 'fenwick', 'discretization'], tags: ['cdq 分治', 'offline queries'], level: 5 },
+  { id: 'offline-processing', name: '离线处理', category: '离线算法', description: '重排询问并批量维护答案', prerequisites: ['sorting', 'discretization'], tags: ['离线处理', 'offline queries'], level: 3 },
+  { id: 'parallel-binary-search', name: '整体二分', category: '离线算法', description: '对一批询问同步二分答案', prerequisites: ['binary-search', 'fenwick', 'offline-processing'], tags: ['整体二分'], level: 5 },
+  { id: 'odt', name: '珂朵莉树 ODT', category: '高级数据结构', description: '随机数据下的颜色段均摊维护', prerequisites: ['balanced-tree', 'discretization'], tags: ['颜色段均摊（珂朵莉树 ODT）'], level: 6 },
+  { id: 'segment-tree-merge', name: '线段树合并', category: '高级数据结构', description: '动态开点线段树的递归合并', prerequisites: ['segment-tree', 'tree-traversal'], tags: ['线段树合并'], level: 6 },
+  { id: 'segment-tree-beats', name: '吉司机线段树', category: '高级数据结构', description: '维护区间历史极值与取 min/max 操作', prerequisites: ['segment-tree', 'monotonic-structures'], tags: ['吉司机线段树 segment tree beats'], level: 7 },
+  { id: 'li-chao-tree', name: '李超线段树', category: '高级数据结构', description: '动态维护一次函数最值', prerequisites: ['segment-tree', 'geometry-vector'], tags: ['李超线段树'], level: 6 },
+  { id: 'cartesian-tree', name: '笛卡尔树', category: '树论', description: '同时保持序列下标与堆序关系', prerequisites: ['monotonic-structures', 'tree-traversal'], tags: ['笛卡尔树'], level: 5 },
+  { id: 'dsu-on-tree', name: '树上启发式合并', category: '树论', description: '保留重儿子信息统计子树答案', prerequisites: ['tree-traversal', 'discretization'], tags: ['树上启发式合并', '启发式合并'], level: 6 },
+  { id: 'lct', name: '动态树 LCT', category: '树论', description: '用 Splay 维护动态森林路径', prerequisites: ['balanced-tree', 'tree-traversal'], tags: ['动态树 LCT'], level: 7 },
+  { id: 'bounded-flow', name: '上下界网络流', category: '网络流', description: '带容量下界的可行流与最大流建模', prerequisites: ['network-flow'], tags: ['上下界网络流'], level: 7 },
+  { id: 'linear-dp', name: '线性 DP', category: '动态规划', description: '按序列位置组织一维或少量状态', prerequisites: ['dp-basic'], tags: ['线性 DP'], level: 3 },
+  { id: 'profile-dp', name: '轮廓线 DP', category: '动态规划', description: '压缩网格边界轮廓进行状态转移', prerequisites: ['state-compression-dp'], tags: ['轮廓线 DP'], level: 5 },
+  { id: 'dp-on-dp', name: 'DP 套 DP', category: '动态规划', description: '外层状态中嵌入内层动态规划结构', prerequisites: ['dp-optimization'], tags: ['DP 套 DP', '动态 DP'], level: 7 },
+  { id: 'linear-basis', name: '线性基', category: '数学', description: '维护异或向量空间与最大异或值', prerequisites: ['bitwise'], tags: ['线性基'], level: 5 },
+  { id: 'lucas', name: 'Lucas 定理', category: '组合数学', description: '模质数下计算大规模组合数', prerequisites: ['combinatorics', 'modular-arithmetic'], tags: ['Lucas 定理'], level: 5 },
+  { id: 'euler-phi', name: '欧拉函数与降幂', category: '数论', description: '互质计数、欧拉定理与指数降幂', prerequisites: ['number-theory', 'modular-arithmetic'], tags: ['欧拉函数', '欧拉降幂'], level: 4 },
+  { id: 'linear-sieve', name: '线性筛', category: '数论', description: '线性筛质数、积性函数与预处理', prerequisites: ['number-theory'], tags: ['线性筛法'], level: 4 },
+  { id: 'bsgs', name: 'BSGS', category: '数论', description: '大步小步求解离散对数', prerequisites: ['modular-arithmetic', 'mod-inverse'], tags: ['大步小步算法 BSGS'], level: 6 },
+  { id: 'fwt', name: 'FWT / 子集卷积', category: '多项式', description: '位运算卷积与集合幂级数变换', prerequisites: ['divide-conquer', 'bitwise', 'modular-arithmetic'], tags: ['快速沃尔什变换 FWT', '快速莫比乌斯变换 FMT', '集合幂级数，子集卷积'], level: 7 },
+  { id: 'palindrome-automaton', name: '回文自动机 PAM', category: '字符串', description: '维护所有本质不同回文子串', prerequisites: ['strings', 'manacher'], tags: ['回文自动机 PAM'], level: 6 },
+  { id: 'z-function', name: 'Z 函数', category: '字符串', description: '线性计算字符串与各后缀的最长公共前缀', prerequisites: ['strings'], tags: ['Z 函数'], level: 4 },
+  { id: 'hash-table', name: '哈希表', category: '数据结构', description: '散列映射、冲突处理与复杂度控制', prerequisites: ['complexity'], tags: ['哈希表', 'hashing'], level: 2 },
+  { id: 'bitset', name: 'Bitset 优化', category: '数据结构', description: '用机器字并行加速集合转移', prerequisites: ['bitwise'], tags: ['bitset'], level: 4 },
+  { id: 'scanline', name: '扫描线', category: '计算几何', description: '按事件顺序维护几何覆盖关系', prerequisites: ['geometry-vector', 'segment-tree'], tags: ['扫描线'], level: 6 },
+  { id: 'rotating-calipers', name: '旋转卡壳', category: '计算几何', description: '在凸包上维护单调对踵点', prerequisites: ['convex-hull', 'two-pointers'], tags: ['旋转卡壳'], level: 6 },
+  { id: 'half-plane-intersection', name: '半平面交', category: '计算几何', description: '用有向直线求凸区域交集', prerequisites: ['geometry-vector', 'sorting'], tags: ['半平面交'], level: 7 },
+  { id: 'construction', name: '构造算法', category: '算法思想', description: '从约束与不变量反推可行结构', prerequisites: ['enumeration', 'greedy'], tags: ['构造', 'constructive algorithms'], level: 4 },
+  { id: 'kruskal-reconstruction-tree', name: 'Kruskal 重构树', category: '树论', description: '按边权合并形成重构树并回答瓶颈询问', prerequisites: ['mst', 'tree-traversal'], tags: ['Kruskal 重构树'], level: 6 },
+  { id: 'virtual-tree', name: '虚树', category: '树论', description: '只保留关键点与 LCA 压缩树上询问', prerequisites: ['lca', 'sorting'], tags: ['虚树'], level: 6 },
+  { id: 'cactus', name: '仙人掌与基环树', category: '图论', description: '处理每条边至多属于一个简单环的图结构', prerequisites: ['bcc', 'tree-dp'], tags: ['仙人掌', '基环树'], level: 6 },
+  { id: 'general-matching', name: '一般图最大匹配', category: '图论', description: '带花树与一般图匹配建模', prerequisites: ['bipartite'], tags: ['一般图的最大匹配'], level: 7 },
+  { id: 'matrix-tree-theorem', name: '矩阵树定理', category: '图论', description: '用拉普拉斯矩阵行列式统计生成树', prerequisites: ['mst', 'gaussian-elimination', 'combinatorics'], tags: ['矩阵树定理', 'LGV 引理'], level: 7 },
+  { id: 'primitive-root', name: '原根与群论基础', category: '数论', description: '乘法群、阶与原根判定', prerequisites: ['euler-phi', 'number-theory'], tags: ['原根', '群论', '置换', 'Pólya 定理'], level: 6 },
+  { id: 'fractional-programming', name: '分数规划', category: '算法思想', description: '参数化答案并用二分判定比值最优解', prerequisites: ['binary-search', 'greedy'], tags: ['分数规划'], level: 5 },
+  { id: 'mergeable-heap', name: '可并堆', category: '高级数据结构', description: '左偏树等支持高效合并的优先队列', prerequisites: ['priority-queue', 'recursion'], tags: ['可并堆', '左偏树'], level: 5 },
+  { id: 'cantor-expansion', name: '康托展开', category: '组合数学', description: '排列与字典序排名之间的双向转换', prerequisites: ['combinatorics', 'fenwick'], tags: ['康托展开'], level: 5 },
+  { id: 'berlekamp-massey', name: 'Berlekamp–Massey', category: '数学', description: '从序列前缀恢复最短线性递推', prerequisites: ['matrix', 'modular-arithmetic'], tags: ['Berlekamp-Massey(BM) 算法'], level: 7 },
+  { id: 'kd-tree', name: 'K-D Tree', category: '高级数据结构', description: '按维度划分空间并进行多维搜索', prerequisites: ['divide-conquer', 'geometry-vector'], tags: ['K-D Tree'], level: 6 },
+  { id: 'dancing-links', name: 'Dancing Links', category: '搜索', description: '用十字链表高效求解精确覆盖', prerequisites: ['search-pruning', 'stack-queue'], tags: ['Dancing Links'], level: 6 },
+  { id: 'wqs-binary-search', name: 'WQS 二分', category: '动态规划', description: '用拉格朗日参数把数量约束转化为代价', prerequisites: ['binary-search', 'dp-optimization'], tags: ['凸完全单调性（wqs 二分）'], level: 7 },
+  { id: 'quadrangle-inequality', name: '四边形不等式优化', category: '动态规划', description: '利用决策单调性优化区间动态规划', prerequisites: ['interval-dp', 'dp-optimization'], tags: ['四边形不等式'], level: 7 },
+  { id: 'prufer-sequence', name: 'Prüfer 序列', category: '组合数学', description: '树与序列的双射及标号树计数', prerequisites: ['tree-traversal', 'combinatorics'], tags: ['Prüfer 序列'], level: 6 },
+  { id: 'circle-square-tree', name: '圆方树', category: '图论', description: '将点双连通分量转化为树结构', prerequisites: ['bcc', 'tree-traversal'], tags: ['圆方树'], level: 7 },
+  { id: 'polynomial-basics', name: '多项式基础', category: '多项式', description: '多项式表示、卷积与形式幂级数基础', prerequisites: ['combinatorics', 'modular-arithmetic'], tags: ['多项式'], level: 5 },
+  { id: 'planar-graph', name: '平面图', category: '图论', description: '平面嵌入、欧拉公式与对偶关系', prerequisites: ['graph-storage', 'geometry-vector'], tags: ['平面图', '平面图欧拉公式', '广义串并联图'], level: 6 },
+  { id: 'minimum-cycle', name: '最小环', category: '图论', description: '结合最短路求有向图或无向图最小环', prerequisites: ['dijkstra', 'floyd'], tags: ['最小环'], level: 6 },
+  { id: 'huffman-tree', name: '霍夫曼树', category: '贪心', description: '用优先队列构造最优前缀编码树', prerequisites: ['greedy', 'priority-queue'], tags: ['霍夫曼树', '信息论'], level: 4 },
+  { id: 'tree-of-trees', name: '树套树', category: '高级数据结构', description: '组合多层索引结构处理二维与动态询问', prerequisites: ['segment-tree', 'balanced-tree'], tags: ['树套树', '全局平衡二叉树', '后缀平衡树'], level: 7 },
+  { id: 'segment-tree-divide', name: '线段树分治', category: '离线算法', description: '按时间区间挂载操作并递归处理动态问题', prerequisites: ['segment-tree', 'offline-processing'], tags: ['线段树分治', '动态树分治', '二区间合并（猫树分治）'], level: 7 },
+  { id: 'du-sieve', name: '杜教筛与整除分块', category: '数论', description: '利用整除分块和卷积递推求积性函数前缀和', prerequisites: ['mobius', 'linear-sieve'], tags: ['杜教筛', '整除分块', 'Dirichlet 卷积', '类欧几里得算法'], level: 7 },
+  { id: 'interpolation', name: '拉格朗日插值', category: '多项式', description: '由若干取值恢复多项式并快速求值', prerequisites: ['polynomial-basics', 'modular-arithmetic'], tags: ['拉格朗日插值法', '拉格朗日反演'], level: 6 },
+]
+
+export const SKILL_BY_ID = new Map(SKILL_TREE.map((skill) => [skill.id, skill]))
+
+/** 返回指定技能以及其全部递归前置技能，按学习阶段排序。 */
+export function skillPrerequisiteClosure(skills: SkillNode[]): SkillNode[] {
+  const result = new Map<string, SkillNode>()
+  const visiting = new Set<string>()
+
+  function visit(skill: SkillNode) {
+    if (result.has(skill.id)) return
+    if (visiting.has(skill.id)) throw new Error(`技能树存在循环依赖: ${skill.id}`)
+    visiting.add(skill.id)
+    for (const prerequisiteId of skill.prerequisites) {
+      const prerequisite = SKILL_BY_ID.get(prerequisiteId)
+      if (!prerequisite) throw new Error(`技能 ${skill.id} 的前置节点不存在: ${prerequisiteId}`)
+      visit(prerequisite)
+    }
+    visiting.delete(skill.id)
+    result.set(skill.id, skill)
+  }
+
+  skills.forEach(visit)
+  return [...result.values()].sort((a, b) => a.level - b.level || a.name.localeCompare(b.name, 'zh-CN'))
+}
+
+// 模块加载时即验证所有前置节点存在且 DAG 无环。
+export const SKILL_LEARNING_ORDER = skillPrerequisiteClosure(SKILL_TREE)

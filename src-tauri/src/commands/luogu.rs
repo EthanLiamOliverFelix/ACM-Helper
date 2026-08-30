@@ -41,22 +41,47 @@ pub async fn inspect_luogu_account(app: AppHandle) -> Result<LuoguAccountStatus,
             window.__acmAccountReported=true;
             new Image().src='http://127.0.0.1:{port}/result?'+encodeURIComponent(JSON.stringify(value));
           }}
+          function usernameFrom(root) {{
+            var data=root&&(root.currentData||root.data||root);
+            var candidates=[
+              data&&data.currentUser, data&&data.user,
+              data&&data.data&&data.data.currentUser, data&&data.data&&data.data.user,
+              root&&root.currentUser, root&&root.user
+            ];
+            for (var i=0;i<candidates.length;i++) {{
+              var user=candidates[i];
+              if (!user || typeof user!=='object') continue;
+              var name=String(user.name||user.username||'').trim();
+              if (name) return name;
+            }}
+            return '';
+          }}
+          function usernameFromPage() {{
+            try {{
+              var context=document.querySelector('script#lentille-context');
+              var name=context&&usernameFrom(JSON.parse(context.textContent||'{{}}'));
+              if (name) return name;
+            }} catch(e) {{}}
+            var logout=document.querySelector('a[href="/auth/logout"],a[href^="/auth/logout?"]');
+            var link=logout&&document.querySelector('header a[href^="/user/"],nav a[href^="/user/"],a[href^="/user/"][title]');
+            if (!link) return '';
+            var href=link.getAttribute('href')||'';
+            return (link.getAttribute('title')||link.getAttribute('aria-label')||link.textContent||href.split('/user/')[1]||'').trim();
+          }}
+          var attempts=0;
           async function inspect() {{
+            attempts++;
             try {{
               var response=await fetch('/?_contentOnly=1&_t='+Date.now(),{{credentials:'include',cache:'no-store',headers:{{'x-lentille-request':'content-only'}}}});
               var body=await response.json().catch(function(){{return {{}}}});
-              var data=body.currentData||body.data||body;
-              var user=data.currentUser||(data.data&&data.data.currentUser)||null;
-              var name=user&&String(user.name||user.username||'').trim();
-              report(name?{{loggedIn:true,username:name}}:{{loggedIn:false,username:null}}); return;
-            }} catch(e) {{}}
-            var logout=document.querySelector('a[href="/auth/logout"]');
-            var link=logout&&document.querySelector('header a[href^="/user/"], nav a[href^="/user/"]');
-            if (logout && link) {{
-              var name=(link.getAttribute('title')||link.getAttribute('aria-label')||link.textContent||'').trim();
+              var name=usernameFrom(body);
               if (name) {{ report({{loggedIn:true,username:name}}); return; }}
-            }}
-            if (document.readyState==='complete') report({{loggedIn:false,username:null}});
+            }} catch(e) {{}}
+            var pageName=usernameFromPage();
+            if (pageName) {{ report({{loggedIn:true,username:pageName}}); return; }}
+            // 新版页面的用户上下文可能晚于 load 注入。不要在第一次空响应时
+            // 把有效 Cookie 判成未登录，给页面约 8 秒完成 hydration。
+            if (document.readyState==='complete' && attempts>=9) report({{loggedIn:false,username:null}});
           }}
           setInterval(inspect,900); window.addEventListener('load',inspect); inspect();
         }})();"#,
@@ -106,14 +131,36 @@ pub async fn login_luogu_browser(
   window.__acmLuoguLoginWatcher = true;
   var switching={switching}, previous={current_json}.toLowerCase(), checking=false;
   var startKey='__acmLuoguSwitchStarted_{port}', sawKey='__acmLuoguSawLogout_{port}';
+  function usernameFrom(root) {{
+    var data=root&&(root.currentData||root.data||root);
+    var candidates=[data&&data.currentUser,data&&data.user,data&&data.data&&data.data.currentUser,data&&data.data&&data.data.user,root&&root.currentUser,root&&root.user];
+    for (var i=0;i<candidates.length;i++) {{
+      var user=candidates[i];
+      if (!user || typeof user!=='object') continue;
+      var name=String(user.name||user.username||'').trim();
+      if (name) return name;
+    }}
+    return '';
+  }}
+  function usernameFromPage() {{
+    try {{
+      var context=document.querySelector('script#lentille-context');
+      var name=context&&usernameFrom(JSON.parse(context.textContent||'{{}}'));
+      if (name) return name;
+    }} catch(e) {{}}
+    var logout=document.querySelector('a[href="/auth/logout"],a[href^="/auth/logout?"]');
+    var link=logout&&document.querySelector('header a[href^="/user/"],nav a[href^="/user/"],a[href^="/user/"][title]');
+    if (!link) return '';
+    var href=link.getAttribute('href')||'';
+    return (link.getAttribute('title')||link.getAttribute('aria-label')||link.textContent||href.split('/user/')[1]||'').trim();
+  }}
   async function currentUser() {{
     try {{
       var response=await fetch('/?_contentOnly=1&_t='+Date.now(),{{credentials:'include',cache:'no-store',headers:{{'x-lentille-request':'content-only'}}}});
-      var body=await response.json().catch(function(){{return {{}}}}), data=body.currentData||body.data||body;
-      var user=data.currentUser||(data.data&&data.data.currentUser)||null;
-      var name=user&&String(user.name||user.username||'').trim();
-      return name?name.toLowerCase():'';
-    }} catch(e) {{ return ''; }}
+      var body=await response.json().catch(function(){{return {{}}}}), name=usernameFrom(body);
+      if (name) return name;
+    }} catch(e) {{}}
+    return usernameFromPage();
   }}
   async function tick() {{
     if (checking || window.__acmLuoguLoginReported) return;
@@ -132,11 +179,11 @@ pub async fn login_luogu_browser(
         }}
         return;
       }}
-      var changed=!switching || (sessionStorage.getItem(sawKey)==='1' && (!previous || username!==previous));
+      var changed=!switching || (sessionStorage.getItem(sawKey)==='1' && (!previous || username.toLowerCase()!==previous));
       if (changed) {{
         window.__acmLuoguLoginReported = true;
         sessionStorage.removeItem(startKey); sessionStorage.removeItem(sawKey);
-        new Image().src='http://127.0.0.1:{port}/result?login';
+        new Image().src='http://127.0.0.1:{port}/result?'+encodeURIComponent(username);
       }}
     }} finally {{ checking=false; }}
   }}
@@ -169,8 +216,8 @@ pub async fn login_luogu_browser(
     .map_err(|e| format!("打开洛谷登录窗口失败: {}", e))?;
     let app_thread = app.clone();
     std::thread::spawn(move || match rx.recv_timeout(Duration::from_secs(600)) {
-        Ok(_) => {
-            let _ = app_thread.emit("luogu-login-success", true);
+        Ok(username) => {
+            let _ = app_thread.emit("luogu-login-success", username);
             if let Some(window) = app_thread.get_webview_window("luogu_login") {
                 let _ = window.close();
             }

@@ -126,6 +126,11 @@ function handleChange(value: string) {
   store.updateCode(value ?? '')
 }
 
+function confirmResetCode() {
+  if (!window.confirm(`确认将 ${store.contextFileName} 恢复为当前语言的初始代码片段吗？现有代码会被覆盖。`)) return
+  store.resetCurrentCode()
+}
+
 // 当切换题目时清空编辑器内容由 store.selectProblem 处理，
 // 但需要同步编辑器 UI —— 用 key 强制重建
 const editorKey = shallowRef(0)
@@ -183,6 +188,7 @@ onBeforeUnmount(() => {
         {{ store.contextFileName }}
       </span>
       <button class="code-editor__format" :disabled="store.isFormatting || !store.currentCode.trim()" title="格式化文档 (Shift+Alt+F)" @click="formatDocument()">{{ store.isFormatting ? '格式化中…' : '格式化' }}</button>
+      <button class="code-editor__reset" title="恢复为设置中的初始代码片段" @click="confirmResetCode">重置代码</button>
       <span class="code-editor__shortcuts">Ctrl+F5 运行 · F5 调试 · Alt+F9 断点</span>
       <span v-if="store.formatError" class="code-editor__format-error" :title="store.formatError">{{ store.formatError }}</span>
       <span class="code-editor__saved" :class="`code-editor__saved--${store.draftSaveStatus}`">{{ { template: '尚未创建本地文件', saved: '✓ 已保存', saving: '保存中…', error: '保存失败' }[store.draftSaveStatus] }}</span>
@@ -238,6 +244,7 @@ onBeforeUnmount(() => {
   &__shortcuts { margin-left: auto; color: #666; font-size: 10px; }
   &__format { padding: 3px 8px; border: 1px solid #464646; border-radius: 3px; background: #303030; color: #bbb; font-size: 10px; cursor: pointer; &:hover:not(:disabled) { border-color: #569cd6; color: #fff; } &:disabled { opacity: .4; cursor: not-allowed; } }
   &__format-error { max-width: 210px; overflow: hidden; color: #f48771; font-size: 9px; text-overflow: ellipsis; white-space: nowrap; }
+  &__reset { padding: 4px 7px; border: 1px solid #6f4b4b; border-radius: 4px; background: #342424; color: #e8aaaa; font-size: 10px; cursor: pointer; &:hover { border-color: #b35d5d; color: #ffd0d0; } }
   &__saved { color: #4ec9b0; font-size: 11px; &--template { color: #777; } &--saving { color: #dcdcaa; } &--error { color: #f48771; } }
 
   &__editor {

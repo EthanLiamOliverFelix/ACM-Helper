@@ -226,8 +226,8 @@ async function moveDataCenter() {
           <label class="checkbox-label"><input v-model="settings.luoguEnableO2" type="checkbox" />提交时开启 O2 优化</label>
           <p class="privacy">设置会用于之后的洛谷提交；Java 暂按 Java 21 提交。</p>
           <h3 class="account-title">OJ 账号</h3>
-          <div class="account-row"><div><span>Codeforces</span><strong :class="{ offline: !problems.isLoggedIn }">{{ problems.isRefreshingAccounts ? '检测中…' : problems.isLoggedIn ? (problems.cfAccount || '已登录') : '未登录' }}</strong></div><button :disabled="problems.isLoading" @click="problems.loginViaBrowser">{{ problems.isLoggedIn ? '切换账号' : '登录' }}</button></div>
-          <div class="account-row"><div><span>洛谷</span><strong :class="{ offline: !problems.luoguLoggedIn }">{{ problems.isRefreshingAccounts ? '检测中…' : problems.luoguLoggedIn ? (problems.luoguAccount || '已登录') : '未登录' }}</strong></div><button :disabled="problems.isLoading" @click="problems.loginLuogu">{{ problems.luoguLoggedIn ? '切换账号' : '登录' }}</button></div>
+          <div class="account-row"><div><span>Codeforces</span><strong :class="{ offline: !problems.isLoggedIn }">{{ problems.isRefreshingAccounts ? '检测中…' : problems.isLoggedIn ? (problems.cfAccount || '已登录') : '未登录' }}</strong></div><button :disabled="problems.isCfLoginOpening" @click="problems.loginViaBrowser">{{ problems.isCfLoginOpening ? '打开中…' : problems.isLoggedIn ? '切换账号' : '登录' }}</button></div>
+          <div class="account-row"><div><span>洛谷</span><strong :class="{ offline: !problems.luoguLoggedIn }">{{ problems.isRefreshingAccounts ? '检测中…' : problems.luoguLoggedIn ? (problems.luoguAccount || '已登录') : '未登录' }}</strong></div><button :disabled="problems.isLuoguLoginOpening" @click="problems.loginLuogu">{{ problems.isLuoguLoginOpening ? '打开中…' : problems.luoguLoggedIn ? '切换账号' : '登录' }}</button></div>
           <button class="secondary" :disabled="problems.isRefreshingAccounts" @click="problems.refreshAccounts">刷新账号状态</button>
         </section>
       </div>

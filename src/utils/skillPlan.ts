@@ -9,7 +9,7 @@ function jsonPayload(value: string) {
   return JSON.parse(source.slice(arrayStart, arrayEnd + 1))
 }
 
-/** Parse and constrain AI output to safe, canonical Codeforces/Luogu links. */
+/** Parse and constrain AI output to safe, canonical supported-OJ links. */
 export function parseSkillPlanResponse(value: string): SkillPlanProblem[] {
   const raw = jsonPayload(value)
   if (!Array.isArray(raw)) throw new Error('AI 题单格式无效')
@@ -20,11 +20,13 @@ export function parseSkillPlanResponse(value: string): SkillPlanProblem[] {
     const platformValue = String(item.platform ?? '').toLowerCase()
     const platform = platformValue === 'cf' || platformValue === 'codeforces' ? 'codeforces'
       : platformValue === 'luogu' || platformValue === '洛谷' ? 'luogu'
+        : platformValue === 'at' || platformValue === 'atcoder' ? 'atcoder'
         : null
     const id = String(item.id ?? '').trim().toUpperCase()
     if (!platform || !id) continue
     if (platform === 'codeforces' && !/^\d+[A-Z]\d*$/.test(id)) continue
     if (platform === 'luogu' && !/^(?:P|B|U|T|CF|AT_|UVA|SP)\w+$/i.test(id)) continue
+    if (platform === 'atcoder' && !/^[A-Z0-9]+(?:_[A-Z0-9]+)+$/.test(id)) continue
     const key = `${platform}:${id}`
     if (seen.has(key)) continue
     seen.add(key)
@@ -34,7 +36,9 @@ export function parseSkillPlanResponse(value: string): SkillPlanProblem[] {
       title: String(item.title ?? id).trim() || id,
       url: platform === 'codeforces'
         ? `https://codeforces.com/problemset/problem/${id.match(/^\d+/)![0]}/${id.replace(/^\d+/, '')}`
-        : `https://www.luogu.com.cn/problem/${encodeURIComponent(id)}`,
+        : platform === 'luogu'
+          ? `https://www.luogu.com.cn/problem/${encodeURIComponent(id)}`
+          : `https://atcoder.jp/contests/${id.split('_')[0].toLowerCase()}/tasks/${id.toLowerCase()}`,
       rating: Number.isFinite(Number(item.rating)) && Number(item.rating) > 0 ? Number(item.rating) : undefined,
       reason: String(item.reason ?? '用于巩固该知识点').trim() || '用于巩固该知识点',
     })

@@ -63,7 +63,7 @@ export const useAiStore = defineStore('ai', () => {
         estimatedNextRating: targetRating,
         masteredSkills: learning.profile.masteredSkills,
         candidateProblems,
-        instruction: '推荐具体题目时只从 candidateProblems 中选择，并结合技能树前置关系说明原因。若用户要求生成题单、训练计划、一组练习题或把推荐保存为题单，正常回答后必须追加一个严格格式的 ```acm-problem-set 代码块。块内是 JSON 对象：{"name":"题单名称","problems":[{"platform":"codeforces或luogu","id":"题号","title":"标题","rating":难度分,"reason":"推荐原因"}]}。不要在该代码块中加入注释，只选 candidateProblems 中真实存在的题。',
+        instruction: '推荐具体题目时只从 candidateProblems 中选择，并结合技能树前置关系说明原因。若用户要求生成题单、训练计划、一组练习题或把推荐保存为题单，正常回答后必须追加一个严格格式的 ```acm-problem-set 代码块。块内是 JSON 对象：{"name":"题单名称","problems":[{"platform":"codeforces、luogu或atcoder","id":"题号","title":"标题","rating":难度分,"reason":"推荐原因"}]}。不要在该代码块中加入注释，只选 candidateProblems 中真实存在的题。',
       },
       vpAnalysis: learning.contestAnalysis,
       vpAnalysisError: learning.error,
@@ -186,7 +186,7 @@ export const useAiStore = defineStore('ai', () => {
     const seen = new Set<string>()
     const skillTags = new Set(skill.tags.map((tag) => tag.toLowerCase()))
     const sortedCandidates = [...problemStore.problems, ...problemStore.importedProblems, ...(luoguPage?.problems ?? [])]
-      .filter((problem) => problem.platform === 'codeforces' || problem.platform === 'luogu')
+      .filter((problem) => problem.platform === 'codeforces' || problem.platform === 'luogu' || problem.platform === 'atcoder')
       .filter((problem) => !solved.has(`${problem.platform}:${problem.id}`))
       .filter((problem) => {
         const key = `${problem.platform}:${problem.id}`
@@ -204,9 +204,10 @@ export const useAiStore = defineStore('ai', () => {
       .map((problem) => ({ platform: problem.platform, id: problem.id, title: problem.title, rating: problem.rating, difficulty: problem.difficulty, tags: problem.tags, url: problem.url, usedBefore: previousKeys.has(`${problem.platform}:${problem.id.toUpperCase()}`) }))
     const cfCandidates = sortedCandidates.filter((problem) => problem.platform === 'codeforces').slice(0, 60)
     const luoguCandidates = sortedCandidates.filter((problem) => problem.platform === 'luogu').slice(0, 60)
-    const candidates = Array.from({ length: Math.max(cfCandidates.length, luoguCandidates.length) })
-      .flatMap((_, index) => [cfCandidates[index], luoguCandidates[index]].filter(Boolean))
-    if (candidates.length < 8) throw new Error('当前题库候选题不足 8 道，请先加载 Codeforces 或洛谷题库后重试')
+    const atcoderCandidates = sortedCandidates.filter((problem) => problem.platform === 'atcoder').slice(0, 60)
+    const candidates = Array.from({ length: Math.max(cfCandidates.length, luoguCandidates.length, atcoderCandidates.length) })
+      .flatMap((_, index) => [cfCandidates[index], luoguCandidates[index], atcoderCandidates[index]].filter(Boolean))
+    if (candidates.length < 8) throw new Error('当前题库候选题不足 8 道，请先加载 Codeforces、洛谷或 AtCoder 题库后重试')
 
     const candidateMap = new Map(candidates.map((problem) => [`${problem.platform}:${problem.id.toUpperCase()}`, problem]))
     const result = await invoke<AiChatResult>('ai_chat', {
@@ -217,7 +218,7 @@ export const useAiStore = defineStore('ai', () => {
       assistanceLevel: 'full',
       messages: [{
         role: 'user',
-        content: `为知识点“${skill.name}”生成第 ${previousPlans.length + 1} 份、约 10 道题的递进练习题单。只能选择候选题中真实存在的题，并兼顾基础巩固、变式和综合应用。新题单应整体比上一份更难、更综合；上一份可量化平均 rating 为 ${previousAverageRating ?? '未知'}。尽量不要选择历史题单中出现过的题（候选中的 usedBefore=true），只有公认经典且确有复习价值时才允许重复，最多重复 1 道，并在 reason 中说明复习原因。如果两个平台均有合适候选，题单应同时包含 Codeforces 和洛谷题。只输出 JSON 数组，不要 Markdown 和解释。每项字段必须是 platform、id、title、rating、reason；platform 只能是 codeforces 或 luogu。\n\n历史题目：${JSON.stringify(previousProblems.map((problem) => ({ platform: problem.platform, id: problem.id, rating: problem.rating })))}\n\n候选题：${JSON.stringify(candidates)}`,
+        content: `为知识点“${skill.name}”生成第 ${previousPlans.length + 1} 份、约 10 道题的递进练习题单。只能选择候选题中真实存在的题，并兼顾基础巩固、变式和综合应用。新题单应整体比上一份更难、更综合；上一份可量化平均 rating 为 ${previousAverageRating ?? '未知'}。尽量不要选择历史题单中出现过的题（候选中的 usedBefore=true），只有公认经典且确有复习价值时才允许重复，最多重复 1 道，并在 reason 中说明复习原因。尽量混合 Codeforces、洛谷和 AtCoder 的合适题目。只输出 JSON 数组，不要 Markdown 和解释。每项字段必须是 platform、id、title、rating、reason；platform 只能是 codeforces、luogu 或 atcoder。\n\n历史题目：${JSON.stringify(previousProblems.map((problem) => ({ platform: problem.platform, id: problem.id, rating: problem.rating })))}\n\n候选题：${JSON.stringify(candidates)}`,
       }],
       context: JSON.stringify({
         skill: { id: skill.id, name: skill.name, description: skill.description, tags: skill.tags, prerequisites: skill.prerequisites },

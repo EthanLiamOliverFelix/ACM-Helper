@@ -4,6 +4,43 @@ import { useProblemStore } from '../stores/problemStore'
 
 const store = useProblemStore()
 const newWatch = ref('')
+const expanded = ref(new Set<string>())
+
+function splitContainer(value = '') {
+  const open = value.indexOf('{')
+  const close = value.lastIndexOf('}')
+  if (open < 0 || close <= open) return []
+  const source = value.slice(open + 1, close)
+  const result: string[] = []
+  let start = 0; let depth = 0; let quote = ''; let escaped = false
+  for (let index = 0; index < source.length; index++) {
+    const char = source[index]
+    if (quote) {
+      if (char === quote && !escaped) quote = ''
+      escaped = char === '\\' && !escaped
+      if (char !== '\\') escaped = false
+      continue
+    }
+    if (char === '"' || char === "'") { quote = char; continue }
+    if ('{[('.includes(char)) depth++
+    else if ('}])'.includes(char)) depth--
+    else if (char === ',' && depth === 0) { result.push(source.slice(start, index).trim()); start = index + 1 }
+  }
+  const tail = source.slice(start).trim()
+  if (tail) result.push(tail)
+  return result.length > 1 || (result.length === 1 && /^\s*\[?\d+\]?\s*=/.test(result[0])) ? result : []
+}
+
+function toggleExpanded(key: string) {
+  const next = new Set(expanded.value)
+  if (next.has(key)) next.delete(key); else next.add(key)
+  expanded.value = next
+}
+
+function elementLabel(value: string, index: number) {
+  const match = value.match(/^\s*(\[[^\]]+\]|[^=]+?)\s*=\s*(.*)$/s)
+  return match ? { name: match[1].trim(), value: match[2] } : { name: `[${index}]`, value }
+}
 
 async function addWatch() {
   const value = newWatch.value
@@ -47,20 +84,22 @@ async function addWatch() {
           <button :disabled="!newWatch.trim()">＋</button>
         </form>
         <div v-if="!store.watchExpressions.length" class="debug-panel__empty">添加要持续查看的变量或表达式</div>
-        <div v-for="expression in store.watchExpressions" :key="expression" class="variable-row">
-          <code>{{ expression }}</code>
-          <span :class="{ error: store.debugSession?.watches.find(item => item.name === expression)?.error }">
-            {{ store.debugSession?.watches.find(item => item.name === expression)?.error || store.debugSession?.watches.find(item => item.name === expression)?.value || '—' }}
-          </span>
-          <button title="移除监视" @click="store.removeWatchExpression(expression)">×</button>
+        <div v-for="expression in store.watchExpressions" :key="expression" class="variable-tree">
+          <div class="variable-row">
+            <code><button v-if="splitContainer(store.debugSession?.watches.find(item => item.name === expression)?.value).length" class="variable-row__toggle" @click="toggleExpanded(`watch:${expression}`)">{{ expanded.has(`watch:${expression}`) ? '⌄' : '›' }}</button>{{ expression }}</code>
+            <span :class="{ error: store.debugSession?.watches.find(item => item.name === expression)?.error }">{{ store.debugSession?.watches.find(item => item.name === expression)?.error || (splitContainer(store.debugSession?.watches.find(item => item.name === expression)?.value).length ? `容器 · ${splitContainer(store.debugSession?.watches.find(item => item.name === expression)?.value).length} 项` : store.debugSession?.watches.find(item => item.name === expression)?.value) || '—' }}</span>
+            <button title="移除监视" @click="store.removeWatchExpression(expression)">×</button>
+          </div>
+          <div v-if="expanded.has(`watch:${expression}`)" class="variable-tree__children"><div v-for="(item, index) in splitContainer(store.debugSession?.watches.find(value => value.name === expression)?.value)" :key="index"><code>{{ elementLabel(item, index).name }}</code><span>{{ elementLabel(item, index).value }}</span></div></div>
         </div>
       </section>
 
       <section class="watch-section">
         <h3>局部变量</h3>
         <div v-if="!store.debugSession?.variables.length" class="debug-panel__empty">暂停后显示当前作用域中的变量</div>
-        <div v-for="variable in store.debugSession?.variables" :key="variable.name" class="variable-row variable-row--local">
-          <code>{{ variable.name }}</code><span>{{ variable.value }}</span>
+        <div v-for="variable in store.debugSession?.variables" :key="variable.name" class="variable-tree">
+          <div class="variable-row variable-row--local"><code><button v-if="splitContainer(variable.value).length" class="variable-row__toggle" @click="toggleExpanded(`local:${variable.name}`)">{{ expanded.has(`local:${variable.name}`) ? '⌄' : '›' }}</button>{{ variable.name }}</code><span>{{ splitContainer(variable.value).length ? `容器 · ${splitContainer(variable.value).length} 项` : variable.value }}</span></div>
+          <div v-if="expanded.has(`local:${variable.name}`)" class="variable-tree__children"><div v-for="(item, index) in splitContainer(variable.value)" :key="index"><code>{{ elementLabel(item, index).name }}</code><span>{{ elementLabel(item, index).value }}</span></div></div>
         </div>
       </section>
 
@@ -86,6 +125,7 @@ textarea { box-sizing: border-box; width: 100%; min-height: 92px; max-height: 21
 .watch-section, .debug-output { margin-top: 12px; border-top: 1px solid #353535; padding-top: 10px; h3 { margin: 0 0 7px; color: #bbb; font-size: 11px; } }
 .watch-section__add { display: flex; gap: 5px; margin-bottom: 6px; input { min-width: 0; flex: 1; padding: 6px 7px; border: 1px solid #444; border-radius: 4px; outline: none; background: #181818; color: #ddd; font: 10px Consolas, monospace; &:focus { border-color: #6d4d91; } } button { width: 28px; border: 1px solid #4f6f89; border-radius: 4px; background: #243747; color: #9cdcfe; cursor: pointer; } }
 .variable-row { display: grid; grid-template-columns: minmax(65px, .8fr) minmax(0, 1.3fr) 20px; align-items: start; gap: 6px; padding: 6px; border-bottom: 1px solid #303030; background: #222; font-size: 10px; code { overflow: hidden; color: #9cdcfe; text-overflow: ellipsis; } span { overflow-wrap: anywhere; color: #ce9178; font-family: Consolas, monospace; &.error { color: #f48771; } } button { border: 0; background: transparent; color: #777; cursor: pointer; &:hover { color: #f48771; } } &--local { grid-template-columns: minmax(65px, .8fr) minmax(0, 1.3fr); } }
+.variable-row__toggle { width: 16px; padding: 0 !important; color: #9cdcfe !important; font-size: 14px; text-align: left; }.variable-tree__children { border-left: 1px solid #4a4a4a; margin-left: 12px; > div { display: grid; grid-template-columns: minmax(55px,.55fr) 1fr; gap: 8px; padding: 5px 8px; border-bottom: 1px solid #2d2d2d; background: #1b1b1b; font: 10px Consolas,monospace; code { color: #d16dce; } span { overflow-wrap: anywhere; color: #b5cea8; } } }
 .debug-panel__empty { padding: 10px 4px; color: #666; font-size: 10px; text-align: center; }
 .debug-output pre { max-height: 140px; overflow: auto; margin: 0; padding: 7px; background: #181818; color: #ddd; font: 10px/1.45 Consolas, monospace; white-space: pre-wrap; &.error { color: #f48771; } }
 </style>

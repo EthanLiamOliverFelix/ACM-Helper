@@ -154,7 +154,7 @@ onMounted(() => learning.init())
         <ol v-if="selectedPlan" class="plan-list">
           <li v-for="problem in selectedPlan.problems" :key="`${problem.platform}:${problem.id}`" :class="{ solved: learning.profile.solvedProblems.includes(`${problem.platform}:${problem.id}`) }">
             <span class="plan-list__check">{{ learning.profile.solvedProblems.includes(`${problem.platform}:${problem.id}`) ? '✓' : '' }}</span>
-            <div><strong>{{ problem.id }} · {{ problem.title }}</strong><small>{{ problem.platform === 'luogu' ? '洛谷' : 'Codeforces' }}<template v-if="problem.rating"> · {{ problem.rating }}</template></small><p>{{ problem.reason }}</p></div>
+            <div><strong>{{ problem.id }} · {{ problem.title }}</strong><small>{{ problem.platform === 'luogu' ? '洛谷' : problem.platform === 'atcoder' ? 'AtCoder' : 'Codeforces' }}<template v-if="problem.rating"> · {{ problem.rating }}</template></small><p>{{ problem.reason }}</p></div>
             <button @click="openPlanProblem(problem)">在工作台打开</button>
           </li>
         </ol>

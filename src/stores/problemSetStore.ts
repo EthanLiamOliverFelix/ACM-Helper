@@ -7,7 +7,7 @@ import { parseBatchProblemInput, type BatchProblemToken } from '../utils/problem
 import { getDataCenterValue, saveDataCenterValue } from '../dataCenter'
 
 export interface ProblemSetEntry {
-  platform: 'codeforces' | 'luogu'
+  platform: 'codeforces' | 'luogu' | 'atcoder'
   id: string
   title: string
   url?: string
@@ -121,6 +121,7 @@ export const useProblemSetStore = defineStore('problemSets', () => {
   function problemUrl(entry: ProblemSetEntry) {
     if (entry.url) return entry.url
     if (entry.platform === 'luogu') return `https://www.luogu.com.cn/problem/${encodeURIComponent(entry.id)}`
+    if (entry.platform === 'atcoder') return `https://atcoder.jp/contests/${entry.id.split('_')[0].toLowerCase()}/tasks/${entry.id.toLowerCase()}`
     const match = entry.id.match(/^(\d+)([A-Za-z][A-Za-z0-9]*)$/)
     return match ? `https://codeforces.com/problemset/problem/${match[1]}/${match[2]}` : ''
   }
@@ -159,7 +160,7 @@ export const useProblemSetStore = defineStore('problemSets', () => {
   }
 
   function addProblem(problem: Problem, setId = activeSetId.value) {
-    if (problem.platform !== 'codeforces' && problem.platform !== 'luogu') return false
+    if (problem.platform !== 'codeforces' && problem.platform !== 'luogu' && problem.platform !== 'atcoder') return false
     const set = sets.value.find((candidate) => candidate.id === setId) ?? activeSet.value
     if (!set) return false
     const exists = set.problems.some((item) => item.platform === problem.platform && item.id.toUpperCase() === problem.id.toUpperCase())
@@ -206,8 +207,8 @@ export const useProblemSetStore = defineStore('problemSets', () => {
 
   async function addProblemUrl(url: string, setId = activeSetId.value) {
     const problem = await invoke<Problem>('import_problem_url', { url: url.trim() })
-    if (problem.platform !== 'codeforces' && problem.platform !== 'luogu') {
-      throw new Error('题单当前只支持 Codeforces 和洛谷题目')
+    if (problem.platform !== 'codeforces' && problem.platform !== 'luogu' && problem.platform !== 'atcoder') {
+      throw new Error('题单当前只支持 Codeforces、洛谷和 AtCoder 题目')
     }
     return addProblem(problem, setId)
   }
@@ -220,7 +221,7 @@ export const useProblemSetStore = defineStore('problemSets', () => {
     const store = useProblemStore()
     const catalog = [...store.problems, ...store.importedProblems]
       .filter((problem, index, all) => all.findIndex((item) => item.platform === problem.platform && item.id.toUpperCase() === problem.id.toUpperCase()) === index)
-      .filter((problem) => (problem.platform === 'codeforces' || problem.platform === 'luogu') && (!token.platform || problem.platform === token.platform))
+      .filter((problem) => (problem.platform === 'codeforces' || problem.platform === 'luogu' || problem.platform === 'atcoder') && (!token.platform || problem.platform === token.platform))
     if (token.id) return catalog.find((problem) => problem.id.toUpperCase() === token.id!.toUpperCase())
     if (!token.query) return undefined
     const wanted = normalized(token.query)
@@ -237,7 +238,9 @@ export const useProblemSetStore = defineStore('problemSets', () => {
     if (token.id && token.platform) {
       const url = token.platform === 'luogu'
         ? `https://www.luogu.com.cn/problem/${token.id}`
-        : `https://codeforces.com/problemset/problem/${token.id.match(/^\d+/)?.[0]}/${token.id.replace(/^\d+/, '')}`
+        : token.platform === 'atcoder'
+          ? `https://atcoder.jp/contests/${token.id.split('_')[0].toLowerCase()}/tasks/${token.id.toLowerCase()}`
+          : `https://codeforces.com/problemset/problem/${token.id.match(/^\d+/)?.[0]}/${token.id.replace(/^\d+/, '')}`
       return invoke<Problem>('import_problem_url', { url })
     }
     if (token.query && token.platform !== 'codeforces') {
@@ -267,7 +270,7 @@ export const useProblemSetStore = defineStore('problemSets', () => {
         const token = tokens[cursor++]
         try {
           const problem = await resolveProblem(token)
-          if (problem.platform !== 'codeforces' && problem.platform !== 'luogu') throw new Error('暂不支持该平台')
+          if (problem.platform !== 'codeforces' && problem.platform !== 'luogu' && problem.platform !== 'atcoder') throw new Error('暂不支持该平台')
           if (addProblem(problem, setId)) added++
           else duplicates++
         } catch {
@@ -313,7 +316,7 @@ export const useProblemSetStore = defineStore('problemSets', () => {
     return { setId: set.id, updated: false, count: entries.length }
   }
 
-  function removeProblem(setId: string, platform: 'codeforces' | 'luogu', problemId: string) {
+  function removeProblem(setId: string, platform: 'codeforces' | 'luogu' | 'atcoder', problemId: string) {
     const set = sets.value.find((candidate) => candidate.id === setId)
     if (!set) return
     set.problems = set.problems.filter((item) => item.platform !== platform || item.id !== problemId)

@@ -30,6 +30,6 @@ regex = "1"
 urlencoding = "2"
 anyhow = "1"
 chrono = { version = "0.4", default-features = false, features = ["clock"] }
-tokio = { version = "1", features = ["sync", "process", "time", "io-util"] }
+tokio = { version = "1", features = ["sync", "process", "time", "io-util", "macros"] }
 arboard = "3"
 rfd = "0.15"

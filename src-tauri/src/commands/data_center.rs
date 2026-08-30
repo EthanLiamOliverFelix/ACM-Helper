@@ -772,23 +772,65 @@ pub async fn migrate_data_center(
 }
 
 pub fn tool_command(app: &AppHandle, key: &str, fallback: &str) -> String {
-    let Ok(path) = state_path(app, "settings") else {
-        return fallback.into();
+    let configured = state_path(app, "settings")
+        .ok()
+        .and_then(|path| fs::read_to_string(path).ok())
+        .and_then(|content| serde_json::from_str::<Value>(&content).ok())
+        .and_then(|value| value.get("toolchainPaths").cloned())
+        .and_then(|paths| {
+            paths
+                .get(key)
+                .and_then(Value::as_str)
+                .map(str::trim)
+                .filter(|path| !path.is_empty())
+                .map(str::to_string)
+        });
+    if let Some(configured) = configured {
+        return configured.to_string();
+    }
+    let executable_name = match key {
+        "cppCompiler" => "g++.exe",
+        "cppDebugger" => "gdb.exe",
+        "pythonInterpreter" => "python.exe",
+        "javaCompiler" => "javac.exe",
+        "javaRuntime" => "java.exe",
+        "javaDebugger" => "jdb.exe",
+        _ => return fallback.into(),
     };
-    let Ok(content) = fs::read_to_string(path) else {
-        return fallback.into();
-    };
-    let Ok(value) = serde_json::from_str::<Value>(&content) else {
-        return fallback.into();
-    };
-    value
-        .get("toolchainPaths")
-        .and_then(|paths| paths.get(key))
-        .and_then(Value::as_str)
-        .map(str::trim)
-        .filter(|path| !path.is_empty())
-        .unwrap_or(fallback)
-        .to_string()
+    std::env::current_exe()
+        .ok()
+        .and_then(|path| path.parent().map(|parent| parent.join("tools")))
+        .and_then(|root| find_bundled_tool(&root, executable_name, 0))
+        .map(|path| path.to_string_lossy().into_owned())
+        .unwrap_or_else(|| fallback.into())
+}
+
+fn find_bundled_tool(directory: &Path, executable_name: &str, depth: usize) -> Option<PathBuf> {
+    if depth > 6 || !directory.is_dir() {
+        return None;
+    }
+    let mut entries = fs::read_dir(directory)
+        .ok()?
+        .filter_map(Result::ok)
+        .collect::<Vec<_>>();
+    entries.sort_by_key(|entry| entry.file_name());
+    for entry in &entries {
+        let path = entry.path();
+        if path.is_file()
+            && entry
+                .file_name()
+                .to_string_lossy()
+                .eq_ignore_ascii_case(executable_name)
+        {
+            return Some(path);
+        }
+    }
+    for entry in entries {
+        if let Some(found) = find_bundled_tool(&entry.path(), executable_name, depth + 1) {
+            return Some(found);
+        }
+    }
+    None
 }
 
 #[cfg(test)]

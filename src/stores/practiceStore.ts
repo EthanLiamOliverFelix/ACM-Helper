@@ -31,6 +31,7 @@ function loadControls(): PracticeControls {
 
 function problemUrl(platform: ReviewPlatform, id: string) {
   if (platform === 'luogu') return `https://www.luogu.com.cn/problem/${encodeURIComponent(id)}`
+  if (platform === 'atcoder') return `https://atcoder.jp/contests/${id.split('_')[0].toLowerCase()}/tasks/${id.toLowerCase()}`
   const match = id.match(/^(\d+)([A-Za-z][A-Za-z0-9]*)$/)
   return match ? `https://codeforces.com/problemset/problem/${match[1]}/${match[2]}` : ''
 }
@@ -60,7 +61,7 @@ export const usePracticeStore = defineStore('practice', () => {
       addedAt?: number
       metadataFetchedAt?: number
     }) => {
-      if (entry.platform !== 'codeforces' && entry.platform !== 'luogu') return
+      if (entry.platform !== 'codeforces' && entry.platform !== 'luogu' && entry.platform !== 'atcoder') return
       const key = `${entry.platform}:${entry.id.toUpperCase()}`
       const previous = entries.get(key)
       entries.set(key, {

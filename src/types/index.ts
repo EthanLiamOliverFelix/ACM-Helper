@@ -208,7 +208,7 @@ export interface LearningProfile {
 }
 
 export interface SkillPlanProblem {
-  platform: 'codeforces' | 'luogu'
+  platform: 'codeforces' | 'luogu' | 'atcoder'
   id: string
   title: string
   url: string

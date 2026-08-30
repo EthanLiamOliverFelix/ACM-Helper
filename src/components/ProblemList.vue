@@ -141,6 +141,14 @@ function onSearchInput() {
     <div class="problem-list__status">
       <span>共 {{ store.currentPlatform === 'luogu' ? store.luoguTotal : store.filteredProblems.length }} 道</span>
       <div class="problem-list__status-actions">
+        <button
+          v-if="store.currentPlatform === 'codeforces'"
+          class="catalog-refresh-btn"
+          :disabled="store.isRefreshingCfCatalog"
+          title="忽略本地目录缓存，立即从 Codeforces 拉取最新题目"
+          @click="store.refreshCfCatalog()"
+        >{{ store.isRefreshingCfCatalog ? '更新中…' : '更新题库' }}</button>
+        <button v-if="store.currentPlatform === 'atcoder'" class="catalog-refresh-btn" :disabled="store.isRefreshingAtCoderCatalog" title="从 AtCoder Problems 数据集更新题目目录" @click="store.fetchAtCoderProblems(true)">{{ store.isRefreshingAtCoderCatalog ? '更新中…' : '更新题库' }}</button>
         <button class="tag-visibility-btn" :class="{ active: store.showProblemTags }" :title="store.showProblemTags ? '隐藏题目算法标签，避免知识点剧透' : '显示题目算法标签'" @click="store.toggleProblemTags">
           {{ store.showProblemTags ? '隐藏算法标签' : '显示算法标签' }}
         </button>
@@ -183,7 +191,7 @@ function onSearchInput() {
           <span v-for="tag in problem.tags" :key="tag" class="tag">{{ tag }}</span>
         </div>
         <button
-          v-if="problem.platform === 'codeforces' || problem.platform === 'luogu'"
+          v-if="problem.platform === 'codeforces' || problem.platform === 'luogu' || problem.platform === 'atcoder'"
           class="problem-item__add"
           :class="{ added: problemSets.contains(problem) }"
           :title="problemSets.contains(problem) ? `已在「${problemSets.activeSet?.name}」中` : `加入「${problemSets.activeSet?.name}」`"
@@ -351,6 +359,7 @@ function onSearchInput() {
   &:hover { background: #3a1b1b; }
 }
 .tag-visibility-btn { padding: 3px 7px; border: 1px solid #444; border-radius: 4px; background: #292929; color: #aaa; font-size: 10px; cursor: pointer; &:hover, &.active { border-color: #4d718f; color: #9cdcfe; background: #203545; } }
+.catalog-refresh-btn { padding: 3px 7px; border: 1px solid #456b5b; border-radius: 4px; background: #20332b; color: #8fd5b2; font-size: 10px; cursor: pointer; &:disabled { opacity: .5; cursor: wait; } }
 
 // ── 题目列表项 ──
 .problem-item {

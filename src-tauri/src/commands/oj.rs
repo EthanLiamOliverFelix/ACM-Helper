@@ -28,6 +28,83 @@ const LUOGU_DIFFICULTIES: [&str; 9] = [
 const LUOGU_TAG_CACHE_TTL: Duration = Duration::from_secs(6 * 60 * 60);
 static LUOGU_TAG_CACHE: OnceLock<Mutex<Option<(Instant, Vec<LuoguTag>)>>> = OnceLock::new();
 
+/// AtCoder does not expose a first-party catalog API. The community-maintained
+/// AtCoder Problems dataset is used only for lightweight title/difficulty metadata;
+/// complete statements are still fetched directly from atcoder.jp on demand.
+#[tauri::command]
+pub async fn fetch_problems_atcoder() -> Result<Vec<Problem>, String> {
+    let client = Client::builder()
+        .user_agent(BROWSER_UA)
+        .timeout(Duration::from_secs(30))
+        .build()
+        .map_err(|error| format!("创建 AtCoder 题库客户端失败: {error}"))?;
+    let (problems_response, models_response) = tokio::join!(
+        client
+            .get("https://kenkoooo.com/atcoder/resources/problems.json")
+            .send(),
+        client
+            .get("https://kenkoooo.com/atcoder/resources/problem-models.json")
+            .send(),
+    );
+    let raw: Vec<Value> = problems_response
+        .map_err(|error| format!("拉取 AtCoder 题库失败: {error}"))?
+        .json()
+        .await
+        .map_err(|error| format!("解析 AtCoder 题库失败: {error}"))?;
+    let models: Value = match models_response {
+        Ok(response) => response.json().await.unwrap_or(Value::Null),
+        Err(_) => Value::Null,
+    };
+    let mut result = raw
+        .into_iter()
+        .filter_map(|item| {
+            let id = item.get("id")?.as_str()?.trim().to_string();
+            let contest = item.get("contest_id")?.as_str()?.trim().to_string();
+            let title = item
+                .get("title")
+                .or_else(|| item.get("name"))
+                .and_then(Value::as_str)
+                .unwrap_or(&id)
+                .trim()
+                .to_string();
+            let raw_difficulty = models
+                .pointer(&format!(
+                    "/{}/difficulty",
+                    id.replace('~', "~0").replace('/', "~1")
+                ))
+                .and_then(Value::as_f64);
+            let rating = raw_difficulty.map(|difficulty| {
+                let displayed: f64 = if difficulty >= 400.0 {
+                    difficulty
+                } else {
+                    400.0 / (1.0 + (400.0 - difficulty) / 400.0).exp()
+                };
+                displayed.round().max(0.0) as i32
+            });
+            Some(Problem {
+                id: id.clone(),
+                title,
+                rating,
+                tags: vec![],
+                platform: "atcoder".into(),
+                difficulty: None,
+                source: Some("AtCoder".into()),
+                content_format: None,
+                description: None,
+                url: Some(format!("https://atcoder.jp/contests/{contest}/tasks/{id}")),
+                time_limit_ms: None,
+                memory_limit_mb: None,
+                input: None,
+                output: None,
+                note: None,
+                samples: None,
+            })
+        })
+        .collect::<Vec<_>>();
+    result.sort_by(|a, b| b.id.cmp(&a.id));
+    Ok(result)
+}
+
 #[derive(serde::Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct LuoguProblemPage {

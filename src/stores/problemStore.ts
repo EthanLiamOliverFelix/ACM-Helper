@@ -9,13 +9,15 @@ import { getDataCenterValue, saveDataCenterValue } from '../dataCenter'
 import { withOjDiagnostic } from '../diagnostics'
 
 export const useProblemStore = defineStore('problem', () => {
-  type CatalogCache = { version: 1; updatedAt: number; cf: Problem[]; luogu: Problem[]; luoguTotal: number; luoguPerPage: number; luoguTags: LuoguTag[] }
+  type CatalogCache = { version: 1; updatedAt: number; cf: Problem[]; luogu: Problem[]; atcoder?: Problem[]; luoguTotal: number; luoguPerPage: number; luoguTags: LuoguTag[] }
   // ── 认证状态 ──
   const isLoggedIn = ref(false)
   const luoguLoggedIn = ref(false)
   const cfAccount = ref('')
   const luoguAccount = ref('')
   const isRefreshingAccounts = ref(false)
+  const isCfLoginOpening = ref(false)
+  const isLuoguLoginOpening = ref(false)
   const activeView = ref<'workspace' | 'learning' | 'ai'>('workspace')
   const showProblemTags = ref(getDataCenterValue('show-problem-tags', false))
   const isLoading = ref(false)
@@ -64,7 +66,7 @@ export const useProblemStore = defineStore('problem', () => {
   const luoguCaptchaImage = ref('')
   const luoguCaptcha = ref('')
   const luoguCaptchaProblemId = ref('')
-  const cfManualConfirmation = ref<null | { submissionId: string; problemId: string; title: string; tags: string[] }>(null)
+  const cfManualConfirmation = ref<null | { submissionId: string; platform: 'codeforces' | 'atcoder'; problemId: string; title: string; tags: string[] }>(null)
   let luoguPendingPayload: { problemId: string; code: string; language: Language; tags: string[]; languageId: number; enableO2: boolean } | null = null
   let saveTimer: ReturnType<typeof setTimeout> | null = null
   // 切题、打开本地文件和切换语言都涉及“保存旧草稿 → 更换标识 →
@@ -78,6 +80,7 @@ export const useProblemStore = defineStore('problem', () => {
       updatedAt: Date.now(),
       cf: problems.value.filter((problem) => problem.platform === 'codeforces'),
       luogu: problems.value.filter((problem) => problem.platform === 'luogu'),
+      atcoder: problems.value.filter((problem) => problem.platform === 'atcoder'),
       luoguTotal: luoguTotal.value,
       luoguPerPage: luoguPerPage.value,
       luoguTags: luoguTags.value,
@@ -219,6 +222,8 @@ export const useProblemStore = defineStore('problem', () => {
   const luoguType = ref('')
   const luoguDifficulty = ref<number | null>(null)
   const isLoadingCatalog = ref(false)
+  const isRefreshingCfCatalog = ref(false)
+  const isRefreshingAtCoderCatalog = ref(false)
   // 洛谷筛选会在快速点击标签/翻页时并发请求。只允许最后一次响应更新界面，
   // 避免较慢的旧请求覆盖用户刚选择的新条件。
   let luoguCatalogRequestId = 0
@@ -339,7 +344,7 @@ export const useProblemStore = defineStore('problem', () => {
 
   /** 通过内嵌浏览器登录 Codeforces */
   async function loginViaBrowser() {
-    isLoading.value = true
+    isCfLoginOpening.value = true
     error.value = null
     try {
       const result = await invoke<{ success: boolean; message: string }>('login_via_browser', {
@@ -355,7 +360,7 @@ export const useProblemStore = defineStore('problem', () => {
     } catch (e: any) {
       error.value = typeof e === 'string' ? e : e?.message ?? '打开浏览器登录失败'
     } finally {
-      isLoading.value = false
+      isCfLoginOpening.value = false
     }
   }
 
@@ -363,20 +368,25 @@ export const useProblemStore = defineStore('problem', () => {
   function setupEventListener() {
     listen<boolean>('cf-login-success', async (_event) => {
       isLoggedIn.value = true
-      isLoading.value = false
-      await refreshAccounts()
-      await fetchProblems()
+      isCfLoginOpening.value = false
+      error.value = null
+      await Promise.allSettled([refreshAccounts(), fetchProblems(true)])
     })
     listen<string>('cf-login-error', async (event) => {
-      isLoading.value = false
+      isCfLoginOpening.value = false
       error.value = event.payload
     })
-    listen<boolean>('luogu-login-success', async () => { luoguLoggedIn.value = true; isLoading.value = false; error.value = null; await refreshAccounts() })
-    listen<string>('luogu-login-error', (event) => { luoguLoggedIn.value = false; isLoading.value = false; error.value = event.payload })
+    listen<string>('luogu-login-success', (event) => {
+      luoguLoggedIn.value = true
+      luoguAccount.value = event.payload?.trim() || luoguAccount.value
+      isLuoguLoginOpening.value = false
+      error.value = null
+    })
+    listen<string>('luogu-login-error', (event) => { isLuoguLoginOpening.value = false; error.value = event.payload })
   }
 
   async function loginLuogu() {
-    isLoading.value = true
+    isLuoguLoginOpening.value = true
     error.value = null
     try {
       await invoke('login_luogu_browser', {
@@ -384,7 +394,8 @@ export const useProblemStore = defineStore('problem', () => {
         currentUsername: luoguAccount.value || null,
       })
     }
-    catch (e) { isLoading.value = false; error.value = String(e) }
+    catch (e) { error.value = String(e) }
+    finally { isLuoguLoginOpening.value = false }
   }
 
   function applyLuoguAccountStatus(result: { loggedIn: boolean; username?: string }) {
@@ -533,7 +544,7 @@ export const useProblemStore = defineStore('problem', () => {
   }
 
   async function openRecommendedProblem(reference: {
-    platform: 'codeforces' | 'luogu'
+    platform: 'codeforces' | 'luogu' | 'atcoder'
     id: string
     title: string
     url: string
@@ -595,7 +606,7 @@ export const useProblemStore = defineStore('problem', () => {
       problems.value = [...importedProblems.value]
       if (catalogCache?.version === 1) {
         const merged = new Map<string, Problem>()
-        for (const problem of [...catalogCache.cf, ...catalogCache.luogu, ...importedProblems.value]) {
+        for (const problem of [...catalogCache.cf, ...catalogCache.luogu, ...(catalogCache.atcoder ?? []), ...importedProblems.value]) {
           merged.set(`${problem.platform}:${problem.id.toUpperCase()}`, problem)
         }
         problems.value = [...merged.values()]
@@ -603,8 +614,14 @@ export const useProblemStore = defineStore('problem', () => {
         luoguPerPage.value = catalogCache.luoguPerPage || 50
         luoguTags.value = catalogCache.luoguTags ?? []
       }
-      // 目录请求尽早发出，并与其余启动恢复工作并行。
-      const catalogWarmup = Promise.allSettled([fetchProblems(), fetchLuoguProblems(1)])
+      // CF 在确认 WebView 登录状态后才更新远端目录；未登录时保留本地缓存，
+      // 登录成功事件会立即重试。洛谷目录仍可独立预热。
+      const accountWarmup = refreshAccounts()
+      const catalogWarmup = Promise.allSettled([
+        accountWarmup.then(() => isLoggedIn.value ? fetchProblems() : undefined),
+        fetchLuoguProblems(1),
+        fetchAtCoderProblems(),
+      ])
       submissions.value = await invoke<Submission[]>('load_submissions').catch(() => [])
       let recoveredInterrupted = false
       submissions.value = submissions.value.map((submission) => {
@@ -630,7 +647,8 @@ export const useProblemStore = defineStore('problem', () => {
   }
 
   /** 获取 Codeforces 题目列表 */
-  async function fetchProblems() {
+  async function fetchProblems(force = false) {
+    isRefreshingCfCatalog.value = true
     error.value = null
     try {
       const fetched = await withOjDiagnostic('codeforces', 'fetch-catalog', () => invoke<Problem[]>('fetch_problems_cf'))
@@ -651,7 +669,39 @@ export const useProblemStore = defineStore('problem', () => {
       problems.value = [...enriched, ...importedOnly, ...otherPlatforms]
       saveCatalogCache()
     } catch (e: any) {
-      error.value = typeof e === 'string' ? e : e?.message ?? '获取题目列表失败'
+      const message = typeof e === 'string' ? e : e?.message ?? '获取题目列表失败'
+      // 保留可用缓存。若 CF 当前未登录，登录成功事件会自动强制重试；
+      // 已登录或用户手动刷新时仍显示真实网络错误。
+      if (force || isLoggedIn.value) error.value = message
+      else if (!problems.value.some((problem) => problem.platform === 'codeforces')) error.value = `${message}；请先登录 Codeforces，登录成功后会自动重试`
+    } finally {
+      isRefreshingCfCatalog.value = false
+    }
+  }
+
+  async function refreshCfCatalog() {
+    if (!isLoggedIn.value) {
+      error.value = '请先登录 Codeforces；登录成功后应用会自动拉取最新题库'
+      return
+    }
+    await fetchProblems(true)
+  }
+
+  async function fetchAtCoderProblems(force = false) {
+    isRefreshingAtCoderCatalog.value = true
+    if (force) error.value = null
+    try {
+      const fetched = await withOjDiagnostic('atcoder', 'fetch-catalog', () => invoke<Problem[]>('fetch_problems_atcoder'))
+      const importedByKey = new Map(importedProblems.value.map((item) => [`${item.platform}:${item.id}`, item]))
+      const enriched = fetched.map((problem) => ({ ...problem, ...(importedByKey.get(`atcoder:${problem.id}`) ?? {}), rating: problem.rating, platform: 'atcoder' as Platform }))
+      const fetchedKeys = new Set(enriched.map((item) => item.id.toUpperCase()))
+      const importedOnly = importedProblems.value.filter((item) => item.platform === 'atcoder' && !fetchedKeys.has(item.id.toUpperCase()))
+      problems.value = [...problems.value.filter((item) => item.platform !== 'atcoder'), ...enriched, ...importedOnly]
+      saveCatalogCache()
+    } catch (cause) {
+      if (force || !problems.value.some((problem) => problem.platform === 'atcoder')) error.value = String(cause)
+    } finally {
+      isRefreshingAtCoderCatalog.value = false
     }
   }
 
@@ -723,6 +773,7 @@ export const useProblemStore = defineStore('problem', () => {
       if (currentProblem.value?.platform !== 'luogu') currentProblem.value = null
       return
     }
+    if (platform === 'atcoder' && !problems.value.some((problem) => problem.platform === 'atcoder')) await fetchAtCoderProblems()
     if (currentProblem.value?.platform !== platform) currentProblem.value = null
   }
 
@@ -921,6 +972,10 @@ export const useProblemStore = defineStore('problem', () => {
     draftSaveStatus.value = 'saving'
     if (saveTimer) clearTimeout(saveTimer)
     saveTimer = setTimeout(() => persistDraft().catch((e) => { error.value = String(e) }), 500)
+  }
+
+  function resetCurrentCode() {
+    updateCode(useSettingsStore().codeTemplates[currentLanguage.value])
   }
 
   async function setLanguage(lang: Language) {
@@ -1148,7 +1203,7 @@ export const useProblemStore = defineStore('problem', () => {
   // 最近一次提交的错误详情
   const lastSubmitError = ref<string | null>(null)
 
-  /** 复制代码并打开 Codeforces 官方提交页，评测结果由用户确认。 */
+  /** 复制代码并打开 CF / AtCoder 官方提交页，评测结果由用户确认。 */
   async function submitCode() {
     if (!currentProblem.value || !currentCode.value.trim()) return
     if (cfManualConfirmation.value) {
@@ -1157,7 +1212,7 @@ export const useProblemStore = defineStore('problem', () => {
     }
     isSubmitting.value = true
     lastSubmitError.value = null
-    if (!(await ensureOjAccount('codeforces'))) { isSubmitting.value = false; return }
+    if (currentProblem.value.platform === 'codeforces' && !(await ensureOjAccount('codeforces'))) { isSubmitting.value = false; return }
     const submittedProblem = currentProblem.value
     const submittedTags = [...submittedProblem.tags]
     const submittedLanguage = currentLanguage.value
@@ -1173,10 +1228,12 @@ export const useProblemStore = defineStore('problem', () => {
     await persistSubmissions().catch(() => undefined)
 
     try {
-      if (submittedProblem.platform !== 'codeforces') throw new Error('当前操作只用于 Codeforces 人工提交')
+      if (submittedProblem.platform !== 'codeforces' && submittedProblem.platform !== 'atcoder') throw new Error('当前平台不支持人工提交')
       await persistDraft()
-      sub.message = await invoke<string>('open_cf_manual_submit', { problemId: submittedProblem.id, code: currentCode.value })
-      cfManualConfirmation.value = { submissionId: sub.id, problemId: submittedProblem.id, title: submittedProblem.title, tags: submittedTags }
+      sub.message = submittedProblem.platform === 'codeforces'
+        ? await invoke<string>('open_cf_manual_submit', { problemId: submittedProblem.id, code: currentCode.value })
+        : await invoke<string>('open_atcoder_manual_submit', { problemUrl: submittedProblem.url, code: currentCode.value })
+      cfManualConfirmation.value = { submissionId: sub.id, platform: submittedProblem.platform, problemId: submittedProblem.id, title: submittedProblem.title, tags: submittedTags }
       await persistSubmissions().catch(() => undefined)
     } catch (e: any) {
       sub.status = 'Failed'
@@ -1194,10 +1251,10 @@ export const useProblemStore = defineStore('problem', () => {
     const submission = submissions.value.find((item) => item.id === confirmation.submissionId)
     if (submission) {
       submission.status = accepted ? 'Accepted' : 'Failed'
-      submission.message = accepted ? '用户确认 Codeforces 已 AC' : '用户确认本次尚未 AC'
+      submission.message = accepted ? '用户确认官方提交已 AC' : '用户确认本次尚未 AC'
     }
     if (accepted) {
-      await useLearningStore().recordAccepted(`codeforces:${confirmation.problemId}`, confirmation.tags)
+      await useLearningStore().recordAccepted(`${confirmation.platform}:${confirmation.problemId}`, confirmation.tags)
     }
     cfManualConfirmation.value = null
     await persistSubmissions().catch(() => undefined)
@@ -1234,6 +1291,8 @@ export const useProblemStore = defineStore('problem', () => {
     cfAccount,
     luoguAccount,
     isRefreshingAccounts,
+    isCfLoginOpening,
+    isLuoguLoginOpening,
     activeView,
     showProblemTags,
     isLoading,
@@ -1285,6 +1344,8 @@ export const useProblemStore = defineStore('problem', () => {
     luoguType,
     luoguDifficulty,
     isLoadingCatalog,
+    isRefreshingCfCatalog,
+    isRefreshingAtCoderCatalog,
     page,
     pageSize,
     allTags,
@@ -1306,6 +1367,8 @@ export const useProblemStore = defineStore('problem', () => {
     refreshAccounts,
     initApp,
     fetchProblems,
+    refreshCfCatalog,
+    fetchAtCoderProblems,
     fetchLuoguProblems,
     importProblem,
     setPlatform,
@@ -1316,6 +1379,7 @@ export const useProblemStore = defineStore('problem', () => {
     selectTestCase,
     updateTestCase,
     updateCode,
+    resetCurrentCode,
     setLanguage,
     runLocally,
     runTestCase,

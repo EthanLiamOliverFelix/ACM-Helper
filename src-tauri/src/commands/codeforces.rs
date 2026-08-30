@@ -59,6 +59,56 @@ pub async fn open_cf_manual_submit(
     Ok(format!("已复制代码并打开 {problem_id} 的官方提交页"))
 }
 
+/// Copy source and open the corresponding AtCoder submit page in a persistent
+/// official WebView. The user completes submission and confirms the result.
+#[tauri::command]
+pub async fn open_atcoder_manual_submit(
+    app: AppHandle,
+    problem_url: String,
+    code: String,
+) -> Result<String, String> {
+    if code.trim().is_empty() {
+        return Err("代码为空，无法复制".into());
+    }
+    let re =
+        Regex::new(r"^https://atcoder\.jp/contests/([A-Za-z0-9_-]+)/tasks/([A-Za-z0-9_-]+)/?$")
+            .map_err(|e| e.to_string())?;
+    let captures = re
+        .captures(problem_url.trim())
+        .ok_or_else(|| "无法识别 AtCoder 官方题目链接".to_string())?;
+    let contest = captures.get(1).unwrap().as_str();
+    let task = captures.get(2).unwrap().as_str();
+    let clipboard_code = code;
+    tauri::async_runtime::spawn_blocking(move || {
+        let mut clipboard =
+            arboard::Clipboard::new().map_err(|e| format!("无法访问剪贴板：{e}"))?;
+        clipboard
+            .set_text(clipboard_code)
+            .map_err(|e| format!("复制代码失败：{e}"))
+    })
+    .await
+    .map_err(|e| format!("复制代码任务失败：{e}"))??;
+    let url = format!("https://atcoder.jp/contests/{contest}/submit?taskScreenName={task}")
+        .parse()
+        .map_err(|e| format!("提交页地址无效：{e}"))?;
+    if let Some(window) = app.get_webview_window("atcoder_manual_submit") {
+        window
+            .navigate(url)
+            .map_err(|e| format!("无法切换 AtCoder 提交页：{e}"))?;
+        let _ = window.show();
+        let _ = window.set_focus();
+    } else {
+        WebviewWindowBuilder::new(&app, "atcoder_manual_submit", WebviewUrl::External(url))
+            .title(format!("AtCoder {task} · 代码已复制，请粘贴提交"))
+            .inner_size(1080.0, 820.0)
+            .min_inner_size(760.0, 560.0)
+            .visible(true)
+            .build()
+            .map_err(|e| format!("无法打开 AtCoder 提交窗口：{e}"))?;
+    }
+    Ok(format!("已复制代码并打开 {task} 的官方提交页"))
+}
+
 // ── Serde types ───────────────────────────────────────────────────
 
 #[derive(Serialize, Deserialize, Clone, Debug)]

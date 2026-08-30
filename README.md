@@ -1,87 +1,78 @@
 # ACM Helper
 
-ACM Helper is a local-first desktop workspace for competitive programming. It is
-built with Vue 3, Monaco Editor, Rust, and Tauri 2.
+ACM Helper 是一个面向算法竞赛与日常刷题的本地优先桌面工作台，使用 Vue 3、
+Monaco Editor、Rust 与 Tauri 2 开发。
 
-> This is an independent community project. It is not affiliated with or
-> endorsed by Codeforces, Luogu, AtCoder, or any other online judge.
+> 本项目是独立的社区项目，与 Codeforces、洛谷、AtCoder 或其他在线评测平台
+> 不存在从属、合作或官方认可关系。
 
-## Highlights
+## 主要功能
 
-- Browse and filter Codeforces and Luogu problem catalogs; fetch a problem
-  statement only when it is opened.
-- Import Codeforces, Luogu, and AtCoder problem links with structured Markdown,
-  LaTeX, images, and sample cases.
-- Edit C++, Python, and Java with a locally bundled Monaco Editor, formatting,
-  persistent drafts, keyboard shortcuts, and line-number breakpoints.
-- Compile and run code locally without a visible Windows console. Compilation
-  and execution time are measured separately, and long output is truncated.
-- Manage multiple local test cases with input, expected output, actual output,
-  comparison results, and bounded parallel execution.
-- Debug C++ with GDB, Python with the built-in tracer, and Java with JDB. The
-  debugger supports continue, next, step in, step out, watched expressions, and
-  current-line highlighting.
-- Submit automatically to Luogu, including captcha handling and per-test judge
-  details. Codeforces submission uses a deliberate handoff: copy the current
-  code and open the official submission page.
-- Create, import, reorder, and search problem sets. AI-generated and skill-tree
-  plans use the same local problem references.
-- Track a 130-node algorithm skill tree, VP knowledge gaps, spaced wrong-problem
-  review, and per-problem Markdown notes.
-- Store drafts, notes, translations, settings, plans, and diagnostics in a
-  movable local data center with verified migration, backup, restore, import,
-  and export.
-- Cache Codeforces AI translations locally and allow an explicit retranslation.
-- Load Monaco and Markdown renderers on demand for a faster first screen.
+- 浏览并筛选 Codeforces 与洛谷题库；仅在用户打开题目时抓取具体题面。
+- 通过链接导入 Codeforces、洛谷和 AtCoder 题目，支持结构化 Markdown、LaTeX、
+  图片与样例。
+- 使用本地打包的 Monaco Editor 编写 C++、Python 和 Java，支持代码格式化、
+  草稿持久化、快捷键和行号断点。
+- 在 Windows 上无黑色控制台地编译运行代码；分别统计编译与运行耗时，并限制
+  超长输出的展示行数。
+- 管理多组本地测试点，分别展示输入、预期输出、实际输出和比较结果，并支持
+  受限并发运行。
+- 使用 GDB 调试 C++、内置跟踪器调试 Python、JDB 调试 Java；支持继续、下一步、
+  步入、步出、监视表达式和当前执行行高亮。
+- 自动提交到洛谷，包括验证码处理、结果回收和测试点详情。Codeforces 采用人工
+  接管方式：复制当前代码并打开官方提交页面。
+- 创建、导入、搜索和拖动排序题单；AI 推荐题单与技能树题单共用本地题目引用。
+- 提供包含 130 个节点的算法技能树、VP 知识缺口分析、间隔错题复习和题目笔记。
+- 将草稿、笔记、翻译、设置、题单和诊断信息存入可移动的本地数据中心，支持
+  校验迁移、备份、恢复、导入与导出。
+- 将 Codeforces 的 AI 翻译缓存在本地，并支持主动重新翻译。
+- 按需加载 Monaco 与 Markdown 渲染器，缩短软件首屏加载时间。
 
-## Privacy and data boundaries
+## 隐私与数据边界
 
-- The repository contains source code only. User drafts, notes, translations,
-  problem sets, AI configuration, and diagnostics are not part of the project
-  tree and must never be committed.
-- OJ passwords are entered only in official WebView pages. Login cookies remain
-  in the system-managed WebView profile and are not exported as ordinary files.
-- An AI API key is saved only when the user enables local persistence.
-- OJ diagnostics are length-limited and redact common authorization, cookie,
-  token, captcha, and API-key fields.
-- The separately authored development tutorial and its generation assets are
-  intentionally excluded from this repository.
+- 本仓库只包含项目源代码。用户草稿、笔记、翻译、题单、AI 配置和诊断记录
+  不属于源码目录，禁止提交到版本控制系统。
+- OJ 密码仅在对应平台的官方 WebView 页面中输入；登录 Cookie 保存在系统管理的
+  WebView 配置中，不会以普通文件形式导出。
+- 只有用户主动启用本地保存时，软件才会持久化 AI API Key。
+- OJ 诊断日志具有长度限制，并会脱敏 Authorization、Cookie、Token、验证码和
+  API Key 等常见敏感字段。
+- 单独编写的开发实战教程及其生成素材不会包含在本仓库中。
 
-## Install and run
+## 安装与运行
 
-Download a Windows installer from the GitHub Releases page when a release is
-available. The application itself does not require Node.js or Rust on the target
-computer.
+正式版本发布后，可以从 GitHub Releases 页面下载安装包。最终用户运行安装版
+不需要安装 Node.js 或 Rust。
 
-To run from source, install:
+从源码运行需要安装：
 
-- Node.js LTS and npm
+- Node.js LTS 与 npm
 - Rust stable
-- The Tauri 2 prerequisites for Windows
+- Tauri 2 的 Windows 开发依赖
 
-Then run:
+然后执行：
 
 ```powershell
 npm ci
 npm run tauri dev
 ```
 
-The root `一键运行.bat` launcher starts an existing release build when present,
-otherwise it checks the JavaScript dependencies and enters development mode.
+项目根目录的 `一键运行.bat` 会优先启动已经构建好的 Release 程序；如果 Release
+版本不存在，则检查 JavaScript 依赖并进入开发模式。
 
-## Optional solution toolchains
+## 可选的代码运行工具链
 
-These are only required for the corresponding local run/debug features:
+只有使用对应语言的本地运行或调试功能时，才需要安装以下工具：
 
-| Language | Run | Debug |
+| 语言 | 运行工具 | 调试工具 |
 | --- | --- | --- |
 | C++ | G++ | GDB |
-| Python | Python or PyPy | Built-in tracer |
-| Java | Javac and Java | JDB |
+| Python | Python 或 PyPy | 内置跟踪器 |
+| Java | Javac 与 Java | JDB |
 
-Each executable can be selected in Settings; leaving a path empty uses `PATH`.
+每个可执行文件都可以在软件设置中单独选择；路径留空时会从系统 `PATH` 中查找。
 
-## Build and test
+## 构建与测试
 
 ```powershell
 npm test
@@ -90,22 +81,21 @@ cargo test --manifest-path src-tauri/Cargo.toml
 npm run tauri build
 ```
 
-Live OJ tests are ignored by default because they depend on remote services.
-Core parsing and state logic is covered by offline regression tests.
+实时 OJ 测试依赖远端网络服务，因此默认处于忽略状态。核心解析、状态管理与数据
+处理逻辑使用离线回归测试覆盖。
 
-## Responsible use
+## 使用规范
 
-- Respect each online judge's terms, rate limits, and contest rules.
-- Do not use AI assistance where a contest prohibits it.
-- Do not redistribute cached problem statements or build a problem archive from
-  this project.
-- Local code execution is not sandboxed. Run only code you trust.
+- 遵守各在线评测平台的服务条款、访问频率限制和比赛规则。
+- 在禁止 AI 辅助的比赛中，不要使用本项目的 AI 功能。
+- 不要通过本项目重新分发缓存的题面，也不要将其用于建立题目内容镜像站。
+- 本地代码执行不属于安全沙箱，只运行自己信任的代码。
 
-## Contributing
+## 参与贡献
 
-See [CONTRIBUTING.md](CONTRIBUTING.md). Security-sensitive reports should follow
-[SECURITY.md](SECURITY.md).
+贡献前请阅读 [CONTRIBUTING.md](CONTRIBUTING.md)。涉及安全问题时，请按照
+[SECURITY.md](SECURITY.md) 中的方式进行报告。
 
-## License
+## 开源许可证
 
-ACM Helper is released under the [MIT License](LICENSE).
+ACM Helper 使用 [MIT License](LICENSE) 开源。

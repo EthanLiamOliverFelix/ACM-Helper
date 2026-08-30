@@ -6,9 +6,11 @@ use reqwest::Client;
 use scraper::{Html, Selector};
 use serde_json::Value;
 use std::collections::HashMap;
+use std::io::{BufRead, BufReader, Read, Write};
+use std::net::TcpListener;
 use std::sync::{Arc, OnceLock};
 use std::time::{Duration, Instant};
-use tauri::AppHandle;
+use tauri::{AppHandle, Manager, WebviewUrl, WebviewWindowBuilder};
 use tokio::process::Command;
 use tokio::sync::{Mutex, Semaphore};
 use tokio::task::JoinSet;
@@ -701,6 +703,170 @@ async fn fetch_atcoder(url: &str) -> Result<Problem, String> {
     })
 }
 
+fn qoj_problem_id(url: &str) -> Result<String, String> {
+    Regex::new(
+        r"(?i)^https?://(?:www\.)?qoj\.ac/problem/(\d+)(?:/statement/[a-z_]+)?/?(?:[?#].*)?$",
+    )
+    .unwrap()
+    .captures(url.trim())
+    .and_then(|captures| captures.get(1))
+    .map(|value| value.as_str().to_string())
+    .ok_or_else(|| "无法识别 QOJ 题目链接".to_string())
+}
+
+fn start_qoj_payload_server() -> Result<(u16, std::sync::mpsc::Receiver<String>), String> {
+    let listener = TcpListener::bind("127.0.0.1:0")
+        .map_err(|error| format!("启动 QOJ 本地回调失败: {error}"))?;
+    let port = listener
+        .local_addr()
+        .map_err(|error| format!("读取 QOJ 回调端口失败: {error}"))?
+        .port();
+    let (tx, rx) = std::sync::mpsc::channel();
+    std::thread::spawn(move || {
+        if let Ok((mut stream, _)) = listener.accept() {
+            let _ = stream.set_read_timeout(Some(Duration::from_secs(150)));
+            let mut reader = BufReader::new(stream.try_clone().unwrap());
+            let mut first_line = String::new();
+            let _ = reader.read_line(&mut first_line);
+            let mut content_length = 0usize;
+            loop {
+                let mut header = String::new();
+                if reader.read_line(&mut header).is_err() || header == "\r\n" || header.is_empty() {
+                    break;
+                }
+                if let Some(value) = header.to_ascii_lowercase().strip_prefix("content-length:") {
+                    content_length = value.trim().parse().unwrap_or(0);
+                }
+            }
+            let mut body = vec![0u8; content_length.min(32 * 1024 * 1024)];
+            if content_length > 0 && reader.read_exact(&mut body).is_ok() {
+                let encoded = String::from_utf8_lossy(&body);
+                let decoded = urlencoding::decode(&encoded)
+                    .unwrap_or_else(|_| std::borrow::Cow::Borrowed(""))
+                    .into_owned();
+                if !decoded.is_empty() {
+                    let _ = tx.send(decoded);
+                }
+            }
+            let response = "HTTP/1.1 200 OK\r\nContent-Length: 2\r\nAccess-Control-Allow-Origin: *\r\nConnection: close\r\n\r\nOK";
+            let _ = stream.write_all(response.as_bytes());
+        }
+    });
+    Ok((port, rx))
+}
+
+fn fetch_qoj_via_webview(app: &AppHandle, problem_id: &str) -> Result<Problem, String> {
+    if let Some(existing) = app.get_webview_window("qoj_statement") {
+        existing.close().ok();
+    }
+    let (port, result_rx) = start_qoj_payload_server()?;
+    let url = format!("https://qoj.ac/problem/{problem_id}/statement/en");
+    let script = format!(
+        r#"(function() {{
+      if (window.__acmQojWatcher) return; window.__acmQojWatcher = true;
+      var clean = function(value) {{ return (value || '').replace(/\s+/g, ' ').trim(); }};
+      var send = function() {{
+        if (window.__acmQojSent) return;
+        var article = document.querySelector('article.uoj-article, article');
+        var pdf = document.querySelector('iframe#statements-pdf');
+        var heading = document.querySelector('h1.page-header');
+        if (!heading || ((!article || !article.innerHTML.trim()) && !pdf)) return;
+        var title = clean(heading.textContent).replace(/^#\d+\.\s*/, '');
+        var text = document.body ? document.body.innerText : '';
+        var time = text.match(/Time Limit:\s*([0-9.]+)\s*(ms|s)/i);
+        var memory = text.match(/Memory Limit:\s*([0-9.]+)\s*(KB|MB|GB|KiB|MiB|GiB)/i);
+        var timeMs = time ? Math.round(parseFloat(time[1]) * (time[2].toLowerCase() === 's' ? 1000 : 1)) : null;
+        var memoryMb = null;
+        if (memory) {{ var unit=memory[2].toLowerCase(), amount=parseFloat(memory[1]); memoryMb=Math.round(amount*(unit[0]==='g'?1024:unit[0]==='k'?1/1024:1)); }}
+        var inputs=[], outputs=[];
+        if (article) article.querySelectorAll('h2,h3,h4,h5,strong').forEach(function(h) {{
+          var label=clean(h.textContent).toLowerCase(); if (!/sample\s+(input|output)/.test(label)) return;
+          var node=h.nextElementSibling || (h.parentElement && h.parentElement.nextElementSibling);
+          while (node && !/^(PRE|H2|H3|H4|H5)$/.test(node.tagName)) node=node.nextElementSibling;
+          var pre=node && node.tagName==='PRE' ? node : (node && node.querySelector ? node.querySelector('pre') : null);
+          if (pre) (/input/.test(label)?inputs:outputs).push((pre.innerText||pre.textContent||'').replace(/\r/g,'').trimEnd());
+        }});
+        var samples=inputs.slice(0,Math.min(inputs.length,outputs.length)).map(function(input,index){{return {{input:input,output:outputs[index]}};}});
+        var pdfUrl=pdf?pdf.src:'';
+        var description=article&&article.innerHTML.trim()?article.innerHTML:'<p>该题使用 PDF 题面。</p><p><a href="'+pdfUrl.replace(/"/g,'&quot;')+'" target="_blank">打开 QOJ 官方英文 PDF 题面 →</a></p>';
+        var payload={{id:{id_json},title:title||('QOJ '+{id_json}),rating:null,tags:[],platform:'qoj',source:'QOJ',contentFormat:'html',description:description,url:'https://qoj.ac/problem/'+{id_json},timeLimitMs:timeMs,memoryLimitMb:memoryMb,input:null,output:null,note:pdfUrl?('PDF statement: '+pdfUrl):null,samples:samples}};
+        window.__acmQojSent=true;
+        var deliver=function(){{fetch('http://127.0.0.1:{port}/result',{{method:'POST',mode:'no-cors',headers:{{'Content-Type':'text/plain'}},body:encodeURIComponent(JSON.stringify(payload))}}).catch(function(){{window.__acmQojSent=false;}});}};
+        if (!pdfUrl) {{ deliver(); return; }}
+        fetch(pdfUrl).then(function(response){{if(!response.ok)throw new Error('PDF HTTP '+response.status);return response.blob();}}).then(function(blob){{
+          var reader=new FileReader(); reader.onload=function(){{payload.pdfBase64=String(reader.result||'').split(',')[1]||'';deliver();}}; reader.onerror=deliver; reader.readAsDataURL(blob);
+        }}).catch(deliver);
+      }}; send(); setInterval(send,800);
+      setTimeout(function() {{
+        if (!window.__acmQojSent && !document.querySelector('h1.page-header') && !/just a moment/i.test(document.title || ''))
+          location.replace('https://qoj.ac/problem/' + {id_json});
+      }}, 15000);
+    }})();"#,
+        port = port,
+        id_json = serde_json::to_string(problem_id).unwrap()
+    );
+    let window = WebviewWindowBuilder::new(
+        app,
+        "qoj_statement",
+        WebviewUrl::External(
+            url.parse()
+                .map_err(|error| format!("QOJ 题目链接无效: {error}"))?,
+        ),
+    )
+    .title(format!("QOJ {problem_id} · 正在抓取题面"))
+    .inner_size(980.0, 760.0)
+    .visible(false)
+    .initialization_script(&script)
+    .build()
+    .map_err(|error| format!("创建 QOJ 题面窗口失败: {error}"))?;
+    let challenge_window = window.clone();
+    std::thread::spawn(move || {
+        std::thread::sleep(Duration::from_secs(8));
+        let _ = challenge_window.show();
+        let _ = challenge_window.set_focus();
+        let _ = challenge_window.set_title("QOJ 人机验证 · 完成后将自动抓取题面");
+    });
+    let result = result_rx
+        .recv_timeout(Duration::from_secs(150))
+        .map_err(|_| "QOJ 题面加载超时；若出现 Cloudflare 验证窗口，请完成验证后重试".to_string())
+        .and_then(|payload| {
+            let mut value: Value = serde_json::from_str(&payload)
+                .map_err(|error| format!("解析 QOJ 题面失败: {error}"))?;
+            let pdf_base64 = value
+                .get("pdfBase64")
+                .and_then(Value::as_str)
+                .map(str::to_string);
+            if let Some(object) = value.as_object_mut() {
+                object.remove("pdfBase64");
+            }
+            let mut problem: Problem = serde_json::from_value(value)
+                .map_err(|error| format!("解析 QOJ 题面失败: {error}"))?;
+            if let Some(encoded) = pdf_base64 {
+                use base64::Engine;
+                if let Ok(bytes) = base64::engine::general_purpose::STANDARD.decode(encoded) {
+                    if let Ok(text) = pdf_extract::extract_text_from_mem(&bytes) {
+                        let text = text.trim();
+                        if !text.is_empty() {
+                            problem.description = Some(text.to_string());
+                            problem.content_format = Some("text".into());
+                        }
+                    }
+                }
+            }
+            Ok(problem)
+        });
+    window.close().ok();
+    result
+}
+
+#[tauri::command]
+pub async fn fetch_problem_qoj(app: AppHandle, url: String) -> Result<Problem, String> {
+    let problem_id = qoj_problem_id(&url)?;
+    tauri::async_runtime::spawn_blocking(move || fetch_qoj_via_webview(&app, &problem_id))
+        .await
+        .map_err(|error| format!("QOJ 抓题任务失败: {error}"))?
+}
+
 pub(crate) async fn fetch_luogu(url: &str) -> Result<Problem, String> {
     let id_re = luogu_pid_regex(false);
     let id = id_re
@@ -935,8 +1101,10 @@ pub async fn import_problem_url(app: AppHandle, url: String) -> Result<Problem, 
         fetch_atcoder(&url).await
     } else if lower.contains("luogu.com") {
         fetch_luogu(&url).await
+    } else if lower.contains("qoj.ac") {
+        fetch_problem_qoj(app, url).await
     } else {
-        Err("当前支持 Codeforces、AtCoder 和洛谷题目链接".into())
+        Err("当前支持 Codeforces、AtCoder、QOJ 和洛谷题目链接".into())
     }
 }
 
@@ -980,6 +1148,11 @@ mod tests {
             .captures("https://www.luogu.com.cn/problem/CF1234A2")
             .unwrap();
         assert_eq!(captures.get(1).unwrap().as_str(), "CF1234A2");
+        assert_eq!(
+            qoj_problem_id("https://qoj.ac/problem/18920/statement/en").unwrap(),
+            "18920"
+        );
+        assert!(qoj_problem_id("https://qoj.ac/problem/../1").is_err());
     }
 
     #[test]

@@ -1,6 +1,6 @@
 import type { Submission, Verdict } from '../types'
 
-export type ReviewPlatform = 'codeforces' | 'luogu' | 'atcoder'
+export type ReviewPlatform = 'codeforces' | 'luogu' | 'atcoder' | 'qoj'
 
 export interface PracticeControl {
   ignored?: boolean
@@ -44,7 +44,7 @@ function inferLegacyPlatform(problemId: string): ReviewPlatform {
 }
 
 function reviewPlatform(submission: Submission): ReviewPlatform | null {
-  if (submission.platform === 'codeforces' || submission.platform === 'luogu' || submission.platform === 'atcoder') return submission.platform
+  if (submission.platform === 'codeforces' || submission.platform === 'luogu' || submission.platform === 'atcoder' || submission.platform === 'qoj') return submission.platform
   if (!submission.platform) return inferLegacyPlatform(submission.problemId)
   return null
 }

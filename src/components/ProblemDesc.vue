@@ -15,6 +15,16 @@ const learning = useLearningStore()
 const ai = useAiStore()
 const notes = useNoteStore()
 const problemKey = computed(() => store.currentProblem ? `${store.currentProblem.platform}:${store.currentProblem.id}` : '')
+const translationSupported = computed(() => {
+  const problem = store.currentProblem
+  if (!problem || !['codeforces', 'atcoder', 'qoj'].includes(problem.platform)) return false
+  if (ai.translations[problemKey.value]) return true
+  const source = `${problem.title} ${problem.description ?? ''} ${problem.input ?? ''} ${problem.output ?? ''}`
+    .replace(/<[^>]+>/g, ' ')
+  const latin = (source.match(/[A-Za-z]/g) ?? []).length
+  const cjk = (source.match(/[\u3400-\u9fff]/g) ?? []).length
+  return latin >= 24 && latin > cjk * 2
+})
 const translationError = computed(() => ai.error)
 const refreshError = ref('')
 const refreshNotice = ref('')
@@ -32,7 +42,19 @@ const difficultyColors: Record<string, string> = {
 function safeRichText(value = '', format: 'html' | 'markdown' | 'text' = 'text', baseUrl?: string) {
   let html: string
   if (format === 'markdown') html = renderLuoguMarkdown(normalizeAiMarkdown(value))
-  else if (format === 'html') html = value
+  else if (format === 'html') {
+    // QOJ keeps TeX sources beside MathJax's generated SVG. Convert the source
+    // to the same KaTeX renderer used by Markdown before sanitizing the HTML.
+    const sourceDoc = new DOMParser().parseFromString(`<div id="acm-rich-root">${value}</div>`, 'text/html')
+    const sourceRoot = sourceDoc.getElementById('acm-rich-root')!
+    sourceRoot.querySelectorAll('.MathJax_Preview,.MathJax_SVG').forEach((node) => node.remove())
+    sourceRoot.querySelectorAll<HTMLScriptElement>('script[type="math/tex"]').forEach((script) => {
+      const wrapper = sourceDoc.createElement('span')
+      wrapper.innerHTML = renderLuoguMarkdown(`$${script.textContent ?? ''}$`)
+      script.replaceWith(...Array.from(wrapper.childNodes))
+    })
+    html = sourceRoot.innerHTML
+  }
   else html = value.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/\n/g, '<br/>')
   const clean = DOMPurify.sanitize(html, { USE_PROFILES: { html: true }, ADD_ATTR: ['target'] })
   // Markdown 经 marked 转换后同样可能保留 `/problem/...`、`/upload/...`
@@ -73,8 +95,8 @@ async function retranslate() {
 
 watch(problemKey, async () => {
   const problem = store.currentProblem
-  if (!problem || problem.platform !== 'codeforces') return
-  try { await ai.loadCachedTranslation(problem.id) } catch (e) { ai.error = String(e) }
+  if (!problem || !['codeforces', 'atcoder', 'qoj'].includes(problem.platform)) return
+  try { await ai.loadCachedTranslation(problem.id, problem.platform) } catch (e) { ai.error = String(e) }
 }, { immediate: true })
 
 async function refreshStatement() {
@@ -148,16 +170,16 @@ async function closeProblemNote() {
         title="忽略已有题面，重新从原 OJ 抓取；不会影响本地代码"
         @click="refreshStatement"
       >{{ store.isLoadingDetail ? '抓取中…' : '重新抓取' }}</button>
-      <span v-if="store.currentProblem.platform === 'codeforces' && ai.translations[problemKey]" class="translation-badge" title="已从本地读取保存的 Markdown 译文">✓ 本地中文题面</span>
+      <span v-if="translationSupported && ai.translations[problemKey]" class="translation-badge" title="已从本地读取保存的 Markdown 译文">✓ 本地中文题面</span>
       <button
-        v-if="store.currentProblem.platform === 'codeforces' && !ai.translations[problemKey]"
+        v-if="translationSupported && !ai.translations[problemKey]"
         class="translate-btn"
         :disabled="ai.isTranslating || !ai.isConfigured"
         :title="ai.isConfigured ? '使用已配置的 AI 翻译完整题面' : '请先在顶部设置中配置 API'"
         @click="translate"
       >{{ ai.isTranslating ? '翻译中…' : 'AI 翻译' }}</button>
       <button
-        v-if="store.currentProblem.platform === 'codeforces' && ai.translations[problemKey]"
+        v-if="translationSupported && ai.translations[problemKey]"
         class="retranslate-btn"
         :disabled="ai.isTranslating || !ai.isConfigured"
         :title="ai.isConfigured ? '重新调用 AI 并覆盖本地译文' : '请先在顶部设置中配置 API'"

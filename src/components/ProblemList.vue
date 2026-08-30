@@ -14,6 +14,7 @@ const sourceOptions = [
   { key: 'codeforces' as const, label: 'Codeforces' },
   { key: 'luogu' as const, label: '洛谷' },
   { key: 'atcoder' as const, label: 'AtCoder' },
+  { key: 'qoj' as const, label: 'QOJ' },
 ]
 
 const difficultyColor: Record<string, string> = {
@@ -77,7 +78,7 @@ function onSearchInput() {
       <button v-for="source in sourceOptions" :key="source.key" :class="{ active: store.currentPlatform === source.key }" @click="store.setPlatform(source.key)">{{ source.label }}</button>
     </div>
     <div class="problem-import">
-      <input v-model="store.importUrl" placeholder="粘贴 CF / AtCoder / 洛谷题目链接" @keyup.enter="store.importProblem" />
+      <input v-model="store.importUrl" placeholder="粘贴 CF / AtCoder / QOJ / 洛谷题目链接" @keyup.enter="store.importProblem" />
       <button :disabled="store.isImporting || !store.importUrl.trim()" @click="store.importProblem">{{ store.isImporting ? '抓取中…' : '导入' }}</button>
     </div>
     <div v-if="store.error && store.activeView === 'workspace'" class="problem-import__error">{{ store.error }}</div>
@@ -191,7 +192,7 @@ function onSearchInput() {
           <span v-for="tag in problem.tags" :key="tag" class="tag">{{ tag }}</span>
         </div>
         <button
-          v-if="problem.platform === 'codeforces' || problem.platform === 'luogu' || problem.platform === 'atcoder'"
+          v-if="problem.platform === 'codeforces' || problem.platform === 'luogu' || problem.platform === 'atcoder' || problem.platform === 'qoj'"
           class="problem-item__add"
           :class="{ added: problemSets.contains(problem) }"
           :title="problemSets.contains(problem) ? `已在「${problemSets.activeSet?.name}」中` : `加入「${problemSets.activeSet?.name}」`"

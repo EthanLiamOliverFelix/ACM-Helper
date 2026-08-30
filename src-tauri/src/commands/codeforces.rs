@@ -109,6 +109,50 @@ pub async fn open_atcoder_manual_submit(
     Ok(format!("已复制代码并打开 {task} 的官方提交页"))
 }
 
+/// QOJ submission stays in the official browser because accounts, Cloudflare
+/// verification and per-problem submission formats are managed by QOJ itself.
+#[tauri::command]
+pub async fn open_qoj_manual_submit(
+    app: AppHandle,
+    problem_id: String,
+    code: String,
+) -> Result<String, String> {
+    if code.trim().is_empty() {
+        return Err("代码为空，无法复制".into());
+    }
+    if !Regex::new(r"^\d+$").unwrap().is_match(problem_id.trim()) {
+        return Err(format!("无法识别 QOJ 题号：{problem_id}"));
+    }
+    tauri::async_runtime::spawn_blocking(move || {
+        let mut clipboard =
+            arboard::Clipboard::new().map_err(|e| format!("无法访问剪贴板：{e}"))?;
+        clipboard
+            .set_text(code)
+            .map_err(|e| format!("复制代码失败：{e}"))
+    })
+    .await
+    .map_err(|e| format!("复制代码任务失败：{e}"))??;
+    let url = format!("https://qoj.ac/problem/{problem_id}#tab-submit-answer")
+        .parse()
+        .map_err(|e| format!("提交页地址无效：{e}"))?;
+    if let Some(window) = app.get_webview_window("qoj_manual_submit") {
+        window
+            .navigate(url)
+            .map_err(|e| format!("无法切换 QOJ 提交页：{e}"))?;
+        let _ = window.show();
+        let _ = window.set_focus();
+    } else {
+        WebviewWindowBuilder::new(&app, "qoj_manual_submit", WebviewUrl::External(url))
+            .title(format!("QOJ {problem_id} · 代码已复制，请粘贴提交"))
+            .inner_size(1080.0, 820.0)
+            .min_inner_size(760.0, 560.0)
+            .visible(true)
+            .build()
+            .map_err(|e| format!("无法打开 QOJ 提交窗口：{e}"))?;
+    }
+    Ok(format!("已复制代码并打开 QOJ {problem_id} 的官方提交页"))
+}
+
 // ── Serde types ───────────────────────────────────────────────────
 
 #[derive(Serialize, Deserialize, Clone, Debug)]

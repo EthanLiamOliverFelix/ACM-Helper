@@ -2,7 +2,7 @@ export type Difficulty =
   | '暂无评定' | '入门' | '普及-' | '普及' | '普及+/提高-'
   | '提高' | '提高+/省选-' | '省选/NOI-' | 'NOI/NOI+/CTS'
 export type Language = 'cpp' | 'python' | 'java'
-export type Platform = 'codeforces' | 'luogu' | 'atcoder' | 'local'
+export type Platform = 'codeforces' | 'luogu' | 'atcoder' | 'qoj' | 'local'
 
 /** CF 评测状态 */
 export type Verdict =
@@ -208,7 +208,7 @@ export interface LearningProfile {
 }
 
 export interface SkillPlanProblem {
-  platform: 'codeforces' | 'luogu' | 'atcoder'
+  platform: 'codeforces' | 'luogu' | 'atcoder' | 'qoj'
   id: string
   title: string
   url: string

@@ -1,4 +1,4 @@
-export type BatchProblemPlatform = 'codeforces' | 'luogu' | 'atcoder'
+export type BatchProblemPlatform = 'codeforces' | 'luogu' | 'atcoder' | 'qoj'
 
 export interface BatchProblemToken {
   raw: string
@@ -11,23 +11,25 @@ function platformName(value: string): BatchProblemPlatform | undefined {
   if (/^(?:cf|codeforces)$/i.test(value)) return 'codeforces'
   if (/^(?:洛谷|luogu)$/i.test(value)) return 'luogu'
   if (/^(?:at|atcoder)$/i.test(value)) return 'atcoder'
+  if (/^qoj$/i.test(value)) return 'qoj'
 }
 
 function parseTextToken(rawValue: string): BatchProblemToken | null {
   const raw = rawValue.trim().replace(/^[\s,，、•*+-]+|[\s,，、]+$/g, '')
   if (!raw) return null
-  const prefixed = raw.match(/^(cf|codeforces|洛谷|luogu|at|atcoder)\s*[-—:：]\s*(.+)$/i)
+  const prefixed = raw.match(/^(cf|codeforces|洛谷|luogu|at|atcoder|qoj)\s*[-—:：]\s*(.+)$/i)
   const platform = prefixed ? platformName(prefixed[1]) : undefined
   const body = (prefixed?.[2] ?? raw).trim()
   const luoguId = body.match(/(?:^|[^A-Za-z0-9])([PBTU]\d{3,7})(?=$|[^A-Za-z0-9])/i)?.[1]
   const cfId = body.match(/(?:^|[^A-Za-z0-9])(\d{1,7}[A-Za-z][A-Za-z0-9]*)(?=$|[^A-Za-z0-9])/)?.[1]
   const atcoderId = body.match(/(?:^|[^A-Za-z0-9])([A-Za-z0-9]+(?:_[A-Za-z0-9]+)+)(?=$|[^A-Za-z0-9])/)?.[1]
-  const id = platform === 'luogu' ? luoguId : platform === 'codeforces' ? cfId : platform === 'atcoder' ? atcoderId : (luoguId ?? cfId ?? atcoderId)
+  const qojId = platform === 'qoj' ? body.match(/^\d+$/)?.[0] : undefined
+  const id = platform === 'luogu' ? luoguId : platform === 'codeforces' ? cfId : platform === 'atcoder' ? atcoderId : platform === 'qoj' ? qojId : (luoguId ?? cfId ?? atcoderId)
   const inferredPlatform = platform ?? (luoguId ? 'luogu' : cfId ? 'codeforces' : atcoderId ? 'atcoder' : undefined)
   const query = id
     ? body.replace(id, '').replace(/^[\s/|,，、-]+|[\s/|,，、-]+$/g, '').trim()
     : body
-  return { raw, platform: inferredPlatform, id: id ? (inferredPlatform === 'luogu' || inferredPlatform === 'atcoder' ? id.toUpperCase() : `${id.match(/^\d+/)?.[0]}${id.slice(id.match(/^\d+/)?.[0].length ?? 0).toUpperCase()}`) : undefined, query: query || undefined }
+  return { raw, platform: inferredPlatform, id: id ? (inferredPlatform === 'luogu' || inferredPlatform === 'atcoder' ? id.toUpperCase() : inferredPlatform === 'qoj' ? id : `${id.match(/^\d+/)?.[0]}${id.slice(id.match(/^\d+/)?.[0].length ?? 0).toUpperCase()}`) : undefined, query: query || undefined }
 }
 
 /** Links may be separated by spaces; names occupy one line (or one semicolon-delimited item). */

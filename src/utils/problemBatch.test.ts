@@ -23,4 +23,12 @@ describe('batch problem input', () => {
   it('keeps a title containing spaces as one query', () => {
     expect(parseBatchProblemInput('Wrong Subtraction')).toEqual([{ raw: 'Wrong Subtraction', query: 'Wrong Subtraction' }])
   })
+
+  it('recognizes QOJ links and explicitly-prefixed numeric ids', () => {
+    const parsed = parseBatchProblemInput('https://qoj.ac/problem/18920\nQOJ-1')
+    expect(parsed).toEqual([
+      { raw: 'https://qoj.ac/problem/18920', url: 'https://qoj.ac/problem/18920' },
+      { raw: 'QOJ-1', platform: 'qoj', id: '1', query: undefined },
+    ])
+  })
 })

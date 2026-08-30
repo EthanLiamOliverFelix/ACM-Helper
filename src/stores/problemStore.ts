@@ -66,7 +66,7 @@ export const useProblemStore = defineStore('problem', () => {
   const luoguCaptchaImage = ref('')
   const luoguCaptcha = ref('')
   const luoguCaptchaProblemId = ref('')
-  const cfManualConfirmation = ref<null | { submissionId: string; platform: 'codeforces' | 'atcoder'; problemId: string; title: string; tags: string[] }>(null)
+  const cfManualConfirmation = ref<null | { submissionId: string; platform: 'codeforces' | 'atcoder' | 'qoj'; problemId: string; title: string; tags: string[] }>(null)
   let luoguPendingPayload: { problemId: string; code: string; language: Language; tags: string[]; languageId: number; enableO2: boolean } | null = null
   let saveTimer: ReturnType<typeof setTimeout> | null = null
   // 切题、打开本地文件和切换语言都涉及“保存旧草稿 → 更换标识 →
@@ -544,7 +544,7 @@ export const useProblemStore = defineStore('problem', () => {
   }
 
   async function openRecommendedProblem(reference: {
-    platform: 'codeforces' | 'luogu' | 'atcoder'
+    platform: 'codeforces' | 'luogu' | 'atcoder' | 'qoj'
     id: string
     title: string
     url: string
@@ -833,8 +833,10 @@ export const useProblemStore = defineStore('problem', () => {
           })()
         : file.platform === 'luogu'
           ? `https://www.luogu.com.cn/problem/${file.problemId}`
-          : file.platform === 'atcoder'
+        : file.platform === 'atcoder'
             ? `https://atcoder.jp/contests/${file.problemId.split('_')[0]}/tasks/${file.problemId}`
+            : file.platform === 'qoj'
+              ? `https://qoj.ac/problem/${file.problemId}`
             : undefined
       currentProblem.value = boundProblem ?? {
         id: file.problemId,
@@ -903,7 +905,9 @@ export const useProblemStore = defineStore('problem', () => {
       && !(problem.description && problem.contentFormat === 'markdown')
     const isAtCoderMissingRich = problem.platform === 'atcoder'
       && !(problem.description && problem.contentFormat === 'html')
-    if (!force && !isCfMissingRich && !isLuoguMissingRich && !isAtCoderMissingRich) return
+    const isQojMissingRich = problem.platform === 'qoj'
+      && !(problem.description && problem.contentFormat === 'html')
+    if (!force && !isCfMissingRich && !isLuoguMissingRich && !isAtCoderMissingRich && !isQojMissingRich) return
     isLoadingDetail.value = true
     error.value = null
     try {
@@ -913,7 +917,9 @@ export const useProblemStore = defineStore('problem', () => {
         : await withOjDiagnostic(problem.platform, 'fetch-statement', () => invoke<Problem>('import_problem_url', {
             url: problem.url ?? (problem.platform === 'luogu'
               ? `https://www.luogu.com.cn/problem/${problem.id}`
-              : `https://atcoder.jp/contests/${problem.id.split('_')[0]}/tasks/${problem.id}`),
+              : problem.platform === 'atcoder'
+                ? `https://atcoder.jp/contests/${problem.id.split('_')[0]}/tasks/${problem.id}`
+                : `https://qoj.ac/problem/${problem.id}`),
           }))
       Object.assign(problem, detail, {
         rating: preserved.rating ?? detail.rating,
@@ -1203,7 +1209,7 @@ export const useProblemStore = defineStore('problem', () => {
   // 最近一次提交的错误详情
   const lastSubmitError = ref<string | null>(null)
 
-  /** 复制代码并打开 CF / AtCoder 官方提交页，评测结果由用户确认。 */
+  /** 复制代码并打开 CF / AtCoder / QOJ 官方提交页，评测结果由用户确认。 */
   async function submitCode() {
     if (!currentProblem.value || !currentCode.value.trim()) return
     if (cfManualConfirmation.value) {
@@ -1228,11 +1234,13 @@ export const useProblemStore = defineStore('problem', () => {
     await persistSubmissions().catch(() => undefined)
 
     try {
-      if (submittedProblem.platform !== 'codeforces' && submittedProblem.platform !== 'atcoder') throw new Error('当前平台不支持人工提交')
+      if (submittedProblem.platform !== 'codeforces' && submittedProblem.platform !== 'atcoder' && submittedProblem.platform !== 'qoj') throw new Error('当前平台不支持人工提交')
       await persistDraft()
       sub.message = submittedProblem.platform === 'codeforces'
         ? await invoke<string>('open_cf_manual_submit', { problemId: submittedProblem.id, code: currentCode.value })
-        : await invoke<string>('open_atcoder_manual_submit', { problemUrl: submittedProblem.url, code: currentCode.value })
+        : submittedProblem.platform === 'atcoder'
+          ? await invoke<string>('open_atcoder_manual_submit', { problemUrl: submittedProblem.url, code: currentCode.value })
+          : await invoke<string>('open_qoj_manual_submit', { problemId: submittedProblem.id, code: currentCode.value })
       cfManualConfirmation.value = { submissionId: sub.id, platform: submittedProblem.platform, problemId: submittedProblem.id, title: submittedProblem.title, tags: submittedTags }
       await persistSubmissions().catch(() => undefined)
     } catch (e: any) {

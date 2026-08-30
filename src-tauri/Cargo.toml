@@ -33,3 +33,5 @@ chrono = { version = "0.4", default-features = false, features = ["clock"] }
 tokio = { version = "1", features = ["sync", "process", "time", "io-util", "macros"] }
 arboard = "3"
 rfd = "0.15"
+base64 = "0.22"
+pdf-extract = "0.7"

@@ -1,7 +1,7 @@
 import { computed, ref } from 'vue'
 import { defineStore } from 'pinia'
 import { invoke } from '@tauri-apps/api/core'
-import type { AiChatResult, AiMessage, AssistanceLevel, LuoguProblemPage, SkillNode, SkillPlanProblem } from '../types'
+import type { AiChatResult, AiMessage, AssistanceLevel, LuoguProblemPage, Platform, SkillNode, SkillPlanProblem } from '../types'
 import { useProblemStore } from './problemStore'
 import { useLearningStore } from './learningStore'
 import { parseChatProblemSetResponse, parseSkillPlanResponse } from '../utils/skillPlan'
@@ -63,7 +63,7 @@ export const useAiStore = defineStore('ai', () => {
         estimatedNextRating: targetRating,
         masteredSkills: learning.profile.masteredSkills,
         candidateProblems,
-        instruction: '推荐具体题目时只从 candidateProblems 中选择，并结合技能树前置关系说明原因。若用户要求生成题单、训练计划、一组练习题或把推荐保存为题单，正常回答后必须追加一个严格格式的 ```acm-problem-set 代码块。块内是 JSON 对象：{"name":"题单名称","problems":[{"platform":"codeforces、luogu或atcoder","id":"题号","title":"标题","rating":难度分,"reason":"推荐原因"}]}。不要在该代码块中加入注释，只选 candidateProblems 中真实存在的题。',
+        instruction: '推荐具体题目时只从 candidateProblems 中选择，并结合技能树前置关系说明原因。若用户要求生成题单、训练计划、一组练习题或把推荐保存为题单，正常回答后必须追加一个严格格式的 ```acm-problem-set 代码块。块内是 JSON 对象：{"name":"题单名称","problems":[{"platform":"codeforces、luogu、atcoder或qoj","id":"题号","title":"标题","rating":难度分,"reason":"推荐原因"}]}。不要在该代码块中加入注释，只选 candidateProblems 中真实存在的题。',
       },
       vpAnalysis: learning.contestAnalysis,
       vpAnalysisError: learning.error,
@@ -108,13 +108,14 @@ export const useAiStore = defineStore('ai', () => {
     }
   }
 
-  async function loadCachedTranslation(problemId: string): Promise<string | null> {
+  async function loadCachedTranslation(problemId: string, platform: Platform = 'codeforces'): Promise<string | null> {
+    if (platform !== 'codeforces' && platform !== 'atcoder' && platform !== 'qoj') return null
     const normalizedId = problemId.trim().toUpperCase()
-    const key = `codeforces:${normalizedId}`
+    const key = `${platform}:${normalizedId}`
     if (translations.value[key]) return translations.value[key]
     const pending = translationLoads.get(key)
     if (pending) return pending
-    const task = invoke<string | null>('load_cf_translation', { problemId: normalizedId })
+    const task = invoke<string | null>('load_oj_translation', { platform, problemId: normalizedId })
       .then((content) => {
         if (content) translations.value[key] = content
         return content
@@ -127,12 +128,12 @@ export const useAiStore = defineStore('ai', () => {
   async function translateCurrentProblem(force = false) {
     const problems = useProblemStore()
     const problem = problems.currentProblem
-    if (!problem || problem.platform !== 'codeforces') throw new Error('仅支持翻译 Codeforces 英文题面')
+    if (!problem || !['codeforces', 'atcoder', 'qoj'].includes(problem.platform)) throw new Error('仅支持翻译 Codeforces、AtCoder 和 QOJ 英文题面')
     const problemId = problem.id.toUpperCase()
-    const key = `codeforces:${problemId}`
+    const key = `${problem.platform}:${problemId}`
     if (!force) {
       if (translations.value[key]) return translations.value[key]
-      const cached = await loadCachedTranslation(problemId)
+      const cached = await loadCachedTranslation(problemId, problem.platform)
       if (cached) return cached
     }
     if (!isConfigured.value) throw new Error('请先在顶部“设置”中配置模型、API 地址和 API Key')
@@ -152,11 +153,11 @@ export const useAiStore = defineStore('ai', () => {
         model: model.value,
         protocol: protocol.value,
         assistanceLevel: 'full',
-        messages: [{ role: 'user', content: `把下面的 Codeforces 英文题面完整翻译为简体中文。输出 Markdown，保留所有数学公式、变量、约束、列表和标题结构；样例输入输出由程序单独显示，不要在译文中重复样例；不要用三反引号或 markdown 代码围栏包裹整篇回复；不要解题，不要添加原文没有的信息。\n\n${source}` }],
+        messages: [{ role: 'user', content: `把下面的 ${problem.platform === 'codeforces' ? 'Codeforces' : problem.platform === 'atcoder' ? 'AtCoder' : 'QOJ'} 英文题面完整翻译为简体中文。输出 Markdown，保留所有数学公式、变量、约束、列表和标题结构；样例输入输出由程序单独显示，不要在译文中重复样例；不要用三反引号或 markdown 代码围栏包裹整篇回复；不要解题，不要添加原文没有的信息。\n\n${source}` }],
         context: '{}',
         previousResponseId: null,
       })
-      await invoke('save_cf_translation', { problemId, content: result.text })
+      await invoke('save_oj_translation', { platform: problem.platform, problemId, content: result.text })
       translations.value[key] = result.text
       return result.text
     } finally {
@@ -186,7 +187,7 @@ export const useAiStore = defineStore('ai', () => {
     const seen = new Set<string>()
     const skillTags = new Set(skill.tags.map((tag) => tag.toLowerCase()))
     const sortedCandidates = [...problemStore.problems, ...problemStore.importedProblems, ...(luoguPage?.problems ?? [])]
-      .filter((problem) => problem.platform === 'codeforces' || problem.platform === 'luogu' || problem.platform === 'atcoder')
+      .filter((problem) => problem.platform === 'codeforces' || problem.platform === 'luogu' || problem.platform === 'atcoder' || problem.platform === 'qoj')
       .filter((problem) => !solved.has(`${problem.platform}:${problem.id}`))
       .filter((problem) => {
         const key = `${problem.platform}:${problem.id}`
@@ -205,9 +206,10 @@ export const useAiStore = defineStore('ai', () => {
     const cfCandidates = sortedCandidates.filter((problem) => problem.platform === 'codeforces').slice(0, 60)
     const luoguCandidates = sortedCandidates.filter((problem) => problem.platform === 'luogu').slice(0, 60)
     const atcoderCandidates = sortedCandidates.filter((problem) => problem.platform === 'atcoder').slice(0, 60)
-    const candidates = Array.from({ length: Math.max(cfCandidates.length, luoguCandidates.length, atcoderCandidates.length) })
-      .flatMap((_, index) => [cfCandidates[index], luoguCandidates[index], atcoderCandidates[index]].filter(Boolean))
-    if (candidates.length < 8) throw new Error('当前题库候选题不足 8 道，请先加载 Codeforces、洛谷或 AtCoder 题库后重试')
+    const qojCandidates = sortedCandidates.filter((problem) => problem.platform === 'qoj').slice(0, 60)
+    const candidates = Array.from({ length: Math.max(cfCandidates.length, luoguCandidates.length, atcoderCandidates.length, qojCandidates.length) })
+      .flatMap((_, index) => [cfCandidates[index], luoguCandidates[index], atcoderCandidates[index], qojCandidates[index]].filter(Boolean))
+    if (candidates.length < 8) throw new Error('当前题库候选题不足 8 道，请先加载 Codeforces、洛谷、AtCoder 或 QOJ 题库后重试')
 
     const candidateMap = new Map(candidates.map((problem) => [`${problem.platform}:${problem.id.toUpperCase()}`, problem]))
     const result = await invoke<AiChatResult>('ai_chat', {
@@ -218,7 +220,7 @@ export const useAiStore = defineStore('ai', () => {
       assistanceLevel: 'full',
       messages: [{
         role: 'user',
-        content: `为知识点“${skill.name}”生成第 ${previousPlans.length + 1} 份、约 10 道题的递进练习题单。只能选择候选题中真实存在的题，并兼顾基础巩固、变式和综合应用。新题单应整体比上一份更难、更综合；上一份可量化平均 rating 为 ${previousAverageRating ?? '未知'}。尽量不要选择历史题单中出现过的题（候选中的 usedBefore=true），只有公认经典且确有复习价值时才允许重复，最多重复 1 道，并在 reason 中说明复习原因。尽量混合 Codeforces、洛谷和 AtCoder 的合适题目。只输出 JSON 数组，不要 Markdown 和解释。每项字段必须是 platform、id、title、rating、reason；platform 只能是 codeforces、luogu 或 atcoder。\n\n历史题目：${JSON.stringify(previousProblems.map((problem) => ({ platform: problem.platform, id: problem.id, rating: problem.rating })))}\n\n候选题：${JSON.stringify(candidates)}`,
+        content: `为知识点“${skill.name}”生成第 ${previousPlans.length + 1} 份、约 10 道题的递进练习题单。只能选择候选题中真实存在的题，并兼顾基础巩固、变式和综合应用。新题单应整体比上一份更难、更综合；上一份可量化平均 rating 为 ${previousAverageRating ?? '未知'}。尽量不要选择历史题单中出现过的题（候选中的 usedBefore=true），只有公认经典且确有复习价值时才允许重复，最多重复 1 道，并在 reason 中说明复习原因。尽量混合 Codeforces、洛谷、AtCoder 和 QOJ 的合适题目。只输出 JSON 数组，不要 Markdown 和解释。每项字段必须是 platform、id、title、rating、reason；platform 只能是 codeforces、luogu、atcoder 或 qoj。\n\n历史题目：${JSON.stringify(previousProblems.map((problem) => ({ platform: problem.platform, id: problem.id, rating: problem.rating })))}\n\n候选题：${JSON.stringify(candidates)}`,
       }],
       context: JSON.stringify({
         skill: { id: skill.id, name: skill.name, description: skill.description, tags: skill.tags, prerequisites: skill.prerequisites },

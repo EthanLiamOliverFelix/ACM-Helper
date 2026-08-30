@@ -591,7 +591,7 @@ fn draft_info_for_path(path: &Path) -> Option<DraftFileInfo> {
             .and_then(|value| value.parent())
             .and_then(|value| value.file_name())
             .and_then(|value| value.to_str())
-            .filter(|value| matches!(*value, "codeforces" | "luogu" | "atcoder" | "local"))
+            .filter(|value| matches!(*value, "codeforces" | "luogu" | "atcoder" | "qoj" | "local"))
             .unwrap_or("local");
         let platform = if metadata.platform.is_empty() {
             inferred_platform.into()
@@ -687,12 +687,12 @@ fn flatten_workspace_layout(root: &Path) -> Result<(), String> {
             && parts[0].chars().all(|c| c.is_ascii_digit())
             && matches!(
                 parts[3].as_str(),
-                "codeforces" | "luogu" | "atcoder" | "local"
+                "codeforces" | "luogu" | "atcoder" | "qoj" | "local"
             );
         let legacy_layout = parts.len() >= 3
             && matches!(
                 parts[0].as_str(),
-                "codeforces" | "luogu" | "atcoder" | "local"
+                "codeforces" | "luogu" | "atcoder" | "qoj" | "local"
             );
         if !dated_old_layout && !legacy_layout {
             continue;
@@ -807,23 +807,23 @@ fn flatten_workspace_layout(root: &Path) -> Result<(), String> {
             && parts[0].len() == 4
             && matches!(
                 parts[3].as_str(),
-                "codeforces" | "luogu" | "atcoder" | "local"
+                "codeforces" | "luogu" | "atcoder" | "qoj" | "local"
             ))
             || (parts.len() >= 2
                 && matches!(
                     parts[0].as_str(),
-                    "codeforces" | "luogu" | "atcoder" | "local"
+                    "codeforces" | "luogu" | "atcoder" | "qoj" | "local"
                 ));
         let old_source_directory = (parts.len() == 4
             && parts[0].len() == 4
             && matches!(
                 parts[3].as_str(),
-                "codeforces" | "luogu" | "atcoder" | "local"
+                "codeforces" | "luogu" | "atcoder" | "qoj" | "local"
             ))
             || (parts.len() == 1
                 && matches!(
                     parts[0].as_str(),
-                    "codeforces" | "luogu" | "atcoder" | "local"
+                    "codeforces" | "luogu" | "atcoder" | "qoj" | "local"
                 ));
         if old_problem_directory {
             for name in generated_names {
@@ -1282,6 +1282,73 @@ fn codeforces_translation_path(app: &AppHandle, problem_id: &str) -> Result<Path
         .join("translations")
         .join("codeforces")
         .join(format!("{}.md", normalized)))
+}
+
+fn normalize_oj_translation(platform: &str, problem_id: &str) -> Result<(String, String), String> {
+    let platform = platform.trim().to_ascii_lowercase();
+    let id = problem_id.trim().to_ascii_uppercase();
+    let valid = match platform.as_str() {
+        "codeforces" => regex::Regex::new(r"^\d+[A-Z][A-Z0-9]*$")
+            .unwrap()
+            .is_match(&id),
+        "atcoder" => regex::Regex::new(r"^[A-Z0-9]+(?:_[A-Z0-9]+)+$")
+            .unwrap()
+            .is_match(&id),
+        "qoj" => regex::Regex::new(r"^\d+$").unwrap().is_match(&id),
+        _ => return Err("该平台不支持本地 AI 译文".into()),
+    };
+    if !valid {
+        return Err(format!("{} 题号格式无效", platform));
+    }
+    Ok((platform, id))
+}
+
+fn oj_translation_path(
+    app: &AppHandle,
+    platform: &str,
+    problem_id: &str,
+) -> Result<PathBuf, String> {
+    let (platform, id) = normalize_oj_translation(platform, problem_id)?;
+    Ok(data_center::root(app)?
+        .join("translations")
+        .join(platform)
+        .join(format!("{id}.md")))
+}
+
+#[tauri::command]
+pub async fn load_oj_translation(
+    app: AppHandle,
+    platform: String,
+    problem_id: String,
+) -> Result<Option<String>, String> {
+    let path = oj_translation_path(&app, &platform, &problem_id)?;
+    match tokio::fs::read_to_string(path).await {
+        Ok(content) if content.trim().is_empty() => Ok(None),
+        Ok(content) => Ok(Some(content)),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(None),
+        Err(error) => Err(format!("读取本地译文失败: {error}")),
+    }
+}
+
+#[tauri::command]
+pub async fn save_oj_translation(
+    app: AppHandle,
+    platform: String,
+    problem_id: String,
+    content: String,
+) -> Result<(), String> {
+    if content.trim().is_empty() {
+        return Err("不能保存空白译文".into());
+    }
+    let path = oj_translation_path(&app, &platform, &problem_id)?;
+    if let Some(parent) = path.parent() {
+        tokio::fs::create_dir_all(parent)
+            .await
+            .map_err(|e| format!("创建译文目录失败: {e}"))?;
+    }
+    tokio::fs::write(path, content)
+        .await
+        .map_err(|e| format!("保存本地译文失败: {e}"))
 }
 
 #[tauri::command]
@@ -2128,6 +2195,16 @@ mod debug_tests {
         assert!(normalize_codeforces_translation_id("../977A").is_err());
         assert!(normalize_codeforces_translation_id("977A.md").is_err());
         assert!(normalize_codeforces_translation_id("P1000").is_err());
+        assert_eq!(
+            normalize_oj_translation("atcoder", "abc001_a").unwrap().1,
+            "ABC001_A"
+        );
+        assert_eq!(
+            normalize_oj_translation("qoj", " 18920 ").unwrap().1,
+            "18920"
+        );
+        assert!(normalize_oj_translation("qoj", "../18920").is_err());
+        assert!(normalize_oj_translation("luogu", "P1000").is_err());
     }
 
     #[test]

@@ -10,8 +10,9 @@ describe('skill plan response', () => {
   })
 
   it('rejects unsupported links and removes duplicates', () => {
-    const result = parseSkillPlanResponse('[{"platform":"codeforces","id":"9E"},{"platform":"cf","id":"9e"},{"platform":"atcoder","id":"ABC001_A"},{"platform":"codeforces","id":"../1A"}]')
-    expect(result.map(item => `${item.platform}:${item.id}`)).toEqual(['codeforces:9E', 'atcoder:ABC001_A'])
+    const result = parseSkillPlanResponse('[{"platform":"codeforces","id":"9E"},{"platform":"cf","id":"9e"},{"platform":"atcoder","id":"ABC001_A"},{"platform":"qoj","id":"18920"},{"platform":"codeforces","id":"../1A"}]')
+    expect(result.map(item => `${item.platform}:${item.id}`)).toEqual(['codeforces:9E', 'atcoder:ABC001_A', 'qoj:18920'])
+    expect(result[2].url).toBe('https://qoj.ac/problem/18920')
   })
 
   it('extracts an importable problem set from a normal chat response', () => {

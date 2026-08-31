@@ -30,7 +30,6 @@
         "silent": true
       },
       "nsis": {
-        "installerHooks": "./windows/installer-hooks.nsh",
         "languages": [
           "SimpChinese",
           "English"

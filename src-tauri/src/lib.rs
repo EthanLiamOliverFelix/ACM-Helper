@@ -84,6 +84,7 @@ pub fn run() {
             oj::fetch_problems_luogu,
             oj::fetch_problems_atcoder,
             oj::fetch_problem_qoj,
+            oj::fetch_qoj_archive,
             oj::fetch_luogu_training_list,
             oj::fetch_luogu_training_detail,
             oj::analyze_contest_luogu,

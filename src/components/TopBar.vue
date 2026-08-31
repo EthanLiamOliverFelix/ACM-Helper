@@ -6,6 +6,7 @@ import { useProblemStore } from '../stores/problemStore'
 import { useNoteStore } from '../stores/noteStore'
 import type { ToolchainPaths } from '../stores/settingsStore'
 import type { Language } from '../types'
+import { openUrl } from '@tauri-apps/plugin-opener'
 import { clearOjDiagnostics, exportOjDiagnostics, getOjDiagnostics, type OjDiagnosticEntry } from '../diagnostics'
 import {
   currentDataCenterInfo,
@@ -48,6 +49,11 @@ const toolchainFields: { key: ToolchainKey; label: string; fallback: string }[] 
   { key: 'javaCompiler', label: 'Java 编译器', fallback: 'javac' },
   { key: 'javaRuntime', label: 'Java 运行时', fallback: 'java' },
   { key: 'javaDebugger', label: 'Java 调试器', fallback: 'jdb' },
+]
+const toolchainWebsites = [
+  { label: 'GCC / GDB（MSYS2）', url: 'https://www.msys2.org/' },
+  { label: 'Python', url: 'https://www.python.org/downloads/windows/' },
+  { label: 'Java JDK（Eclipse Temurin）', url: 'https://adoptium.net/temurin/releases/' },
 ]
 const views = [
   { key: 'showSidebar' as const, label: '题库、题单与资源管理器' },
@@ -209,6 +215,7 @@ async function moveDataCenter() {
           <h3 class="runner-settings-title">本地工具链路径</h3>
           <p class="privacy">留空时自动使用系统 PATH；适合免安装 MinGW、多 Python 环境或自定义 JDK。</p>
           <label v-for="field in toolchainFields" :key="field.key">{{ field.label }}<div class="path-picker"><input v-model="settings.toolchainPaths[field.key]" :placeholder="`留空使用 ${field.fallback}`" /><button type="button" @click="browseToolchain(field.key, field.label)">浏览</button></div></label>
+          <div class="toolchain-websites"><span>获取工具链</span><button v-for="website in toolchainWebsites" :key="website.url" type="button" @click="openUrl(website.url)">{{ website.label }} ↗</button></div>
         </section>
         <section>
           <h3>AI 接口</h3>
@@ -262,6 +269,7 @@ async function moveDataCenter() {
 .runner-settings-title { margin-top: 20px !important; }
 .checkbox-label { display: flex !important; align-items: center; gap: 7px; color: #ccc !important; input { width: auto; margin: 0; } }.account-title { margin-top: 20px !important; }.account-row { display: flex; align-items: center; justify-content: space-between; gap: 10px; padding: 8px 9px; border-bottom: 1px solid #3b3b3b; background: #1e1e1e; font-size: 11px; > div { display: flex; min-width: 0; flex-direction: column; gap: 3px; } strong { overflow: hidden; color: #4ec9b0; text-overflow: ellipsis; white-space: nowrap; } strong.offline { color: #858585; font-weight: 400; } button { flex: 0 0 auto; padding: 5px 8px; border: 1px solid #4b6274; border-radius: 4px; background: #203545; color: #9cdcfe; font-size: 9px; cursor: pointer; &:disabled { opacity: .4; } } }
 .path-picker { display: flex; gap: 6px; margin-top: 4px; input { min-width: 0; margin-top: 0 !important; } button { flex: 0 0 auto; padding: 0 10px; border: 1px solid #4b6274; border-radius: 4px; background: #203545; color: #9cdcfe; cursor: pointer; &:disabled { opacity: .45; } } }
+.toolchain-websites { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; margin-top: 10px; padding: 8px; border: 1px solid #3b3b3b; border-radius: 5px; background: #1e1e1e; span { width: 100%; color: #858585; font-size: 10px; } button { padding: 5px 8px; border: 1px solid #4b6274; border-radius: 4px; background: #203545; color: #9cdcfe; font-size: 9px; cursor: pointer; } }
 .data-center-settings { margin: 0 20px 20px; padding: 15px; border: 1px solid #3f5260; border-radius: 7px; background: #1d252b; label { display: block; color: #aaa; font-size: 10px; } input { box-sizing: border-box; width: 100%; padding: 8px; border: 1px solid #444; border-radius: 4px; outline: none; background: #181818; color: #ddd; } &__heading { display: flex; justify-content: space-between; gap: 20px; margin-bottom: 12px; h3 { margin: 0 0 4px; font-size: 14px; } p { margin: 0; color: #8d9aa3; font-size: 10px; } span { flex: 0 0 auto; color: #7fc8f3; font-size: 10px; } } &__actions { display: flex; justify-content: flex-end; gap: 8px; margin-top: 10px; }.migrate { padding: 7px 12px; border: 0; border-radius: 4px; background: #0e639c; color: white; cursor: pointer; &:disabled { opacity: .45; cursor: default; } } &__success { margin: 8px 0 0; color: #65c68b; font-size: 10px; } &__error { margin: 8px 0 0; color: #f48771; font-size: 10px; } }
 .data-center-tools { display: flex; gap: 7px; margin-top: 10px; button { padding: 6px 10px; border: 1px solid #4b6274; border-radius: 4px; background: #203545; color: #9cdcfe; cursor: pointer; &:disabled { opacity: .45; } } }
 .backup-list { display: grid; grid-template-columns: repeat(auto-fit, minmax(180px, 1fr)); gap: 6px; margin-top: 10px; > span { grid-column: 1 / -1; color: #8d9aa3; font-size: 10px; } button { display: flex; min-width: 0; flex-direction: column; gap: 2px; padding: 7px 9px; border: 1px solid #3d4b54; border-radius: 4px; background: #182027; color: #ccc; text-align: left; cursor: pointer; b { overflow: hidden; font-size: 10px; text-overflow: ellipsis; white-space: nowrap; } small { color: #7f929e; font-size: 9px; } } }

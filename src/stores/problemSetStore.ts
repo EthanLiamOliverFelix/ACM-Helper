@@ -4,6 +4,7 @@ import { invoke } from '@tauri-apps/api/core'
 import type { Difficulty, LuoguProblemPage, LuoguTrainingDetail, Problem, SkillPlanProblem } from '../types'
 import { useProblemStore } from './problemStore'
 import { parseBatchProblemInput, type BatchProblemToken } from '../utils/problemBatch'
+import { qojProblemUrl } from '../utils/qoj'
 import { getDataCenterValue, saveDataCenterValue } from '../dataCenter'
 
 export interface ProblemSetEntry {
@@ -122,7 +123,7 @@ export const useProblemSetStore = defineStore('problemSets', () => {
     if (entry.url) return entry.url
     if (entry.platform === 'luogu') return `https://www.luogu.com.cn/problem/${encodeURIComponent(entry.id)}`
     if (entry.platform === 'atcoder') return `https://atcoder.jp/contests/${entry.id.split('_')[0].toLowerCase()}/tasks/${entry.id.toLowerCase()}`
-    if (entry.platform === 'qoj') return `https://qoj.ac/problem/${entry.id}`
+    if (entry.platform === 'qoj') return qojProblemUrl(entry.id)
     const match = entry.id.match(/^(\d+)([A-Za-z][A-Za-z0-9]*)$/)
     return match ? `https://codeforces.com/problemset/problem/${match[1]}/${match[2]}` : ''
   }
@@ -242,7 +243,7 @@ export const useProblemSetStore = defineStore('problemSets', () => {
         : token.platform === 'atcoder'
           ? `https://atcoder.jp/contests/${token.id.split('_')[0].toLowerCase()}/tasks/${token.id.toLowerCase()}`
           : token.platform === 'qoj'
-            ? `https://qoj.ac/problem/${token.id}`
+            ? qojProblemUrl(token.id)
           : `https://codeforces.com/problemset/problem/${token.id.match(/^\d+/)?.[0]}/${token.id.replace(/^\d+/, '')}`
       return invoke<Problem>('import_problem_url', { url })
     }

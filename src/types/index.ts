@@ -85,6 +85,29 @@ export interface SampleCase {
   output: string
 }
 
+export interface QojArchiveProblem {
+  id: string
+  label: string
+  title: string
+  url: string
+}
+
+export interface QojArchiveEntry {
+  kind: 'category' | 'contest'
+  id: string
+  title: string
+  url: string
+  contestCount?: number
+  problemCount?: number
+  problems: QojArchiveProblem[]
+}
+
+export interface QojArchivePage {
+  title: string
+  url: string
+  entries: QojArchiveEntry[]
+}
+
 export interface RunResult {
   success: boolean
   stdout: string

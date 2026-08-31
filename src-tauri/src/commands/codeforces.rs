@@ -120,7 +120,11 @@ pub async fn open_qoj_manual_submit(
     if code.trim().is_empty() {
         return Err("代码为空，无法复制".into());
     }
-    if !Regex::new(r"^\d+$").unwrap().is_match(problem_id.trim()) {
+    let problem_id = problem_id.trim().to_ascii_uppercase();
+    if !Regex::new(r"^(?:\d+|C\d+[A-Z][A-Z0-9_]*)$")
+        .unwrap()
+        .is_match(&problem_id)
+    {
         return Err(format!("无法识别 QOJ 题号：{problem_id}"));
     }
     tauri::async_runtime::spawn_blocking(move || {
@@ -132,7 +136,18 @@ pub async fn open_qoj_manual_submit(
     })
     .await
     .map_err(|e| format!("复制代码任务失败：{e}"))??;
-    let url = format!("https://qoj.ac/problem/{problem_id}#tab-submit-answer")
+    let submit_url = if let Some(captures) = Regex::new(r"^C(\d+)([A-Z][A-Z0-9_]*)$")
+        .unwrap()
+        .captures(&problem_id)
+    {
+        format!(
+            "https://qoj.ac/contest/{}/problem/{}#tab-submit-answer",
+            &captures[1], &captures[2]
+        )
+    } else {
+        format!("https://qoj.ac/problem/{problem_id}#tab-submit-answer")
+    };
+    let url = submit_url
         .parse()
         .map_err(|e| format!("提交页地址无效：{e}"))?;
     if let Some(window) = app.get_webview_window("qoj_manual_submit") {

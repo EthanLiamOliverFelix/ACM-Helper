@@ -23,7 +23,7 @@ function parseTextToken(rawValue: string): BatchProblemToken | null {
   const luoguId = body.match(/(?:^|[^A-Za-z0-9])([PBTU]\d{3,7})(?=$|[^A-Za-z0-9])/i)?.[1]
   const cfId = body.match(/(?:^|[^A-Za-z0-9])(\d{1,7}[A-Za-z][A-Za-z0-9]*)(?=$|[^A-Za-z0-9])/)?.[1]
   const atcoderId = body.match(/(?:^|[^A-Za-z0-9])([A-Za-z0-9]+(?:_[A-Za-z0-9]+)+)(?=$|[^A-Za-z0-9])/)?.[1]
-  const qojId = platform === 'qoj' ? body.match(/^\d+$/)?.[0] : undefined
+  const qojId = platform === 'qoj' ? body.match(/^(?:\d+|C\d+[A-Za-z][A-Za-z0-9_]*)$/i)?.[0] : undefined
   const id = platform === 'luogu' ? luoguId : platform === 'codeforces' ? cfId : platform === 'atcoder' ? atcoderId : platform === 'qoj' ? qojId : (luoguId ?? cfId ?? atcoderId)
   const inferredPlatform = platform ?? (luoguId ? 'luogu' : cfId ? 'codeforces' : atcoderId ? 'atcoder' : undefined)
   const query = id

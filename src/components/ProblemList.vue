@@ -82,6 +82,22 @@ function onSearchInput() {
       <button :disabled="store.isImporting || !store.importUrl.trim()" @click="store.importProblem">{{ store.isImporting ? '抓取中…' : '导入' }}</button>
     </div>
     <div v-if="store.error && store.activeView === 'workspace'" class="problem-import__error">{{ store.error }}</div>
+    <section v-if="store.currentPlatform === 'qoj'" class="qoj-archive">
+      <header>
+        <button v-if="store.qojSelectedContest || store.qojArchiveHistory.length" class="qoj-back" @click="store.backQojArchive">‹ 返回</button>
+        <div><strong>{{ store.qojSelectedContest?.title || store.qojArchivePage?.title || 'QOJ 比赛归档' }}</strong><small>{{ store.qojSelectedContest ? `${store.qojSelectedContest.problems.length} 道题目` : '按赛事体系逐级浏览，题面在点击题目时加载' }}</small></div>
+        <button class="catalog-refresh-btn" :disabled="store.isLoadingQojArchive" @click="store.fetchQojArchive(store.qojArchivePage?.url, true)">{{ store.isLoadingQojArchive ? '更新中…' : '更新当前页' }}</button>
+      </header>
+      <div v-if="store.isLoadingQojArchive && !store.qojArchivePage" class="qoj-empty">正在读取 QOJ 比赛归档…</div>
+      <ul v-else-if="store.qojSelectedContest" class="qoj-problems">
+        <li v-for="problem in store.qojSelectedContest.problems" :key="problem.id" @click="store.openQojArchiveProblem(problem)"><span>{{ problem.label }}</span><div><strong>{{ problem.title || `QOJ ${problem.id}` }}</strong><small>#{{ problem.id }}</small></div><button>打开 ›</button></li>
+      </ul>
+      <ul v-else-if="store.qojArchivePage?.entries.length" class="qoj-categories">
+        <li v-for="entry in store.qojArchivePage.entries" :key="`${entry.kind}:${entry.id}`" @click="store.openQojArchiveEntry(entry)"><span>{{ entry.kind === 'category' ? '▣' : '🏁' }}</span><div><strong>{{ entry.title }}</strong><small><template v-if="entry.contestCount != null">{{ entry.contestCount }} 场比赛 · </template>{{ entry.problemCount ?? entry.problems.length }} 道题目</small></div><button>进入 ›</button></li>
+      </ul>
+      <div v-else class="qoj-empty">当前归档页没有可展示的比赛信息，可以点击“更新当前页”重试。</div>
+    </section>
+    <template v-else>
     <!-- 搜索框 -->
     <div class="problem-list__search">
       <input
@@ -220,6 +236,7 @@ function onSearchInput() {
       </button>
     </div>
     </template>
+    </template>
   </div>
 </template>
 
@@ -293,6 +310,12 @@ function onSearchInput() {
     flex-shrink: 0;
   }
 }
+
+.qoj-archive { display: flex; flex-direction: column; min-height: 0; flex: 1; padding: 8px; gap: 8px; header { display: flex; align-items: center; gap: 8px; div { min-width: 0; flex: 1; display: flex; flex-direction: column; strong { color: #eee; } small { color: #858585; margin-top: 2px; } } button { flex: none; } } }
+.qoj-back { border: 1px solid #46657c; background: #20384a; color: #9cdcfe; border-radius: 4px; padding: 5px 8px; cursor: pointer; }
+.qoj-categories,.qoj-problems { list-style: none; padding: 0; margin: 0; overflow: auto; min-height: 0; border: 1px solid #303030; border-radius: 5px; li { display: flex; align-items: center; gap: 9px; padding: 10px; border-bottom: 1px solid #303030; cursor: pointer; &:hover { background: #2a2d2e; } > span { color: #4fc1ff; width: 22px; text-align: center; } > div { min-width: 0; flex: 1; display: flex; flex-direction: column; strong { color: #ddd; white-space: normal; } small { color: #858585; margin-top: 3px; } } > button { border: 0; background: transparent; color: #75beff; cursor: pointer; } } }
+.qoj-problems li > span { border: 1px solid #46657c; border-radius: 4px; width: 28px; padding: 2px 0; }
+.qoj-empty { padding: 24px 12px; color: #858585; text-align: center; border: 1px dashed #3a3a3a; border-radius: 5px; }
 
 .problem-item { content-visibility: auto; contain-intrinsic-size: 76px; }
 .problem-item__solved { display: inline-flex; align-items: center; justify-content: center; width: 13px; height: 13px; margin-right: 6px; border: 1px solid #36b36a; border-radius: 2px; color: #4ec982; font-size: 9px; font-weight: 700; vertical-align: 1px; }

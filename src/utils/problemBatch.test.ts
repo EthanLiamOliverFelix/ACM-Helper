@@ -31,4 +31,10 @@ describe('batch problem input', () => {
       { raw: 'QOJ-1', platform: 'qoj', id: '1', query: undefined },
     ])
   })
+
+  it('recognizes contest-scoped QOJ archive ids', () => {
+    expect(parseBatchProblemInput('QOJ-C1096A')).toEqual([
+      { raw: 'QOJ-C1096A', platform: 'qoj', id: 'C1096A', query: undefined },
+    ])
+  })
 })

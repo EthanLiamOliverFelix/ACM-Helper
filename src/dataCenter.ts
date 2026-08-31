@@ -39,6 +39,7 @@ export type DataCenterKey =
   | 'submit-pane-sizes'
   | 'show-problem-tags'
   | 'problem-catalog'
+  | 'qoj-archive'
 
 const legacyKeys: Record<DataCenterKey, string> = {
   settings: 'acm-helper-settings',
@@ -50,6 +51,7 @@ const legacyKeys: Record<DataCenterKey, string> = {
   'submit-pane-sizes': 'acm-helper-submit-pane-sizes',
   'show-problem-tags': 'acm-helper-show-problem-tags',
   'problem-catalog': 'acm-helper-problem-catalog-v1',
+  'qoj-archive': 'acm-helper-qoj-archive-v1',
 }
 
 const cache = new Map<DataCenterKey, unknown>()

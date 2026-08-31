@@ -1,8 +1,9 @@
 import { defineStore } from 'pinia'
+import { qojProblemUrl } from '../utils/qoj'
 import { ref, computed } from 'vue'
 import { invoke } from '@tauri-apps/api/core'
 import { listen } from '@tauri-apps/api/event'
-import type { Problem, Language, Platform, Submission, Verdict, RunResult, DebugResult, DebugSessionState, ToolchainInfo, DraftFileInfo, LuoguProblemPage, LuoguTag, LocalTestCase, LuoguRecordDetail } from '../types'
+import type { Problem, Language, Platform, Submission, Verdict, RunResult, DebugResult, DebugSessionState, ToolchainInfo, DraftFileInfo, LuoguProblemPage, LuoguTag, LocalTestCase, LuoguRecordDetail, QojArchivePage, QojArchiveEntry, QojArchiveProblem } from '../types'
 import { useLearningStore } from './learningStore'
 import { useSettingsStore } from './settingsStore'
 import { getDataCenterValue, saveDataCenterValue } from '../dataCenter'
@@ -10,6 +11,7 @@ import { withOjDiagnostic } from '../diagnostics'
 
 export const useProblemStore = defineStore('problem', () => {
   type CatalogCache = { version: 1; updatedAt: number; cf: Problem[]; luogu: Problem[]; atcoder?: Problem[]; luoguTotal: number; luoguPerPage: number; luoguTags: LuoguTag[] }
+  type QojArchiveCache = { version: 1; pages: Record<string, QojArchivePage> }
   // ── 认证状态 ──
   const isLoggedIn = ref(false)
   const luoguLoggedIn = ref(false)
@@ -28,6 +30,10 @@ export const useProblemStore = defineStore('problem', () => {
   const importedProblems = ref<Problem[]>([])
   const importUrl = ref('')
   const isImporting = ref(false)
+  const qojArchivePage = ref<QojArchivePage | null>(null)
+  const qojArchiveHistory = ref<QojArchivePage[]>([])
+  const qojSelectedContest = ref<QojArchiveEntry | null>(null)
+  const isLoadingQojArchive = ref(false)
   const currentPlatform = ref<Platform>('codeforces')
   const currentProblem = ref<Problem | null>(null)
   const currentCode = ref<string>('')
@@ -73,6 +79,84 @@ export const useProblemStore = defineStore('problem', () => {
   // 读取新草稿”。串行执行可避免快速点击时较慢的旧读取覆盖新题代码。
   let workspaceTransition: Promise<void> = Promise.resolve()
   let catalogCache = getDataCenterValue<CatalogCache | null>('problem-catalog', null)
+  let qojArchiveCache = getDataCenterValue<QojArchiveCache>('qoj-archive', { version: 1, pages: {} })
+
+  function qojArchiveKey(url = 'https://qoj.ac/category') {
+    return url.replace(/\/$/, '').replace(/^http:/i, 'https:')
+  }
+
+  async function fetchQojArchive(url = 'https://qoj.ac/category', force = false, rememberCurrent = false) {
+    const key = qojArchiveKey(url)
+    if (!force && qojArchiveCache.pages[key]) {
+      if (rememberCurrent && qojArchivePage.value) qojArchiveHistory.value.push(qojArchivePage.value)
+      qojArchivePage.value = qojArchiveCache.pages[key]
+      qojSelectedContest.value = null
+      return
+    }
+    isLoadingQojArchive.value = true
+    error.value = null
+    try {
+      const page = await withOjDiagnostic('qoj', 'fetch-archive', () => invoke<QojArchivePage>('fetch_qoj_archive', { url: key }))
+      qojArchiveCache = { version: 1, pages: { ...qojArchiveCache.pages, [qojArchiveKey(page.url)]: page } }
+      await saveDataCenterValue('qoj-archive', qojArchiveCache)
+      const discovered = page.entries.flatMap((entry) => entry.problems.map((problem) => ({
+        id: problem.id,
+        title: problem.title || problem.label || `QOJ ${problem.id}`,
+        tags: [],
+        platform: 'qoj' as Platform,
+        source: `QOJ · ${entry.title}`,
+        url: problem.url,
+      })))
+      const merged = new Map(problems.value.map((problem) => [`${problem.platform}:${problem.id}`, problem]))
+      for (const problem of discovered) if (!merged.has(`qoj:${problem.id}`)) merged.set(`qoj:${problem.id}`, problem)
+      problems.value = [...merged.values()]
+      if (rememberCurrent && qojArchivePage.value) qojArchiveHistory.value.push(qojArchivePage.value)
+      qojArchivePage.value = page
+      qojSelectedContest.value = null
+    } catch (cause) {
+      error.value = typeof cause === 'string' ? cause : (cause as Error)?.message ?? '读取 QOJ 比赛归档失败'
+      throw cause
+    } finally { isLoadingQojArchive.value = false }
+  }
+
+  async function openQojArchiveEntry(entry: QojArchiveEntry) {
+    if (entry.kind === 'contest') {
+      isLoadingQojArchive.value = true
+      error.value = null
+      try {
+        const page = await withOjDiagnostic('qoj', 'fetch-contest', () => invoke<QojArchivePage>('fetch_qoj_archive', { url: entry.url }))
+        const resolved = page.entries.find((candidate) => candidate.kind === 'contest')
+        if (!resolved?.problems.length) throw new Error('QOJ 比赛中没有可读取的公开题目')
+        qojSelectedContest.value = { ...entry, ...resolved }
+        qojArchiveCache = { version: 1, pages: { ...qojArchiveCache.pages, [`contest:${entry.url}`]: page } }
+        await saveDataCenterValue('qoj-archive', qojArchiveCache)
+        const merged = new Map(problems.value.map((problem) => [`${problem.platform}:${problem.id}`, problem]))
+        for (const problem of resolved.problems) {
+          const discovered: Problem = { id: problem.id, title: problem.title || problem.label, tags: [], platform: 'qoj', source: `QOJ · ${resolved.title}`, url: problem.url }
+          if (!merged.has(`qoj:${problem.id}`)) merged.set(`qoj:${problem.id}`, discovered)
+        }
+        problems.value = [...merged.values()]
+      } catch (cause) {
+        error.value = typeof cause === 'string' ? cause : (cause as Error)?.message ?? '读取 QOJ 比赛题目失败'
+        throw cause
+      } finally { isLoadingQojArchive.value = false }
+      return
+    }
+    await fetchQojArchive(entry.url, false, true)
+  }
+
+  function backQojArchive() {
+    if (qojSelectedContest.value) {
+      qojSelectedContest.value = null
+      return
+    }
+    const previous = qojArchiveHistory.value.pop()
+    if (previous) qojArchivePage.value = previous
+  }
+
+  async function openQojArchiveProblem(problem: QojArchiveProblem) {
+    await openRecommendedProblem({ platform: 'qoj', id: problem.id, title: problem.title || problem.label, url: problem.url })
+  }
 
   function saveCatalogCache() {
     catalogCache = {
@@ -604,6 +688,15 @@ export const useProblemStore = defineStore('problem', () => {
             ?? (problem.platform === 'luogu' ? 'markdown' : problem.platform === 'atcoder' ? 'text' : undefined),
         }))
       problems.value = [...importedProblems.value]
+      for (const page of Object.values(qojArchiveCache.pages)) {
+        for (const entry of page.entries) {
+          for (const archived of entry.problems) {
+            if (!problems.value.some((problem) => problem.platform === 'qoj' && problem.id === archived.id)) {
+              problems.value.push({ id: archived.id, title: archived.title || archived.label || `QOJ ${archived.id}`, tags: [], platform: 'qoj', source: `QOJ · ${entry.title}`, url: archived.url })
+            }
+          }
+        }
+      }
       if (catalogCache?.version === 1) {
         const merged = new Map<string, Problem>()
         for (const problem of [...catalogCache.cf, ...catalogCache.luogu, ...(catalogCache.atcoder ?? []), ...importedProblems.value]) {
@@ -774,6 +867,7 @@ export const useProblemStore = defineStore('problem', () => {
       return
     }
     if (platform === 'atcoder' && !problems.value.some((problem) => problem.platform === 'atcoder')) await fetchAtCoderProblems()
+    if (platform === 'qoj' && !qojArchivePage.value) await fetchQojArchive().catch(() => undefined)
     if (currentProblem.value?.platform !== platform) currentProblem.value = null
   }
 
@@ -836,7 +930,7 @@ export const useProblemStore = defineStore('problem', () => {
         : file.platform === 'atcoder'
             ? `https://atcoder.jp/contests/${file.problemId.split('_')[0]}/tasks/${file.problemId}`
             : file.platform === 'qoj'
-              ? `https://qoj.ac/problem/${file.problemId}`
+              ? qojProblemUrl(file.problemId)
             : undefined
       currentProblem.value = boundProblem ?? {
         id: file.problemId,
@@ -906,7 +1000,7 @@ export const useProblemStore = defineStore('problem', () => {
     const isAtCoderMissingRich = problem.platform === 'atcoder'
       && !(problem.description && problem.contentFormat === 'html')
     const isQojMissingRich = problem.platform === 'qoj'
-      && !(problem.description && problem.contentFormat === 'html')
+      && !(problem.description && problem.contentFormat === 'markdown')
     if (!force && !isCfMissingRich && !isLuoguMissingRich && !isAtCoderMissingRich && !isQojMissingRich) return
     isLoadingDetail.value = true
     error.value = null
@@ -919,7 +1013,7 @@ export const useProblemStore = defineStore('problem', () => {
               ? `https://www.luogu.com.cn/problem/${problem.id}`
               : problem.platform === 'atcoder'
                 ? `https://atcoder.jp/contests/${problem.id.split('_')[0]}/tasks/${problem.id}`
-                : `https://qoj.ac/problem/${problem.id}`),
+                : qojProblemUrl(problem.id)),
           }))
       Object.assign(problem, detail, {
         rating: preserved.rating ?? detail.rating,
@@ -1338,6 +1432,10 @@ export const useProblemStore = defineStore('problem', () => {
     importedProblems,
     importUrl,
     isImporting,
+    qojArchivePage,
+    qojArchiveHistory,
+    qojSelectedContest,
+    isLoadingQojArchive,
     currentPlatform,
     currentProblem,
     currentCode,
@@ -1377,6 +1475,10 @@ export const useProblemStore = defineStore('problem', () => {
     fetchProblems,
     refreshCfCatalog,
     fetchAtCoderProblems,
+    fetchQojArchive,
+    openQojArchiveEntry,
+    backQojArchive,
+    openQojArchiveProblem,
     fetchLuoguProblems,
     importProblem,
     setPlatform,

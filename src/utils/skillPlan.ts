@@ -1,4 +1,5 @@
 import type { GeneratedProblemSet, SkillPlanProblem } from '../types'
+import { qojProblemUrl } from './qoj'
 
 function jsonPayload(value: string) {
   const fenced = value.match(/```(?:json)?\s*([\s\S]*?)```/i)?.[1]
@@ -28,7 +29,7 @@ export function parseSkillPlanResponse(value: string): SkillPlanProblem[] {
     if (platform === 'codeforces' && !/^\d+[A-Z]\d*$/.test(id)) continue
     if (platform === 'luogu' && !/^(?:P|B|U|T|CF|AT_|UVA|SP)\w+$/i.test(id)) continue
     if (platform === 'atcoder' && !/^[A-Z0-9]+(?:_[A-Z0-9]+)+$/.test(id)) continue
-    if (platform === 'qoj' && !/^\d+$/.test(id)) continue
+    if (platform === 'qoj' && !/^(?:\d+|C\d+[A-Z][A-Z0-9_]*)$/.test(id)) continue
     const key = `${platform}:${id}`
     if (seen.has(key)) continue
     seen.add(key)
@@ -42,7 +43,7 @@ export function parseSkillPlanResponse(value: string): SkillPlanProblem[] {
           ? `https://www.luogu.com.cn/problem/${encodeURIComponent(id)}`
           : platform === 'atcoder'
             ? `https://atcoder.jp/contests/${id.split('_')[0].toLowerCase()}/tasks/${id.toLowerCase()}`
-            : `https://qoj.ac/problem/${id}`,
+            : qojProblemUrl(id),
       rating: Number.isFinite(Number(item.rating)) && Number(item.rating) > 0 ? Number(item.rating) : undefined,
       reason: String(item.reason ?? '用于巩固该知识点').trim() || '用于巩固该知识点',
     })

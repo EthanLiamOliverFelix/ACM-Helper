@@ -15,6 +15,7 @@ import {
   type ReviewPlatform,
 } from '../utils/practiceReview'
 import { getDataCenterValue, saveDataCenterValue } from '../dataCenter'
+import { qojProblemUrl } from '../utils/qoj'
 
 const DAILY_LIMIT = 5
 
@@ -32,7 +33,7 @@ function loadControls(): PracticeControls {
 function problemUrl(platform: ReviewPlatform, id: string) {
   if (platform === 'luogu') return `https://www.luogu.com.cn/problem/${encodeURIComponent(id)}`
   if (platform === 'atcoder') return `https://atcoder.jp/contests/${id.split('_')[0].toLowerCase()}/tasks/${id.toLowerCase()}`
-  if (platform === 'qoj') return `https://qoj.ac/problem/${id}`
+  if (platform === 'qoj') return qojProblemUrl(id)
   const match = id.match(/^(\d+)([A-Za-z][A-Za-z0-9]*)$/)
   return match ? `https://codeforces.com/problemset/problem/${match[1]}/${match[2]}` : ''
 }

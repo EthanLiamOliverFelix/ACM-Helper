@@ -703,15 +703,221 @@ async fn fetch_atcoder(url: &str) -> Result<Problem, String> {
     })
 }
 
-fn qoj_problem_id(url: &str) -> Result<String, String> {
-    Regex::new(
+struct QojProblemTarget {
+    id: String,
+    statement_url: String,
+    public_url: String,
+}
+
+fn qoj_problem_target(url: &str) -> Result<QojProblemTarget, String> {
+    let value = url.trim();
+    let numeric = Regex::new(
         r"(?i)^https?://(?:www\.)?qoj\.ac/problem/(\d+)(?:/statement/[a-z_]+)?/?(?:[?#].*)?$",
     )
-    .unwrap()
-    .captures(url.trim())
-    .and_then(|captures| captures.get(1))
-    .map(|value| value.as_str().to_string())
-    .ok_or_else(|| "无法识别 QOJ 题目链接".to_string())
+    .unwrap();
+    if let Some(captures) = numeric.captures(value) {
+        let id = captures.get(1).unwrap().as_str().to_string();
+        return Ok(QojProblemTarget {
+            id: id.clone(),
+            statement_url: format!("https://qoj.ac/problem/{id}/statement/en"),
+            public_url: format!("https://qoj.ac/problem/{id}"),
+        });
+    }
+    let contest = Regex::new(
+        r"(?i)^https?://(?:www\.)?qoj\.ac/contest/(\d+)/problem/([a-z0-9_]+)(?:/statement/[a-z_]+)?/?(?:[?#].*)?$",
+    )
+    .unwrap();
+    if let Some(captures) = contest.captures(value) {
+        let contest_id = captures.get(1).unwrap().as_str();
+        let label = captures.get(2).unwrap().as_str().to_uppercase();
+        let public_url = format!("https://qoj.ac/contest/{contest_id}/problem/{label}");
+        return Ok(QojProblemTarget {
+            id: if label.chars().all(|value| value.is_ascii_digit()) {
+                label.clone()
+            } else {
+                format!("C{contest_id}{label}")
+            },
+            statement_url: public_url.clone(),
+            public_url,
+        });
+    }
+    Err("无法识别 QOJ 题目链接".into())
+}
+
+#[derive(serde::Serialize, serde::Deserialize, Clone, Debug)]
+#[serde(rename_all = "camelCase")]
+pub struct QojArchiveProblem {
+    id: String,
+    label: String,
+    title: String,
+    url: String,
+}
+
+#[derive(serde::Serialize, serde::Deserialize, Clone, Debug)]
+#[serde(rename_all = "camelCase")]
+pub struct QojArchiveEntry {
+    kind: String,
+    id: String,
+    title: String,
+    url: String,
+    contest_count: Option<u64>,
+    problem_count: Option<u64>,
+    problems: Vec<QojArchiveProblem>,
+}
+
+#[derive(serde::Serialize, serde::Deserialize, Clone, Debug)]
+#[serde(rename_all = "camelCase")]
+pub struct QojArchivePage {
+    title: String,
+    url: String,
+    entries: Vec<QojArchiveEntry>,
+}
+
+fn normalized_qoj_archive_url(value: Option<&str>) -> Result<String, String> {
+    let value = value.unwrap_or("https://qoj.ac/category").trim();
+    let captures =
+        Regex::new(r"(?i)^https?://(?:www\.)?qoj\.ac/(category|contest)(?:/(\d+))?/?(?:[?#].*)?$")
+            .unwrap()
+            .captures(value)
+            .ok_or_else(|| "仅支持 QOJ 比赛归档分类或比赛链接".to_string())?;
+    let route = captures.get(1).unwrap().as_str().to_ascii_lowercase();
+    let id = captures.get(2).map(|value| value.as_str());
+    if route == "contest" && id.is_none() {
+        return Err("QOJ 比赛链接缺少比赛号".into());
+    }
+    Ok(id
+        .map(|id| format!("https://qoj.ac/{route}/{id}"))
+        .unwrap_or_else(|| "https://qoj.ac/category".into()))
+}
+
+fn fetch_qoj_archive_via_webview(
+    app: &AppHandle,
+    requested_url: Option<&str>,
+) -> Result<QojArchivePage, String> {
+    if let Some(existing) = app.get_webview_window("qoj_archive") {
+        existing.close().ok();
+    }
+    let url = normalized_qoj_archive_url(requested_url)?;
+    let (port, result_rx) = start_qoj_payload_server()?;
+    let script = r#"(function(){
+      if(window.__acmQojArchiveWatcher)return;window.__acmQojArchiveWatcher=true;
+      var clean=function(v){return(v||'').replace(/\s+/g,' ').trim();};
+      var absolute=function(v){try{return new URL(v,location.href).href;}catch(e){return v||'';}};
+      var numberFrom=function(v){var m=clean(v).match(/\d+/);return m?Number(m[0]):null;};
+      var send=function(){
+        if(window.__acmQojArchiveSent)return;
+        var currentContestId=(location.pathname.match(/^\/contest\/(\d+)/i)||[])[1];
+        if(currentContestId){
+          var seen={};
+          var problems=Array.from(document.querySelectorAll('a[href*="/problem/"]')).map(function(link,index){
+            var problemUrl=absolute(link.getAttribute('href'));
+            var match=problemUrl.match(/\/contest\/(\d+)\/problem\/(\d+)(?:\/|$)/i);
+            if(!match||match[1]!==currentContestId||seen[match[2]])return null;
+            seen[match[2]]=true;
+            var row=link.closest('tr');
+            var cells=row?Array.from(row.querySelectorAll('td')):[];
+            var label=clean(cells[0]&&cells[0].textContent).replace(/^#/,'')||String.fromCharCode(65+index);
+            var title=clean(link.textContent).replace(new RegExp('^#?'+match[2]+'[.：:\\s-]*'),'')||label;
+            return{id:match[2],label:label,title:title,url:problemUrl};
+          }).filter(Boolean);
+          if(!problems.length)return;
+          var titleNode=document.querySelector('h1,h2,.page-header');
+          var contestTitle=clean(titleNode&&titleNode.textContent)||clean(document.title).replace(/\s*[-–]\s*QOJ\.ac.*$/i,'')||('QOJ Contest '+currentContestId);
+          var contestPayload={title:contestTitle,url:location.origin+location.pathname,entries:[{kind:'contest',id:currentContestId,title:contestTitle,url:location.origin+'/contest/'+currentContestId,contestCount:null,problemCount:problems.length,problems:problems}]};
+          window.__acmQojArchiveSent=true;
+          fetch('http://127.0.0.1:__PORT__/result',{method:'POST',mode:'no-cors',headers:{'Content-Type':'text/plain'},body:encodeURIComponent(JSON.stringify(contestPayload))}).catch(function(){window.__acmQojArchiveSent=false;});
+          return;
+        }
+        var tables=Array.from(document.querySelectorAll('table'));
+        var rows=tables.flatMap(function(table){return Array.from(table.querySelectorAll('tbody tr'));});
+        if(!rows.length)return;
+        var entries=[];
+        rows.forEach(function(row){
+          var category=row.querySelector('a[href^="/category/"],a[href^="https://qoj.ac/category/"]');
+          var contest=row.querySelector('a[href^="/contest/"],a[href^="https://qoj.ac/contest/"]');
+          var problemLinks=Array.from(row.querySelectorAll('a[href*="/problem/"]'));
+          var cells=Array.from(row.querySelectorAll('td'));
+          if(category){
+            var categoryUrl=absolute(category.getAttribute('href'));
+            var categoryId=(categoryUrl.match(/\/category\/(\d+)/)||[])[1]||categoryUrl;
+            var nums=cells.map(function(cell){return numberFrom(cell.textContent);}).filter(function(v){return v!==null;});
+            entries.push({kind:'category',id:categoryId,title:clean(category.textContent),url:categoryUrl,contestCount:nums.length>1?nums[nums.length-2]:null,problemCount:nums.length?nums[nums.length-1]:null,problems:[]});
+            return;
+          }
+          if(!contest&&!problemLinks.length)return;
+          var contestUrl=contest?absolute(contest.getAttribute('href')):'';
+          var contestId=(contestUrl.match(/\/contest\/(\d+)/)||[])[1]||contestUrl||clean(cells[0]&&cells[0].textContent);
+          var title=clean(contest&&contest.textContent)||clean(cells[0]&&cells[0].textContent)||('Contest '+contestId);
+          var problems=problemLinks.map(function(link,index){
+            var problemUrl=absolute(link.getAttribute('href'));
+            var numeric=(problemUrl.match(/^https:\/\/qoj\.ac\/problem\/(\d+)(?:\/|$)/i)||[])[1];
+            var contestProblem=problemUrl.match(/\/contest\/(\d+)\/problem\/([^/?#]+)/i);
+            var id=numeric||(contestProblem?('C'+contestProblem[1]+decodeURIComponent(contestProblem[2]).toUpperCase()):'');
+            var label=clean(link.textContent)||String.fromCharCode(65+index);
+            return{id:id,label:label,title:clean(link.getAttribute('title'))||label,url:problemUrl};
+          }).filter(function(problem){return problem.id;});
+          if(contest&&problems.length===0&&contestId){
+            var labels=clean(cells[1]&&cells[1].textContent).split(/\s+/).filter(function(label){return/^[A-Z][A-Z0-9_]*$/i.test(label);});
+            problems=labels.map(function(rawLabel){
+              var label=rawLabel.toUpperCase();
+              return{id:'C'+contestId+label,label:label,title:label,url:'https://qoj.ac/contest/'+contestId+'/problem/'+encodeURIComponent(label)};
+            });
+          }
+          entries.push({kind:'contest',id:contestId,title:title,url:contestUrl,contestCount:null,problemCount:problems.length,problems:problems});
+        });
+        if(!entries.length)return;
+        var pageTitle=clean(document.title).replace(/\s*-\s*QOJ\.ac.*$/i,'');
+        var payload={title:pageTitle||'QOJ 比赛归档',url:location.origin+location.pathname,entries:entries};
+        window.__acmQojArchiveSent=true;
+        fetch('http://127.0.0.1:__PORT__/result',{method:'POST',mode:'no-cors',headers:{'Content-Type':'text/plain'},body:encodeURIComponent(JSON.stringify(payload))}).catch(function(){window.__acmQojArchiveSent=false;});
+      };
+      send();setInterval(send,800);
+    })();"#
+        .replace("__PORT__", &port.to_string());
+    let window = WebviewWindowBuilder::new(
+        app,
+        "qoj_archive",
+        WebviewUrl::External(
+            url.parse()
+                .map_err(|error| format!("QOJ 归档链接无效: {error}"))?,
+        ),
+    )
+    .title("QOJ · 正在加载比赛归档")
+    .inner_size(980.0, 760.0)
+    .visible(false)
+    .initialization_script(&script)
+    .build()
+    .map_err(|error| format!("创建 QOJ 归档窗口失败: {error}"))?;
+    let challenge_window = window.clone();
+    std::thread::spawn(move || {
+        std::thread::sleep(Duration::from_secs(8));
+        let _ = challenge_window.show();
+        let _ = challenge_window.set_focus();
+        let _ = challenge_window.set_title("QOJ 人机验证 · 完成后将自动读取比赛归档");
+    });
+    let result = result_rx
+        .recv_timeout(Duration::from_secs(150))
+        .map_err(|_| {
+            "QOJ 比赛归档加载超时；若出现 Cloudflare 验证窗口，请完成验证后重试".to_string()
+        })
+        .and_then(|payload| {
+            serde_json::from_str::<QojArchivePage>(&payload)
+                .map_err(|error| format!("解析 QOJ 比赛归档失败: {error}"))
+        });
+    window.close().ok();
+    result
+}
+
+#[tauri::command]
+pub async fn fetch_qoj_archive(
+    app: AppHandle,
+    url: Option<String>,
+) -> Result<QojArchivePage, String> {
+    tauri::async_runtime::spawn_blocking(move || {
+        fetch_qoj_archive_via_webview(&app, url.as_deref())
+    })
+    .await
+    .map_err(|error| format!("QOJ 归档任务失败: {error}"))?
 }
 
 fn start_qoj_payload_server() -> Result<(u16, std::sync::mpsc::Receiver<String>), String> {
@@ -755,16 +961,78 @@ fn start_qoj_payload_server() -> Result<(u16, std::sync::mpsc::Receiver<String>)
     Ok((port, rx))
 }
 
-fn fetch_qoj_via_webview(app: &AppHandle, problem_id: &str) -> Result<Problem, String> {
+fn qoj_pdf_samples(text: &str) -> Vec<SampleCase> {
+    let heading = Regex::new(
+        r"(?im)^[ \t]*(?:sample|example)[ \t]+(input|output)(?:[ \t]+#?[0-9]+)?[ \t]*:?[ \t]*$",
+    )
+    .unwrap();
+    let matches = heading.captures_iter(text).collect::<Vec<_>>();
+    let mut samples = Vec::<SampleCase>::new();
+    for (index, captures) in matches.iter().enumerate() {
+        let kind = captures
+            .get(1)
+            .map(|value| value.as_str().to_ascii_lowercase())
+            .unwrap_or_default();
+        let whole = captures.get(0).unwrap();
+        let end = matches
+            .get(index + 1)
+            .and_then(|next| next.get(0))
+            .map(|next| next.start())
+            .unwrap_or(text.len());
+        let content = text[whole.end()..end].trim().to_string();
+        if content.is_empty() {
+            continue;
+        }
+        if kind == "input" {
+            samples.push(SampleCase {
+                input: content,
+                output: String::new(),
+            });
+        } else if let Some(sample) = samples.iter_mut().rev().find(|item| item.output.is_empty()) {
+            sample.output = content;
+        }
+    }
+    samples
+        .into_iter()
+        .filter(|sample| !sample.input.is_empty() && !sample.output.is_empty())
+        .collect()
+}
+
+fn fetch_qoj_via_webview(app: &AppHandle, target: &QojProblemTarget) -> Result<Problem, String> {
     if let Some(existing) = app.get_webview_window("qoj_statement") {
         existing.close().ok();
     }
     let (port, result_rx) = start_qoj_payload_server()?;
-    let url = format!("https://qoj.ac/problem/{problem_id}/statement/en");
+    let problem_id = &target.id;
+    let url = target.statement_url.clone();
     let script = format!(
         r#"(function() {{
       if (window.__acmQojWatcher) return; window.__acmQojWatcher = true;
       var clean = function(value) {{ return (value || '').replace(/\s+/g, ' ').trim(); }};
+      var markdown = function(root) {{
+        var walk=function(node,depth) {{
+          if(node.nodeType===3)return (node.nodeValue||'').replace(/\s+/g,' ');
+          if(node.nodeType!==1)return '';
+          var tag=node.tagName.toLowerCase();
+          if(tag==='script'&&node.type==='math/tex')return (node.type.indexOf('mode=display')>=0?'$$':'$')+(node.textContent||'').trim()+(node.type.indexOf('mode=display')>=0?'$$':'$');
+          if(['script','style','svg'].indexOf(tag)>=0)return '';
+          var body=Array.from(node.childNodes).map(function(child){{return walk(child,depth);}}).join('');
+          if(/^h[1-6]$/.test(tag))return '\n\n'+'#'.repeat(Number(tag[1]))+' '+body.trim()+'\n\n';
+          if(tag==='p'||tag==='div'||tag==='section'||tag==='article')return '\n\n'+body.trim()+'\n\n';
+          if(tag==='br')return '\n';
+          if(tag==='strong'||tag==='b')return '**'+body.trim()+'**';
+          if(tag==='em'||tag==='i')return '*'+body.trim()+'*';
+          if(tag==='code'&&node.parentElement&&node.parentElement.tagName!=='PRE')return '`'+(node.textContent||'').trim()+'`';
+          if(tag==='pre')return '\n\n```\n'+(node.innerText||node.textContent||'').replace(/\r/g,'').trimEnd()+'\n```\n\n';
+          if(tag==='li')return '\n'+(node.parentElement&&node.parentElement.tagName==='OL'?String(Array.from(node.parentElement.children).indexOf(node)+1)+'. ':'- ')+body.trim();
+          if(tag==='ul'||tag==='ol')return '\n'+body.trim()+'\n';
+          if(tag==='a'){{var href=node.getAttribute('href')||'';return href?'['+body.trim()+']('+new URL(href,location.href).href+')':body;}}
+          if(tag==='img'){{var src=node.getAttribute('src')||'';return src?'!['+(node.getAttribute('alt')||'')+']('+new URL(src,location.href).href+')':'';}}
+          if(tag==='table')return '\n\n'+clean(node.innerText).replace(/\t/g,' | ')+'\n\n';
+          return body;
+        }};
+        return walk(root,0).replace(/ *\n */g,'\n').replace(/\n{{3,}}/g,'\n\n').trim();
+      }};
       var send = function() {{
         if (window.__acmQojSent) return;
         var article = document.querySelector('article.uoj-article, article');
@@ -788,8 +1056,15 @@ fn fetch_qoj_via_webview(app: &AppHandle, problem_id: &str) -> Result<Problem, S
         }});
         var samples=inputs.slice(0,Math.min(inputs.length,outputs.length)).map(function(input,index){{return {{input:input,output:outputs[index]}};}});
         var pdfUrl=pdf?pdf.src:'';
-        var description=article&&article.innerHTML.trim()?article.innerHTML:'<p>该题使用 PDF 题面。</p><p><a href="'+pdfUrl.replace(/"/g,'&quot;')+'" target="_blank">打开 QOJ 官方英文 PDF 题面 →</a></p>';
-        var payload={{id:{id_json},title:title||('QOJ '+{id_json}),rating:null,tags:[],platform:'qoj',source:'QOJ',contentFormat:'html',description:description,url:'https://qoj.ac/problem/'+{id_json},timeLimitMs:timeMs,memoryLimitMb:memoryMb,input:null,output:null,note:pdfUrl?('PDF statement: '+pdfUrl):null,samples:samples}};
+        var statement=article?article.cloneNode(true):null;
+        if(statement) statement.querySelectorAll('h2,h3,h4,h5,strong').forEach(function(h){{
+          if(!/sample\s+(input|output)/i.test(clean(h.textContent)))return;
+          var node=h.nextElementSibling || (h.parentElement && h.parentElement.nextElementSibling);
+          while(node && !/^(PRE|H2|H3|H4|H5)$/.test(node.tagName))node=node.nextElementSibling;
+          if(node&&node.tagName==='PRE')node.remove(); h.remove();
+        }});
+        var description=statement&&statement.innerHTML.trim()?markdown(statement):'该题使用 PDF 题面。\n\n[打开 QOJ 官方英文 PDF 题面 →]('+pdfUrl+')';
+        var payload={{id:{id_json},title:title||('QOJ '+{id_json}),rating:null,tags:[],platform:'qoj',source:'QOJ',contentFormat:'markdown',description:description,url:{public_url_json},timeLimitMs:timeMs,memoryLimitMb:memoryMb,input:null,output:null,note:pdfUrl?('PDF statement: '+pdfUrl):null,samples:samples}};
         window.__acmQojSent=true;
         var deliver=function(){{fetch('http://127.0.0.1:{port}/result',{{method:'POST',mode:'no-cors',headers:{{'Content-Type':'text/plain'}},body:encodeURIComponent(JSON.stringify(payload))}}).catch(function(){{window.__acmQojSent=false;}});}};
         if (!pdfUrl) {{ deliver(); return; }}
@@ -799,11 +1074,12 @@ fn fetch_qoj_via_webview(app: &AppHandle, problem_id: &str) -> Result<Problem, S
       }}; send(); setInterval(send,800);
       setTimeout(function() {{
         if (!window.__acmQojSent && !document.querySelector('h1.page-header') && !/just a moment/i.test(document.title || ''))
-          location.replace('https://qoj.ac/problem/' + {id_json});
+          location.replace({public_url_json});
       }}, 15000);
     }})();"#,
         port = port,
-        id_json = serde_json::to_string(problem_id).unwrap()
+        id_json = serde_json::to_string(problem_id).unwrap(),
+        public_url_json = serde_json::to_string(&target.public_url).unwrap()
     );
     let window = WebviewWindowBuilder::new(
         app,
@@ -847,8 +1123,12 @@ fn fetch_qoj_via_webview(app: &AppHandle, problem_id: &str) -> Result<Problem, S
                     if let Ok(text) = pdf_extract::extract_text_from_mem(&bytes) {
                         let text = text.trim();
                         if !text.is_empty() {
+                            let samples = qoj_pdf_samples(text);
                             problem.description = Some(text.to_string());
-                            problem.content_format = Some("text".into());
+                            problem.content_format = Some("markdown".into());
+                            if !samples.is_empty() {
+                                problem.samples = Some(samples);
+                            }
                         }
                     }
                 }
@@ -861,8 +1141,8 @@ fn fetch_qoj_via_webview(app: &AppHandle, problem_id: &str) -> Result<Problem, S
 
 #[tauri::command]
 pub async fn fetch_problem_qoj(app: AppHandle, url: String) -> Result<Problem, String> {
-    let problem_id = qoj_problem_id(&url)?;
-    tauri::async_runtime::spawn_blocking(move || fetch_qoj_via_webview(&app, &problem_id))
+    let target = qoj_problem_target(&url)?;
+    tauri::async_runtime::spawn_blocking(move || fetch_qoj_via_webview(&app, &target))
         .await
         .map_err(|error| format!("QOJ 抓题任务失败: {error}"))?
 }
@@ -1149,10 +1429,47 @@ mod tests {
             .unwrap();
         assert_eq!(captures.get(1).unwrap().as_str(), "CF1234A2");
         assert_eq!(
-            qoj_problem_id("https://qoj.ac/problem/18920/statement/en").unwrap(),
+            qoj_problem_target("https://qoj.ac/problem/18920/statement/en")
+                .unwrap()
+                .id,
             "18920"
         );
-        assert!(qoj_problem_id("https://qoj.ac/problem/../1").is_err());
+        assert_eq!(
+            qoj_problem_target("https://qoj.ac/contest/1096/problem/a")
+                .unwrap()
+                .id,
+            "C1096A"
+        );
+        assert!(qoj_problem_target("https://qoj.ac/problem/../1").is_err());
+    }
+
+    #[test]
+    fn accepts_only_qoj_archive_links() {
+        assert_eq!(
+            normalized_qoj_archive_url(None).unwrap(),
+            "https://qoj.ac/category"
+        );
+        assert_eq!(
+            normalized_qoj_archive_url(Some("https://qoj.ac/category/107?lang=en")).unwrap(),
+            "https://qoj.ac/category/107"
+        );
+        assert_eq!(
+            normalized_qoj_archive_url(Some("https://qoj.ac/contest/1096")).unwrap(),
+            "https://qoj.ac/contest/1096"
+        );
+        assert!(normalized_qoj_archive_url(Some("https://example.com/category/107")).is_err());
+    }
+
+    #[test]
+    fn extracts_qoj_pdf_sample_pairs() {
+        let samples = qoj_pdf_samples(
+            "Statement\nSample Input 1\n3 4\nSample Output 1\n7\nExample Input\nhello\nExample Output\nworld\n",
+        );
+        assert_eq!(samples.len(), 2);
+        assert_eq!(samples[0].input, "3 4");
+        assert_eq!(samples[0].output, "7");
+        assert_eq!(samples[1].input, "hello");
+        assert_eq!(samples[1].output, "world");
     }
 
     #[test]

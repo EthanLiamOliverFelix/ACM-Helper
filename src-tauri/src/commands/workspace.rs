@@ -1294,7 +1294,9 @@ fn normalize_oj_translation(platform: &str, problem_id: &str) -> Result<(String,
         "atcoder" => regex::Regex::new(r"^[A-Z0-9]+(?:_[A-Z0-9]+)+$")
             .unwrap()
             .is_match(&id),
-        "qoj" => regex::Regex::new(r"^\d+$").unwrap().is_match(&id),
+        "qoj" => regex::Regex::new(r"^(?:\d+|C\d+[A-Z][A-Z0-9_]*)$")
+            .unwrap()
+            .is_match(&id),
         _ => return Err("该平台不支持本地 AI 译文".into()),
     };
     if !valid {
@@ -2202,6 +2204,10 @@ mod debug_tests {
         assert_eq!(
             normalize_oj_translation("qoj", " 18920 ").unwrap().1,
             "18920"
+        );
+        assert_eq!(
+            normalize_oj_translation("qoj", "c1096a").unwrap().1,
+            "C1096A"
         );
         assert!(normalize_oj_translation("qoj", "../18920").is_err());
         assert!(normalize_oj_translation("luogu", "P1000").is_err());

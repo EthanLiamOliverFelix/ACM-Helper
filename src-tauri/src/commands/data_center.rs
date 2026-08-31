@@ -85,6 +85,24 @@ fn timestamp_id(now: u64) -> String {
         .to_string()
 }
 
+/// Windows `canonicalize` returns an extended-length path such as
+/// `\\?\C:\data`. Rust's filesystem APIs understand it, but some external
+/// tools (notably MinGW GCC/GDB) do not, and it should never leak into the
+/// user-facing data-center setting.
+fn portable_path(path: &Path) -> PathBuf {
+    #[cfg(windows)]
+    {
+        let value = path.to_string_lossy();
+        if let Some(rest) = value.strip_prefix(r"\\?\UNC\") {
+            return PathBuf::from(format!(r"\\{rest}"));
+        }
+        if let Some(rest) = value.strip_prefix(r"\\?\") {
+            return PathBuf::from(rest);
+        }
+    }
+    path.to_path_buf()
+}
+
 pub fn default_root(app: &AppHandle) -> Result<PathBuf, String> {
     app.path()
         .app_data_dir()
@@ -104,7 +122,10 @@ fn read_pointer(app: &AppHandle) -> Result<Option<PathBuf>, String> {
     };
     let pointer: DataCenterPointer =
         serde_json::from_str(&content).map_err(|error| format!("数据中心位置配置损坏: {error}"))?;
-    let resolved = PathBuf::from(pointer.path);
+    // Repair pointers written by versions that persisted canonical Windows
+    // paths. This also makes an existing broken migration work immediately
+    // after upgrading, without asking the user to migrate again.
+    let resolved = portable_path(Path::new(&pointer.path));
     if !resolved.is_absolute() {
         return Err("数据中心位置必须是绝对路径".into());
     }
@@ -116,10 +137,11 @@ pub fn root(app: &AppHandle) -> Result<PathBuf, String> {
 }
 
 fn write_pointer(app: &AppHandle, target: &Path) -> Result<(), String> {
+    let target = portable_path(target);
     let default = default_root(app)?;
     fs::create_dir_all(&default).map_err(|error| format!("创建引导目录失败: {error}"))?;
     let pointer = pointer_path(app)?;
-    if same_path(&default, target) {
+    if same_path(&default, &target) {
         if pointer.exists() {
             fs::remove_file(pointer).map_err(|error| format!("恢复默认数据中心失败: {error}"))?;
         }
@@ -135,8 +157,9 @@ fn write_pointer(app: &AppHandle, target: &Path) -> Result<(), String> {
 fn same_path(left: &Path, right: &Path) -> bool {
     #[cfg(windows)]
     {
-        left.to_string_lossy()
-            .eq_ignore_ascii_case(&right.to_string_lossy())
+        portable_path(left)
+            .to_string_lossy()
+            .eq_ignore_ascii_case(&portable_path(right).to_string_lossy())
     }
     #[cfg(not(windows))]
     {
@@ -235,8 +258,8 @@ fn info_for(app: &AppHandle, path: &Path) -> Result<DataCenterInfo, String> {
     let default = default_root(app)?;
     let stats = directory_stats(path, same_path(path, &default))?;
     Ok(DataCenterInfo {
-        path: path.to_string_lossy().into_owned(),
-        default_path: default.to_string_lossy().into_owned(),
+        path: portable_path(path).to_string_lossy().into_owned(),
+        default_path: portable_path(&default).to_string_lossy().into_owned(),
         is_custom: !same_path(path, &default),
         file_count: stats.0,
         total_bytes: stats.1,
@@ -836,6 +859,24 @@ fn find_bundled_tool(directory: &Path, executable_name: &str, depth: usize) -> O
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[cfg(windows)]
+    #[test]
+    fn strips_windows_verbatim_disk_prefix_for_settings_and_tools() {
+        assert_eq!(
+            portable_path(Path::new(r"\\?\F:\新建 文件夹\solutions")),
+            PathBuf::from(r"F:\新建 文件夹\solutions")
+        );
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn converts_windows_verbatim_unc_prefix_without_losing_share() {
+        assert_eq!(
+            portable_path(Path::new(r"\\?\UNC\server\share\ACM 数据")),
+            PathBuf::from(r"\\server\share\ACM 数据")
+        );
+    }
 
     #[test]
     fn accepts_only_safe_state_keys() {

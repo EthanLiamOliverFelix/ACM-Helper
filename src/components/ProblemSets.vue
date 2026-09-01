@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, onBeforeUnmount, ref } from 'vue'
+import { computed, onBeforeUnmount, ref, watch } from 'vue'
 import { invoke } from '@tauri-apps/api/core'
 import { useProblemSetStore } from '../stores/problemSetStore'
 import { useContestFavoriteStore } from '../stores/contestFavoriteStore'
@@ -17,6 +17,8 @@ const view = ref<'list' | 'detail' | 'smart' | 'plaza' | 'contests' | 'favorites
 const activeSmartId = ref<'wrongbook' | 'today'>('wrongbook')
 const newName = ref('')
 const setSearch = ref('')
+const setPage = ref(1)
+const setPageSize = 12
 const problemSearch = ref('')
 const problemUrl = ref('')
 const batchInput = ref('')
@@ -58,6 +60,11 @@ const filteredSets = computed(() => {
   const query = setSearch.value.trim().toLowerCase()
   return query ? sets.sets.filter((set) => set.name.toLowerCase().includes(query)) : sets.sets
 })
+const setPages = computed(() => Math.max(1, Math.ceil(filteredSets.value.length / setPageSize)))
+const pagedSets = computed(() => {
+  const start = (setPage.value - 1) * setPageSize
+  return filteredSets.value.slice(start, start + setPageSize)
+})
 const contestSolvedCount = computed(() => contestProblems.value.filter((problem) => learning.profile.solvedProblems.includes(`${problem.platform}:${problem.id}`)).length)
 const activeSmartProblems = computed(() => activeSmartId.value === 'today' ? practice.todayProblems : practice.wrongProblems)
 const filteredSmartProblems = computed(() => {
@@ -98,6 +105,7 @@ function createSet() {
   if (!newName.value.trim()) return
   sets.createSet(newName.value)
   newName.value = ''
+  setPage.value = setPages.value
   view.value = 'detail'
 }
 
@@ -379,6 +387,9 @@ async function importTraining(source: string | number) {
 }
 
 onBeforeUnmount(() => { clearHold(); detachHoldListeners(); document.body.classList.remove('is-set-dragging') })
+
+watch(setSearch, () => { setPage.value = 1 })
+watch(setPages, (pages) => { setPage.value = Math.min(setPage.value, pages) })
 </script>
 
 <template>
@@ -397,12 +408,17 @@ onBeforeUnmount(() => { clearHold(); detachHoldListeners(); document.body.classL
       </div>
       <div v-if="bulkMode" class="bulk-bar"><button @click="selectedSetIds = new Set(filteredSets.map((set) => set.id))">全选</button><span>已选 {{ selectedSetIds.size }} 个 · 点按选择，长按拖动排序</span><button class="danger" :disabled="!selectedSetIds.size" @click="deleteSelected">{{ confirmBulkDelete ? '确认删除' : '删除' }}</button></div>
       <div class="set-grid">
-        <button v-for="set in filteredSets" :key="set.id" class="set-card" :class="{ selected: selectedSetIds.has(set.id), dragging: dragId === set.id, 'drag-over': dragOverId === set.id }" :data-set-id="set.id" @click="openSet(set.id)" @pointerdown="beginHold(set.id, $event)" @contextmenu.prevent>
+        <button v-for="set in pagedSets" :key="set.id" class="set-card" :class="{ selected: selectedSetIds.has(set.id), dragging: dragId === set.id, 'drag-over': dragOverId === set.id }" :data-set-id="set.id" @click="openSet(set.id)" @pointerdown="beginHold(set.id, $event)" @contextmenu.prevent>
           <i v-if="bulkMode" class="set-card__check">{{ selectedSetIds.has(set.id) ? '✓' : '' }}</i>
           <div><strong>{{ set.name }}</strong><span>{{ set.problems.filter((problem) => problem.platform !== 'qoj').length }} 道 · {{ set.problems.filter((problem) => problem.platform !== 'qoj' && learning.profile.solvedProblems.includes(`${problem.platform}:${problem.id}`)).length }} 已完成</span></div>
           <small v-if="set.source">洛谷 #{{ set.source.trainingId }}</small><small v-else>本地题单</small><em>{{ bulkMode ? '点按选择 · 长按拖动' : '长按拖动排序' }}</em>
         </button>
         <div v-if="!filteredSets.length" class="empty">没有找到对应题单</div>
+      </div>
+      <div v-if="filteredSets.length" class="pagination set-pagination">
+        <button :disabled="setPage <= 1" title="上一页" @click="setPage--">‹</button>
+        <span>{{ setPage }} / {{ setPages }} · 每页 {{ setPageSize }} 个</span>
+        <button :disabled="setPage >= setPages" title="下一页" @click="setPage++">›</button>
       </div>
       <footer class="bottom-search"><span>⌕</span><input v-model="setSearch" placeholder="搜索题单名称" /></footer>
     </template>

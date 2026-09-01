@@ -6,6 +6,7 @@ import { useProblemStore } from '../stores/problemStore'
 import type { DraftFileInfo, Language, WorkspaceEntry } from '../types'
 import ResourceTreeNode from './ResourceTreeNode.vue'
 import { useLongPressMove } from '../composables/useLongPressMove'
+import { getDataCenterValue, saveDataCenterValue } from '../dataCenter'
 
 const store = useProblemStore()
 const entries = ref<WorkspaceEntry[]>([])
@@ -13,6 +14,9 @@ const rootPath = ref('')
 const loading = ref(false)
 const error = ref('')
 const notice = ref('')
+const savedTreeState = getDataCenterValue<{ version: 1; expandedPaths: string[] } | null>('workspace-tree-state', null)
+const expandedPaths = ref(new Set(savedTreeState?.version === 1 ? savedTreeState.expandedPaths : []))
+let treeStateInitialized = savedTreeState?.version === 1
 const contextMenu = ref<{ x: number; y: number; entry: WorkspaceEntry | null } | null>(null)
 const fileClipboard = ref<{ entry: WorkspaceEntry; cut: boolean } | null>(null)
 const dialog = reactive({ open: false, mode: '' as 'file' | 'folder' | 'rename' | 'delete' | '', target: null as WorkspaceEntry | null, parentPath: '', name: '', language: 'cpp' as Language })
@@ -26,6 +30,34 @@ function findEntry(path: string, list = entries.value): WorkspaceEntry | null {
   return null
 }
 
+function directoryPaths(list = entries.value): string[] {
+  return list.flatMap((entry) => entry.isDirectory ? [entry.path, ...directoryPaths(entry.children)] : [])
+}
+
+function persistTreeState() {
+  void saveDataCenterValue('workspace-tree-state', { version: 1, expandedPaths: [...expandedPaths.value] })
+}
+
+function setFolderExpanded(path: string, expanded: boolean) {
+  const next = new Set(expandedPaths.value)
+  if (expanded) next.add(path); else next.delete(path)
+  expandedPaths.value = next
+  persistTreeState()
+}
+
+function replaceExpandedPath(oldPath: string, newPath?: string) {
+  const oldLower = oldPath.toLowerCase()
+  const next = new Set<string>()
+  for (const path of expandedPaths.value) {
+    const lower = path.toLowerCase()
+    if (lower === oldLower || lower.startsWith(`${oldLower}\\`)) {
+      if (newPath) next.add(`${newPath}${path.slice(oldPath.length)}`)
+    } else next.add(path)
+  }
+  expandedPaths.value = next
+  persistTreeState()
+}
+
 async function refresh() {
   loading.value = true
   error.value = ''
@@ -34,6 +66,18 @@ async function refresh() {
       invoke<WorkspaceEntry[]>('list_workspace_entries'),
       invoke<string>('workspace_root_path'),
     ])
+    const availableDirectories = new Set(directoryPaths())
+    if (!treeStateInitialized) {
+      expandedPaths.value = availableDirectories
+      treeStateInitialized = true
+      persistTreeState()
+    } else {
+      const existing = new Set([...expandedPaths.value].filter((path) => availableDirectories.has(path)))
+      if (existing.size !== expandedPaths.value.size) {
+        expandedPaths.value = existing
+        persistTreeState()
+      }
+    }
     await store.loadDraftFiles()
   } catch (cause) { error.value = String(cause) }
   finally { loading.value = false }
@@ -78,12 +122,14 @@ async function submitDialog() {
       const oldPath = dialog.target.path
       const newPath = await invoke<string>('rename_workspace_entry', { path: oldPath, newName: dialog.name })
       store.workspacePathChanged(oldPath, newPath)
+      if (dialog.target.isDirectory) replaceExpandedPath(oldPath, newPath)
       closeDialog()
       await refresh()
     } else if (dialog.mode === 'delete' && dialog.target) {
       const deletedPath = dialog.target.path
       await invoke('delete_workspace_entry', { path: deletedPath })
       await store.workspacePathDeleted(deletedPath)
+      if (dialog.target.isDirectory) replaceExpandedPath(deletedPath)
       closeDialog()
       await refresh()
     }
@@ -101,6 +147,7 @@ async function moveEntry(source: WorkspaceEntry, targetPath: string | null) {
   try {
     const newPath = await invoke<string>('paste_workspace_entry', { sourcePath: source.path, destinationPath, cut: true })
     store.workspacePathChanged(source.path, newPath)
+    if (source.isDirectory) replaceExpandedPath(source.path, newPath)
     notice.value = `已移动：${source.name}`
     await refresh()
   } catch (cause) { error.value = String(cause) }
@@ -129,6 +176,7 @@ async function pasteEntry(destination: WorkspaceEntry | null) {
     const newPath = await invoke<string>('paste_workspace_entry', { sourcePath: source.entry.path, destinationPath, cut: source.cut })
     if (source.cut) {
       store.workspacePathChanged(source.entry.path, newPath)
+      if (source.entry.isDirectory) replaceExpandedPath(source.entry.path, newPath)
       fileClipboard.value = null
     }
     notice.value = source.cut ? '移动完成' : '复制完成'
@@ -169,7 +217,7 @@ onBeforeUnmount(() => {
     <div v-if="loading && !entries.length" class="explorer__empty">正在读取本地文件…</div>
     <div v-else-if="!entries.length" class="explorer__empty">尚无本地代码。右键空白处即可新建。</div>
     <div class="explorer__tree">
-      <ResourceTreeNode v-for="entry in entries" :key="entry.path" :entry="entry" :active-path="store.draftPath" :moving-path="holdMove.movingPath.value" :target-path="holdMove.targetPath.value" @open="openEntry" @context="openContext" @hold="holdMove.begin" />
+      <ResourceTreeNode v-for="entry in entries" :key="entry.path" :entry="entry" :active-path="store.draftPath" :moving-path="holdMove.movingPath.value" :target-path="holdMove.targetPath.value" :expanded-paths="expandedPaths" @open="openEntry" @context="openContext" @hold="holdMove.begin" @toggle="setFolderExpanded" />
     </div>
     <div v-if="holdMove.movingPath.value" class="explorer__move-hint">移动到目标文件夹后松开</div>
 

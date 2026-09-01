@@ -37,6 +37,7 @@ export type DataCenterKey =
   | 'contest-favorites'
   | 'local-test-cases'
   | 'ui-layout'
+  | 'workspace-tree-state'
   | 'submit-pane-sizes'
   | 'show-problem-tags'
   | 'problem-catalog'
@@ -50,6 +51,7 @@ const legacyKeys: Record<DataCenterKey, string> = {
   'contest-favorites': 'acm-helper-contest-favorites-v1',
   'local-test-cases': 'acm-helper-local-test-cases-v1',
   'ui-layout': 'acm-helper-layout',
+  'workspace-tree-state': 'acm-helper-workspace-tree-state-v1',
   'submit-pane-sizes': 'acm-helper-submit-pane-sizes',
   'show-problem-tags': 'acm-helper-show-problem-tags',
   'problem-catalog': 'acm-helper-problem-catalog-v1',

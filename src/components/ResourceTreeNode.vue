@@ -1,20 +1,27 @@
 <script setup lang="ts">
+import { computed } from 'vue'
 import type { WorkspaceEntry } from '../types'
 
 defineOptions({ name: 'ResourceTreeNode' })
-defineProps<{ entry: WorkspaceEntry; activePath?: string; movingPath?: string; targetPath?: string }>()
+const props = defineProps<{ entry: WorkspaceEntry; activePath?: string; movingPath?: string; targetPath?: string; expandedPaths?: Set<string> }>()
+const expanded = computed(() => props.expandedPaths?.has(props.entry.path) ?? true)
 const emit = defineEmits<{
   open: [entry: WorkspaceEntry]
   context: [entry: WorkspaceEntry, event: MouseEvent]
   hold: [entry: WorkspaceEntry, event: PointerEvent]
+  toggle: [path: string, expanded: boolean]
 }>()
+
+function reportToggle(event: Event) {
+  emit('toggle', props.entry.path, (event.currentTarget as HTMLDetailsElement).open)
+}
 </script>
 
 <template>
-  <details v-if="entry.isDirectory" class="tree-folder" open @contextmenu.stop.prevent="emit('context', entry, $event)">
+  <details v-if="entry.isDirectory" class="tree-folder" :open="expanded" @toggle="reportToggle" @contextmenu.stop.prevent="emit('context', entry, $event)">
     <summary :data-workspace-path="entry.path" :class="{ moving: movingPath === entry.path, target: targetPath === entry.path }" @pointerdown="emit('hold', entry, $event)"><span class="tree-icon">▾</span><span>📁</span><span class="tree-name">{{ entry.name }}</span></summary>
     <div class="tree-folder__children">
-      <ResourceTreeNode v-for="child in entry.children" :key="child.path" :entry="child" :active-path="activePath" :moving-path="movingPath" :target-path="targetPath" @open="emit('open', $event)" @context="(item, event) => emit('context', item, event)" @hold="(item, event) => emit('hold', item, event)" />
+      <ResourceTreeNode v-for="child in entry.children" :key="child.path" :entry="child" :active-path="activePath" :moving-path="movingPath" :target-path="targetPath" :expanded-paths="expandedPaths" @open="emit('open', $event)" @context="(item, event) => emit('context', item, event)" @hold="(item, event) => emit('hold', item, event)" @toggle="(path, open) => emit('toggle', path, open)" />
       <div v-if="!entry.children.length" class="tree-empty">空文件夹</div>
     </div>
   </details>

@@ -1295,6 +1295,9 @@ fn normalize_oj_translation(platform: &str, problem_id: &str) -> Result<(String,
         "atcoder" => regex::Regex::new(r"^[A-Z0-9]+(?:_[A-Z0-9]+)+$")
             .unwrap()
             .is_match(&id),
+        "luogu" => regex::Regex::new(r"^[A-Z0-9][A-Z0-9_-]{0,79}$")
+            .unwrap()
+            .is_match(&id),
         "qoj" => regex::Regex::new(r"^(?:\d+|C\d+[A-Z][A-Z0-9_]*)$")
             .unwrap()
             .is_match(&id),
@@ -2225,7 +2228,11 @@ mod debug_tests {
             "C1096A"
         );
         assert!(normalize_oj_translation("qoj", "../18920").is_err());
-        assert!(normalize_oj_translation("luogu", "P1000").is_err());
+        assert_eq!(
+            normalize_oj_translation("luogu", " p1000 ").unwrap().1,
+            "P1000"
+        );
+        assert!(normalize_oj_translation("luogu", "../P1000").is_err());
     }
 
     #[test]

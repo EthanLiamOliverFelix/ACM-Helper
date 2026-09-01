@@ -149,7 +149,7 @@ export const useAiStore = defineStore('ai', () => {
   async function translateCurrentProblem(force = false) {
     const problems = useProblemStore()
     const problem = problems.currentProblem
-    if (!problem || !['codeforces', 'atcoder'].includes(problem.platform)) throw new Error('仅支持翻译 Codeforces 和 AtCoder 英文题面')
+    if (!problem || !['codeforces', 'luogu', 'atcoder'].includes(problem.platform)) throw new Error('当前题目不支持 AI 翻译')
     const problemId = problem.id.toUpperCase()
     const key = `${problem.platform}:${problemId}`
     if (!force) {
@@ -174,7 +174,7 @@ export const useAiStore = defineStore('ai', () => {
         model: translationModel.value,
         protocol: translationProtocol.value,
         assistanceLevel: 'full',
-        messages: [{ role: 'user', content: `把下面的 ${problem.platform === 'codeforces' ? 'Codeforces' : 'AtCoder'} 英文题面完整翻译为简体中文。输出 Markdown，保留所有数学公式、变量、约束、列表和标题结构；样例输入输出由程序单独显示，不要在译文中重复样例；不要用三反引号或 markdown 代码围栏包裹整篇回复；不要解题，不要添加原文没有的信息。\n\n${source}` }],
+        messages: [{ role: 'user', content: `把下面的 ${problem.platform === 'codeforces' ? 'Codeforces' : problem.platform === 'luogu' ? '洛谷' : 'AtCoder'} 英文题面完整翻译为简体中文。输出 Markdown，保留所有数学公式、变量、约束、列表和标题结构；样例输入输出由程序单独显示，不要在译文中重复样例；不要用三反引号或 markdown 代码围栏包裹整篇回复；不要解题，不要添加原文没有的信息。\n\n${source}` }],
         context: '{}',
         previousResponseId: null,
       })

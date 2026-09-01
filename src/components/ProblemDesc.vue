@@ -17,7 +17,7 @@ const notes = useNoteStore()
 const problemKey = computed(() => store.currentProblem ? `${store.currentProblem.platform}:${store.currentProblem.id}` : '')
 const translationSupported = computed(() => {
   const problem = store.currentProblem
-  if (!problem || !['codeforces', 'atcoder'].includes(problem.platform)) return false
+  if (!problem || !['codeforces', 'luogu', 'atcoder'].includes(problem.platform)) return false
   if (ai.translations[problemKey.value]) return true
   const source = `${problem.title} ${problem.description ?? ''} ${problem.input ?? ''} ${problem.output ?? ''}`
     .replace(/<[^>]+>/g, ' ')
@@ -102,7 +102,7 @@ async function retranslate() {
 
 watch(problemKey, async () => {
   const problem = store.currentProblem
-  if (!problem || !['codeforces', 'atcoder'].includes(problem.platform)) return
+  if (!problem || !['codeforces', 'luogu', 'atcoder'].includes(problem.platform)) return
   try { await ai.loadCachedTranslation(problem.id, problem.platform) } catch (e) { ai.error = String(e) }
 }, { immediate: true })
 

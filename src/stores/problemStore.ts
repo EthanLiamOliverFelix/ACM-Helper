@@ -11,15 +11,21 @@ import { withOjDiagnostic } from '../diagnostics'
 
 export const useProblemStore = defineStore('problem', () => {
   type CatalogCache = { version: 1; updatedAt: number; cf: Problem[]; luogu: Problem[]; atcoder?: Problem[]; luoguTotal: number; luoguPerPage: number; luoguTags: LuoguTag[] }
-  type QojArchiveCache = { version: 1; pages: Record<string, QojArchivePage> }
+  type QojArchiveCache = { version: 3; pages: Record<string, QojArchivePage> }
   // ── 认证状态 ──
   const isLoggedIn = ref(false)
   const luoguLoggedIn = ref(false)
   const cfAccount = ref('')
   const luoguAccount = ref('')
+  const atcoderLoggedIn = ref(false)
+  const qojLoggedIn = ref(false)
+  const atcoderAccount = ref('')
+  const qojAccount = ref('')
   const isRefreshingAccounts = ref(false)
   const isCfLoginOpening = ref(false)
   const isLuoguLoginOpening = ref(false)
+  const isAtcoderLoginOpening = ref(false)
+  const isQojLoginOpening = ref(false)
   const activeView = ref<'workspace' | 'learning' | 'ai'>('workspace')
   const showProblemTags = ref(getDataCenterValue('show-problem-tags', false))
   const isLoading = ref(false)
@@ -79,10 +85,18 @@ export const useProblemStore = defineStore('problem', () => {
   // 读取新草稿”。串行执行可避免快速点击时较慢的旧读取覆盖新题代码。
   let workspaceTransition: Promise<void> = Promise.resolve()
   let catalogCache = getDataCenterValue<CatalogCache | null>('problem-catalog', null)
-  let qojArchiveCache = getDataCenterValue<QojArchiveCache>('qoj-archive', { version: 1, pages: {} })
+  const savedQojArchiveCache = getDataCenterValue<QojArchiveCache | null>('qoj-archive', null)
+  let qojArchiveCache: QojArchiveCache = savedQojArchiveCache?.version === 3 ? savedQojArchiveCache : { version: 3, pages: {} }
 
   function qojArchiveKey(url = 'https://qoj.ac/category') {
     return url.replace(/\/$/, '').replace(/^http:/i, 'https:')
+  }
+
+  function qojArchiveProblems(entries: QojArchiveEntry[]): { entry: QojArchiveEntry; problem: QojArchiveProblem }[] {
+    return entries.flatMap((entry) => [
+      ...entry.problems.map((problem) => ({ entry, problem })),
+      ...qojArchiveProblems(entry.children ?? []),
+    ])
   }
 
   async function fetchQojArchive(url = 'https://qoj.ac/category', force = false, rememberCurrent = false) {
@@ -97,16 +111,16 @@ export const useProblemStore = defineStore('problem', () => {
     error.value = null
     try {
       const page = await withOjDiagnostic('qoj', 'fetch-archive', () => invoke<QojArchivePage>('fetch_qoj_archive', { url: key }))
-      qojArchiveCache = { version: 1, pages: { ...qojArchiveCache.pages, [qojArchiveKey(page.url)]: page } }
+      qojArchiveCache = { version: 3, pages: { ...qojArchiveCache.pages, [qojArchiveKey(page.url)]: page } }
       await saveDataCenterValue('qoj-archive', qojArchiveCache)
-      const discovered = page.entries.flatMap((entry) => entry.problems.map((problem) => ({
+      const discovered = qojArchiveProblems(page.entries).map(({ entry, problem }) => ({
         id: problem.id,
         title: problem.title || problem.label || `QOJ ${problem.id}`,
         tags: [],
         platform: 'qoj' as Platform,
         source: `QOJ · ${entry.title}`,
         url: problem.url,
-      })))
+      }))
       const merged = new Map(problems.value.map((problem) => [`${problem.platform}:${problem.id}`, problem]))
       for (const problem of discovered) if (!merged.has(`qoj:${problem.id}`)) merged.set(`qoj:${problem.id}`, problem)
       problems.value = [...merged.values()]
@@ -120,6 +134,17 @@ export const useProblemStore = defineStore('problem', () => {
   }
 
   async function openQojArchiveEntry(entry: QojArchiveEntry) {
+    if (isLoadingQojArchive.value) return
+    if (entry.kind === 'group') {
+      if (qojArchivePage.value) qojArchiveHistory.value.push(qojArchivePage.value)
+      qojArchivePage.value = {
+        title: entry.title,
+        url: entry.url,
+        entries: entry.children ?? [],
+      }
+      qojSelectedContest.value = null
+      return
+    }
     if (entry.kind === 'contest') {
       isLoadingQojArchive.value = true
       error.value = null
@@ -128,7 +153,7 @@ export const useProblemStore = defineStore('problem', () => {
         const resolved = page.entries.find((candidate) => candidate.kind === 'contest')
         if (!resolved?.problems.length) throw new Error('QOJ 比赛中没有可读取的公开题目')
         qojSelectedContest.value = { ...entry, ...resolved }
-        qojArchiveCache = { version: 1, pages: { ...qojArchiveCache.pages, [`contest:${entry.url}`]: page } }
+        qojArchiveCache = { version: 3, pages: { ...qojArchiveCache.pages, [`contest:${entry.url}`]: page } }
         await saveDataCenterValue('qoj-archive', qojArchiveCache)
         const merged = new Map(problems.value.map((problem) => [`${problem.platform}:${problem.id}`, problem]))
         for (const problem of resolved.problems) {
@@ -484,8 +509,8 @@ export const useProblemStore = defineStore('problem', () => {
 
   function applyLuoguAccountStatus(result: { loggedIn: boolean; username?: string }) {
     const username = result.username?.trim() ?? ''
-    luoguLoggedIn.value = result.loggedIn && Boolean(username)
-    luoguAccount.value = luoguLoggedIn.value ? username : ''
+    luoguLoggedIn.value = result.loggedIn
+    luoguAccount.value = result.loggedIn ? (username || luoguAccount.value) : ''
   }
 
   async function ensureOjAccount(platform: 'codeforces' | 'luogu') {
@@ -611,9 +636,16 @@ export const useProblemStore = defineStore('problem', () => {
   async function refreshAccounts() {
     isRefreshingAccounts.value = true
     try {
-      const [cf, luogu] = await Promise.allSettled([
+      // 登录辅助窗口属于独立进程，设置页每次刷新时都以真实进程状态
+      // 校准按钮，能够修复热更新或异常退出前遗留的前端“登录中”状态。
+      isAtcoderLoginOpening.value = await invoke<boolean>('external_account_session_status', { platform: 'atcoder' }).catch(() => false)
+      const atcoderCheck = isAtcoderLoginOpening.value
+        ? Promise.resolve({ loggedIn: atcoderLoggedIn.value, username: atcoderAccount.value })
+        : withOjDiagnostic('atcoder', 'inspect-account', () => invoke<{ loggedIn: boolean; username?: string }>('inspect_external_account', { platform: 'atcoder' }))
+      const [cf, luogu, atcoder] = await Promise.allSettled([
         withOjDiagnostic('codeforces', 'inspect-account', () => invoke<{ loggedIn: boolean; username?: string }>('inspect_cf_account')),
         withOjDiagnostic('luogu', 'inspect-account', () => invoke<{ loggedIn: boolean; username?: string }>('inspect_luogu_account')),
+        atcoderCheck,
       ])
       if (cf.status === 'fulfilled') {
         isLoggedIn.value = cf.value.loggedIn
@@ -622,8 +654,38 @@ export const useProblemStore = defineStore('problem', () => {
       if (luogu.status === 'fulfilled') {
         applyLuoguAccountStatus(luogu.value)
       }
+      if (atcoder.status === 'fulfilled') {
+        atcoderLoggedIn.value = atcoder.value.loggedIn
+        atcoderAccount.value = atcoder.value.username ?? ''
+      }
     } finally {
       isRefreshingAccounts.value = false
+    }
+  }
+
+  async function loginExternalAccount(platform: 'atcoder') {
+    const opening = isAtcoderLoginOpening
+    if (opening.value) return
+    opening.value = true
+    error.value = null
+    try {
+      await invoke('open_external_account', { platform, switchAccount: atcoderLoggedIn.value })
+      const watch = async () => {
+        const running = await invoke<boolean>('external_account_session_status', { platform }).catch(() => false)
+        opening.value = running
+        if (running) window.setTimeout(watch, 700)
+        else {
+          const account = await withOjDiagnostic('atcoder', 'inspect-account', () => invoke<{ loggedIn: boolean; username?: string }>('inspect_external_account', { platform: 'atcoder' })).catch(() => null)
+          if (account) {
+            atcoderLoggedIn.value = account.loggedIn
+            atcoderAccount.value = account.username ?? ''
+          }
+        }
+      }
+      window.setTimeout(watch, 300)
+    } catch (cause) {
+      error.value = String(cause)
+      opening.value = false
     }
   }
 
@@ -636,6 +698,7 @@ export const useProblemStore = defineStore('problem', () => {
     difficulty?: Problem['difficulty']
     tags?: string[]
   }) {
+    if (reference.platform === 'qoj') throw new Error('该平台当前未启用')
     error.value = null
     let problem = [...problems.value, ...importedProblems.value]
       .find((item) => item.platform === reference.platform && item.id.toUpperCase() === reference.id.toUpperCase())
@@ -687,19 +750,10 @@ export const useProblemStore = defineStore('problem', () => {
           contentFormat: problem.contentFormat
             ?? (problem.platform === 'luogu' ? 'markdown' : problem.platform === 'atcoder' ? 'text' : undefined),
         }))
-      problems.value = [...importedProblems.value]
-      for (const page of Object.values(qojArchiveCache.pages)) {
-        for (const entry of page.entries) {
-          for (const archived of entry.problems) {
-            if (!problems.value.some((problem) => problem.platform === 'qoj' && problem.id === archived.id)) {
-              problems.value.push({ id: archived.id, title: archived.title || archived.label || `QOJ ${archived.id}`, tags: [], platform: 'qoj', source: `QOJ · ${entry.title}`, url: archived.url })
-            }
-          }
-        }
-      }
+      problems.value = importedProblems.value.filter((problem) => problem.platform !== 'qoj')
       if (catalogCache?.version === 1) {
         const merged = new Map<string, Problem>()
-        for (const problem of [...catalogCache.cf, ...catalogCache.luogu, ...(catalogCache.atcoder ?? []), ...importedProblems.value]) {
+        for (const problem of [...catalogCache.cf, ...catalogCache.luogu, ...(catalogCache.atcoder ?? []), ...importedProblems.value.filter((item) => item.platform !== 'qoj')]) {
           merged.set(`${problem.platform}:${problem.id.toUpperCase()}`, problem)
         }
         problems.value = [...merged.values()]
@@ -707,11 +761,11 @@ export const useProblemStore = defineStore('problem', () => {
         luoguPerPage.value = catalogCache.luoguPerPage || 50
         luoguTags.value = catalogCache.luoguTags ?? []
       }
-      // CF 在确认 WebView 登录状态后才更新远端目录；未登录时保留本地缓存，
-      // 登录成功事件会立即重试。洛谷目录仍可独立预热。
+      // 三个平台的题目目录都是公开数据。目录预热必须与账号检测完全解耦：
+      // 登录窗口、Cookie 检测或某个平台超时，都不能阻塞其他题库加载。
       const accountWarmup = refreshAccounts()
       const catalogWarmup = Promise.allSettled([
-        accountWarmup.then(() => isLoggedIn.value ? fetchProblems() : undefined),
+        fetchProblems(),
         fetchLuoguProblems(1),
         fetchAtCoderProblems(),
       ])
@@ -733,7 +787,7 @@ export const useProblemStore = defineStore('problem', () => {
       ])
       // 两个公开题库只获取目录元数据；具体题面仍由 selectProblem
       // 在用户点击题目后按需抓取。
-      await Promise.allSettled([checkSession(), catalogWarmup])
+      await Promise.allSettled([checkSession(), accountWarmup, catalogWarmup])
     } finally {
       isLoading.value = false
     }
@@ -763,20 +817,15 @@ export const useProblemStore = defineStore('problem', () => {
       saveCatalogCache()
     } catch (e: any) {
       const message = typeof e === 'string' ? e : e?.message ?? '获取题目列表失败'
-      // 保留可用缓存。若 CF 当前未登录，登录成功事件会自动强制重试；
-      // 已登录或用户手动刷新时仍显示真实网络错误。
-      if (force || isLoggedIn.value) error.value = message
-      else if (!problems.value.some((problem) => problem.platform === 'codeforces')) error.value = `${message}；请先登录 Codeforces，登录成功后会自动重试`
+      // Codeforces 目录来自公开 API，不依赖登录。失败时保留已有缓存，
+      // 只有完全没有可展示数据或用户主动刷新时才显示错误。
+      if (force || !problems.value.some((problem) => problem.platform === 'codeforces')) error.value = message
     } finally {
       isRefreshingCfCatalog.value = false
     }
   }
 
   async function refreshCfCatalog() {
-    if (!isLoggedIn.value) {
-      error.value = '请先登录 Codeforces；登录成功后应用会自动拉取最新题库'
-      return
-    }
     await fetchProblems(true)
   }
 
@@ -829,6 +878,10 @@ export const useProblemStore = defineStore('problem', () => {
 
   async function importProblem() {
     if (!importUrl.value.trim()) return
+    if (/https?:\/\/(?:www\.)?qoj\.ac\//i.test(importUrl.value)) {
+      error.value = '该平台当前未启用'
+      return
+    }
     isImporting.value = true
     error.value = null
     try {
@@ -854,6 +907,7 @@ export const useProblemStore = defineStore('problem', () => {
   // ── 业务操作 ──
 
   async function setPlatform(platform: Platform) {
+    if (platform === 'qoj') return
     if (platform !== 'luogu') {
       luoguCatalogRequestId++
       isLoadingCatalog.value = false
@@ -867,7 +921,6 @@ export const useProblemStore = defineStore('problem', () => {
       return
     }
     if (platform === 'atcoder' && !problems.value.some((problem) => problem.platform === 'atcoder')) await fetchAtCoderProblems()
-    if (platform === 'qoj' && !qojArchivePage.value) await fetchQojArchive().catch(() => undefined)
     if (currentProblem.value?.platform !== platform) currentProblem.value = null
   }
 
@@ -993,15 +1046,14 @@ export const useProblemStore = defineStore('problem', () => {
   }
 
   async function fetchProblemDetail(problem: Problem, force = false) {
+    if (problem.platform === 'qoj' || problem.platform === 'local') return
     const isCfMissingRich = problem.platform === 'codeforces'
       && !(problem.description && problem.contentFormat === 'html')
     const isLuoguMissingRich = problem.platform === 'luogu'
       && !(problem.description && problem.contentFormat === 'markdown')
     const isAtCoderMissingRich = problem.platform === 'atcoder'
       && !(problem.description && problem.contentFormat === 'html')
-    const isQojMissingRich = problem.platform === 'qoj'
-      && !(problem.description && problem.contentFormat === 'markdown')
-    if (!force && !isCfMissingRich && !isLuoguMissingRich && !isAtCoderMissingRich && !isQojMissingRich) return
+    if (!force && !isCfMissingRich && !isLuoguMissingRich && !isAtCoderMissingRich) return
     isLoadingDetail.value = true
     error.value = null
     try {
@@ -1013,7 +1065,7 @@ export const useProblemStore = defineStore('problem', () => {
               ? `https://www.luogu.com.cn/problem/${problem.id}`
               : problem.platform === 'atcoder'
                 ? `https://atcoder.jp/contests/${problem.id.split('_')[0]}/tasks/${problem.id}`
-                : qojProblemUrl(problem.id)),
+                : problem.url ?? ''),
           }))
       Object.assign(problem, detail, {
         rating: preserved.rating ?? detail.rating,
@@ -1111,7 +1163,7 @@ export const useProblemStore = defineStore('problem', () => {
       })
       runResult.value = result
     } catch (e: any) {
-      runResult.value = { success: false, stdout: '', stderr: String(e), exitCode: null, durationMs: 0, timedOut: false }
+      runResult.value = { success: false, stdout: '', stderr: String(e), compileFailed: false, exitCode: null, durationMs: 0, timedOut: false }
     } finally {
       isRunning.value = false
     }
@@ -1121,6 +1173,7 @@ export const useProblemStore = defineStore('problem', () => {
     test.status = 'running'
     test.actualOutput = ''
     test.stderr = ''
+    test.compileFailed = false
     test.timedOut = false
     try {
       const settings = useSettingsStore()
@@ -1138,7 +1191,7 @@ export const useProblemStore = defineStore('problem', () => {
       const message = String(e)
       test.stderr = message
       test.status = 'error'
-      runResult.value = { success: false, stdout: '', stderr: message, exitCode: null, durationMs: 0, timedOut: false }
+      runResult.value = { success: false, stdout: '', stderr: message, compileFailed: false, exitCode: null, durationMs: 0, timedOut: false }
     }
   }
 
@@ -1146,6 +1199,7 @@ export const useProblemStore = defineStore('problem', () => {
     runResult.value = result
     test.actualOutput = result.stdout
     test.stderr = result.stderr
+    test.compileFailed = result.compileFailed
     test.durationMs = result.durationMs
     test.compileDurationMs = result.compileDurationMs
     test.timedOut = result.timedOut
@@ -1184,6 +1238,7 @@ export const useProblemStore = defineStore('problem', () => {
         test.status = 'running'
         test.actualOutput = ''
         test.stderr = ''
+        test.compileFailed = false
         test.timedOut = false
       }
       allTestRunSummary.value = { status: 'running', text: `并行运行 ${testCases.value.length} 组…` }
@@ -1328,13 +1383,11 @@ export const useProblemStore = defineStore('problem', () => {
     await persistSubmissions().catch(() => undefined)
 
     try {
-      if (submittedProblem.platform !== 'codeforces' && submittedProblem.platform !== 'atcoder' && submittedProblem.platform !== 'qoj') throw new Error('当前平台不支持人工提交')
+      if (submittedProblem.platform !== 'codeforces' && submittedProblem.platform !== 'atcoder') throw new Error('当前平台不支持人工提交')
       await persistDraft()
       sub.message = submittedProblem.platform === 'codeforces'
         ? await invoke<string>('open_cf_manual_submit', { problemId: submittedProblem.id, code: currentCode.value })
-        : submittedProblem.platform === 'atcoder'
-          ? await invoke<string>('open_atcoder_manual_submit', { problemUrl: submittedProblem.url, code: currentCode.value })
-          : await invoke<string>('open_qoj_manual_submit', { problemId: submittedProblem.id, code: currentCode.value })
+        : await invoke<string>('open_atcoder_manual_submit', { problemUrl: submittedProblem.url, code: currentCode.value })
       cfManualConfirmation.value = { submissionId: sub.id, platform: submittedProblem.platform, problemId: submittedProblem.id, title: submittedProblem.title, tags: submittedTags }
       await persistSubmissions().catch(() => undefined)
     } catch (e: any) {
@@ -1390,11 +1443,17 @@ export const useProblemStore = defineStore('problem', () => {
   return {
     isLoggedIn,
     luoguLoggedIn,
+    atcoderLoggedIn,
+    qojLoggedIn,
     cfAccount,
     luoguAccount,
+    atcoderAccount,
+    qojAccount,
     isRefreshingAccounts,
     isCfLoginOpening,
     isLuoguLoginOpening,
+    isAtcoderLoginOpening,
+    isQojLoginOpening,
     activeView,
     showProblemTags,
     isLoading,
@@ -1467,6 +1526,7 @@ export const useProblemStore = defineStore('problem', () => {
     setPage,
     loginViaBrowser,
     loginLuogu,
+    loginExternalAccount,
     submitLuogu,
     cancelLuoguCaptcha,
     checkSession,

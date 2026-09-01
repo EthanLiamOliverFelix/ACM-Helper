@@ -1,6 +1,7 @@
 use crate::commands::codeforces::{
     fetch_problem_detail_cf, ContestAnalysis, ContestProblemAnalysis, Problem, SampleCase,
 };
+use crate::commands::network_session::IsolatedWebSessions;
 use regex::Regex;
 use reqwest::Client;
 use scraper::{Html, Selector};
@@ -8,9 +9,10 @@ use serde_json::Value;
 use std::collections::HashMap;
 use std::io::{BufRead, BufReader, Read, Write};
 use std::net::TcpListener;
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, OnceLock};
 use std::time::{Duration, Instant};
-use tauri::{AppHandle, Manager, WebviewUrl, WebviewWindowBuilder};
+use tauri::{AppHandle, Manager, State, WebviewUrl, WebviewWindowBuilder};
 use tokio::process::Command;
 use tokio::sync::{Mutex, Semaphore};
 use tokio::task::JoinSet;
@@ -29,6 +31,14 @@ const LUOGU_DIFFICULTIES: [&str; 9] = [
 ];
 const LUOGU_TAG_CACHE_TTL: Duration = Duration::from_secs(6 * 60 * 60);
 static LUOGU_TAG_CACHE: OnceLock<Mutex<Option<(Instant, Vec<LuoguTag>)>>> = OnceLock::new();
+static QOJ_WEBVIEW_SEQUENCE: AtomicU64 = AtomicU64::new(1);
+
+fn next_qoj_webview_label(prefix: &str) -> String {
+    format!(
+        "{prefix}_{}",
+        QOJ_WEBVIEW_SEQUENCE.fetch_add(1, Ordering::Relaxed)
+    )
+}
 
 /// AtCoder does not expose a first-party catalog API. The community-maintained
 /// AtCoder Problems dataset is used only for lightweight title/difficulty metadata;
@@ -761,8 +771,12 @@ pub struct QojArchiveEntry {
     title: String,
     url: String,
     contest_count: Option<u64>,
+    #[serde(default)]
+    solved_count: Option<u64>,
     problem_count: Option<u64>,
     problems: Vec<QojArchiveProblem>,
+    #[serde(default)]
+    children: Vec<QojArchiveEntry>,
 }
 
 #[derive(serde::Serialize, serde::Deserialize, Clone, Debug)]
@@ -771,6 +785,215 @@ pub struct QojArchivePage {
     title: String,
     url: String,
     entries: Vec<QojArchiveEntry>,
+}
+
+#[derive(serde::Serialize, Clone, Debug)]
+#[serde(rename_all = "camelCase")]
+pub struct ContestCatalogEntry {
+    platform: String,
+    id: String,
+    title: String,
+    url: String,
+    start_time_seconds: Option<i64>,
+}
+
+#[derive(serde::Serialize, serde::Deserialize, Clone, Debug)]
+#[serde(rename_all = "camelCase")]
+pub struct OjAccountStatus {
+    logged_in: bool,
+    username: Option<String>,
+}
+
+#[tauri::command]
+pub async fn fetch_contest_catalog() -> Result<Vec<ContestCatalogEntry>, String> {
+    let client = Client::builder()
+        .user_agent(BROWSER_UA)
+        .timeout(Duration::from_secs(30))
+        .build()
+        .map_err(|error| format!("创建比赛目录客户端失败: {error}"))?;
+    let (cf_response, atcoder_response) = tokio::join!(
+        client
+            .get("https://codeforces.com/api/contest.list?gym=false")
+            .send(),
+        client
+            .get("https://kenkoooo.com/atcoder/resources/contests.json")
+            .send(),
+    );
+    let mut entries = Vec::new();
+    if let Ok(response) = cf_response {
+        if let Ok(root) = response.json::<Value>().await {
+            for item in root
+                .get("result")
+                .and_then(Value::as_array)
+                .into_iter()
+                .flatten()
+            {
+                let name = item.get("name").and_then(Value::as_str).unwrap_or_default();
+                if item.get("type").and_then(Value::as_str) != Some("CF")
+                    || !Regex::new(r"(?i)\bdiv\.?\s*[1-4]\b")
+                        .unwrap()
+                        .is_match(name)
+                {
+                    continue;
+                }
+                let Some(id) = item.get("id").and_then(Value::as_i64) else {
+                    continue;
+                };
+                entries.push(ContestCatalogEntry {
+                    platform: "codeforces".into(),
+                    id: id.to_string(),
+                    title: name.to_string(),
+                    url: format!("https://codeforces.com/contest/{id}"),
+                    start_time_seconds: item.get("startTimeSeconds").and_then(Value::as_i64),
+                });
+            }
+        }
+    }
+    if let Ok(response) = atcoder_response {
+        if let Ok(items) = response.json::<Vec<Value>>().await {
+            let series = Regex::new(r"(?i)^(abc|arc|agc|ahc)\d+$").unwrap();
+            for item in items {
+                let id = item.get("id").and_then(Value::as_str).unwrap_or_default();
+                if !series.is_match(id) {
+                    continue;
+                }
+                entries.push(ContestCatalogEntry {
+                    platform: "atcoder".into(),
+                    id: id.to_ascii_lowercase(),
+                    title: item
+                        .get("title")
+                        .and_then(Value::as_str)
+                        .unwrap_or(id)
+                        .to_string(),
+                    url: format!("https://atcoder.jp/contests/{}", id.to_ascii_lowercase()),
+                    start_time_seconds: item.get("start_epoch_second").and_then(Value::as_i64),
+                });
+            }
+        }
+    }
+    entries.sort_by(|left, right| right.start_time_seconds.cmp(&left.start_time_seconds));
+    Ok(entries)
+}
+
+fn inspect_external_account_via_webview(
+    app: &AppHandle,
+    platform: &str,
+) -> Result<OjAccountStatus, String> {
+    let (url, username_script) = match platform {
+        "qoj" => ("https://qoj.ac/login", "var links=Array.from(document.querySelectorAll('a[href*=\"/user/profile/\"],a[href^=\"/user/\"]'));var link=links.find(function(a){return /\\/user\\/(?:profile\\/)?[^/?#]+/.test(a.getAttribute('href')||'')&&!/login|register|logout/.test(a.getAttribute('href')||'');});var match=link?(link.getAttribute('href')||'').match(/\\/user\\/(?:profile\\/)?([^/?#]+)/):null;var username=match?decodeURIComponent(match[1]):'';"),
+        "atcoder" => ("https://atcoder.jp/login", "var links=Array.from(document.querySelectorAll('a[href^=\"/users/\"],a[href*=\"atcoder.jp/users/\"]'));var link=links.find(function(a){return /\\/users\\/[^/?#]+/.test(a.getAttribute('href')||'');});var match=link?(link.getAttribute('href')||'').match(/\\/users\\/([^/?#]+)/):null;var username=match?decodeURIComponent(match[1]):'';"),
+        _ => return Err("仅支持检测 AtCoder 或 QOJ 账号".into()),
+    };
+    let (port, result_rx) = start_qoj_payload_server()?;
+    let script = format!(
+        r#"(function(){{
+      if(window.__acmAccountWatcher)return;window.__acmAccountWatcher=true;
+      var started=Date.now();var send=function(){{
+        if(window.__acmAccountSent||/just a moment|checking your browser/i.test(document.title||''))return;
+        {username_script}
+        if(!username&&Date.now()-started<2500)return;
+        window.__acmAccountSent=true;
+        var payload={{loggedIn:Boolean(username),username:username||null}};
+        fetch('http://127.0.0.1:{port}/result',{{method:'POST',mode:'no-cors',headers:{{'Content-Type':'text/plain'}},body:encodeURIComponent(JSON.stringify(payload))}});
+      }};send();setInterval(send,500);
+    }})();"#
+    );
+    let mut builder = WebviewWindowBuilder::new(
+        app,
+        next_qoj_webview_label("oj_account_check"),
+        WebviewUrl::External(url.parse().unwrap()),
+    );
+    if platform == "atcoder" {
+        let data_dir = app
+            .path()
+            .app_data_dir()
+            .map_err(|error| format!("无法定位 AtCoder 会话目录: {error}"))?
+            .join("webview-sessions")
+            .join("atcoder");
+        std::fs::create_dir_all(&data_dir)
+            .map_err(|error| format!("无法创建 AtCoder 会话目录: {error}"))?;
+        builder = builder.data_directory(data_dir);
+    }
+    let window = builder
+        .visible(false)
+        .initialization_script(&script)
+        .build()
+        .map_err(|error| format!("创建账号检测窗口失败: {error}"))?;
+    let result = result_rx
+        .recv_timeout(Duration::from_secs(35))
+        .map_err(|_| {
+            format!(
+                "{} 账号检测超时",
+                if platform == "atcoder" {
+                    "AtCoder"
+                } else {
+                    "QOJ"
+                }
+            )
+        })
+        .and_then(|payload| {
+            serde_json::from_str(&payload).map_err(|error| format!("解析账号状态失败: {error}"))
+        });
+    window.destroy().ok();
+    result
+}
+
+#[tauri::command]
+pub async fn inspect_external_account(
+    app: AppHandle,
+    platform: String,
+) -> Result<OjAccountStatus, String> {
+    tauri::async_runtime::spawn_blocking(move || {
+        inspect_external_account_via_webview(&app, &platform)
+    })
+    .await
+    .map_err(|error| format!("账号检测任务失败: {error}"))?
+}
+
+#[tauri::command]
+pub fn open_external_account(
+    app: AppHandle,
+    sessions: State<'_, IsolatedWebSessions>,
+    platform: String,
+    switch_account: Option<bool>,
+) -> Result<(), String> {
+    if platform == "atcoder" {
+        let url = if switch_account.unwrap_or(false) {
+            "https://atcoder.jp/logout"
+        } else {
+            "https://atcoder.jp/login"
+        };
+        return sessions.open("atcoder", url, "AtCoder 账号");
+    }
+    let (label, url, title) = match platform.as_str() {
+        "qoj" => ("qoj_account", "https://qoj.ac/login", "QOJ 账号"),
+        _ => return Err("仅支持 AtCoder 或 QOJ 账号".into()),
+    };
+    if let Some(window) = app.get_webview_window(label) {
+        window.show().ok();
+        window.set_focus().ok();
+        return Ok(());
+    }
+    let script = if switch_account.unwrap_or(false) {
+        r#"(function(){if(sessionStorage.getItem('acm-switch-account-done'))return;var timer=setInterval(function(){var form=document.querySelector('form[action*=\"logout\"]');var link=document.querySelector('a[href*=\"logout\"]');if(form||link){sessionStorage.setItem('acm-switch-account-done','1');clearInterval(timer);if(form)form.submit();else link.click();}},500);})();"#
+    } else {
+        ""
+    };
+    WebviewWindowBuilder::new(&app, label, WebviewUrl::External(url.parse().unwrap()))
+        .title(format!("{title} · 登录完成后可关闭窗口"))
+        .inner_size(980.0, 760.0)
+        .initialization_script(script)
+        .build()
+        .map_err(|error| format!("打开{title}窗口失败: {error}"))?;
+    Ok(())
+}
+
+#[tauri::command]
+pub fn external_account_session_status(
+    sessions: State<'_, IsolatedWebSessions>,
+    platform: String,
+) -> Result<bool, String> {
+    sessions.is_running(&platform)
 }
 
 fn normalized_qoj_archive_url(value: Option<&str>) -> Result<String, String> {
@@ -794,9 +1017,6 @@ fn fetch_qoj_archive_via_webview(
     app: &AppHandle,
     requested_url: Option<&str>,
 ) -> Result<QojArchivePage, String> {
-    if let Some(existing) = app.get_webview_window("qoj_archive") {
-        existing.close().ok();
-    }
     let url = normalized_qoj_archive_url(requested_url)?;
     let (port, result_rx) = start_qoj_payload_server()?;
     let script = r#"(function(){
@@ -804,6 +1024,7 @@ fn fetch_qoj_archive_via_webview(
       var clean=function(v){return(v||'').replace(/\s+/g,' ').trim();};
       var absolute=function(v){try{return new URL(v,location.href).href;}catch(e){return v||'';}};
       var numberFrom=function(v){var m=clean(v).match(/\d+/);return m?Number(m[0]):null;};
+      var progressFrom=function(v){var m=clean(v).match(/(\d+)\s*\/\s*(\d+)/);return m?{solved:Number(m[1]),total:Number(m[2])}:null;};
       var send=function(){
         if(window.__acmQojArchiveSent)return;
         var currentContestId=(location.pathname.match(/^\/contest\/(\d+)/i)||[])[1];
@@ -811,39 +1032,55 @@ fn fetch_qoj_archive_via_webview(
           var seen={};
           var problems=Array.from(document.querySelectorAll('a[href*="/problem/"]')).map(function(link,index){
             var problemUrl=absolute(link.getAttribute('href'));
-            var match=problemUrl.match(/\/contest\/(\d+)\/problem\/(\d+)(?:\/|$)/i);
+            var match=problemUrl.match(/\/contest\/(\d+)\/problem\/([^/?#]+)(?:\/|$)/i);
             if(!match||match[1]!==currentContestId||seen[match[2]])return null;
             seen[match[2]]=true;
+            var rawId=decodeURIComponent(match[2]).toUpperCase();
+            var problemId=/^\d+$/.test(rawId)?rawId:('C'+currentContestId+rawId);
             var row=link.closest('tr');
             var cells=row?Array.from(row.querySelectorAll('td')):[];
             var label=clean(cells[0]&&cells[0].textContent).replace(/^#/,'')||String.fromCharCode(65+index);
-            var title=clean(link.textContent).replace(new RegExp('^#?'+match[2]+'[.：:\\s-]*'),'')||label;
-            return{id:match[2],label:label,title:title,url:problemUrl};
+            var title=clean(link.textContent).replace(new RegExp('^#?'+rawId+'[.：:\\s-]*'),'')||label;
+            return{id:problemId,label:label,title:title,url:problemUrl};
           }).filter(Boolean);
           if(!problems.length)return;
           var titleNode=document.querySelector('h1,h2,.page-header');
           var contestTitle=clean(titleNode&&titleNode.textContent)||clean(document.title).replace(/\s*[-–]\s*QOJ\.ac.*$/i,'')||('QOJ Contest '+currentContestId);
-          var contestPayload={title:contestTitle,url:location.origin+location.pathname,entries:[{kind:'contest',id:currentContestId,title:contestTitle,url:location.origin+'/contest/'+currentContestId,contestCount:null,problemCount:problems.length,problems:problems}]};
+          var contestPayload={title:contestTitle,url:location.origin+location.pathname,entries:[{kind:'contest',id:currentContestId,title:contestTitle,url:location.origin+'/contest/'+currentContestId,contestCount:null,solvedCount:null,problemCount:problems.length,problems:problems,children:[]}]};
           window.__acmQojArchiveSent=true;
           fetch('http://127.0.0.1:__PORT__/result',{method:'POST',mode:'no-cors',headers:{'Content-Type':'text/plain'},body:encodeURIComponent(JSON.stringify(contestPayload))}).catch(function(){window.__acmQojArchiveSent=false;});
           return;
         }
         var tables=Array.from(document.querySelectorAll('table'));
-        var rows=tables.flatMap(function(table){return Array.from(table.querySelectorAll('tbody tr'));});
-        if(!rows.length)return;
-        var entries=[];
-        rows.forEach(function(row){
+        if(!tables.length)return;
+        var parseCategory=function(row){
           var category=row.querySelector('a[href^="/category/"],a[href^="https://qoj.ac/category/"]');
+          if(!category)return null;
+          var cells=Array.from(row.querySelectorAll('td'));
+          var categoryUrl=absolute(category.getAttribute('href'));
+          var categoryId=(categoryUrl.match(/\/category\/(\d+)/)||[])[1]||categoryUrl;
+          var progress=cells.map(function(cell){return progressFrom(cell.textContent);}).filter(Boolean).pop()||null;
+          var nums=cells.filter(function(cell){return !progressFrom(cell.textContent);}).map(function(cell){return numberFrom(cell.textContent);}).filter(function(v){return v!==null;});
+          return{kind:'category',id:categoryId,title:clean(category.textContent),url:categoryUrl,contestCount:nums.length?nums[nums.length-1]:null,solvedCount:progress?progress.solved:null,problemCount:progress?progress.total:null,problems:[],children:[]};
+        };
+        var categorySections=tables.map(function(table,index){
+          var children=Array.from(table.querySelectorAll('tbody tr')).map(parseCategory).filter(Boolean);
+          if(!children.length)return null;
+          var heading=table.previousElementSibling;
+          while(heading&&!/^H[1-4]$/.test(heading.tagName))heading=heading.previousElementSibling;
+          var rawTitle=clean(heading&&heading.textContent);
+          var yearLike=children.filter(function(item){return/(?:19|20)\d{2}/.test(item.title);}).length>=Math.ceil(children.length/2);
+          var title=yearLike?'按年份':(/regional|site|region|赛点/i.test(rawTitle)?'按赛点':rawTitle||('分类 '+(index+1)));
+          return{title:title,children:children};
+        }).filter(Boolean);
+        var entries=[];
+        if(categorySections.length){
+          if(categorySections.length===1)entries=categorySections[0].children;
+          else entries=categorySections.map(function(section,index){return{kind:'group',id:'group-'+index,title:section.title,url:location.origin+location.pathname+'#group-'+index,contestCount:section.children.reduce(function(total,item){return total+(item.contestCount||0);},0),solvedCount:section.children.reduce(function(total,item){return total+(item.solvedCount||0);},0),problemCount:section.children.reduce(function(total,item){return total+(item.problemCount||0);},0),problems:[],children:section.children};});
+        }else tables.flatMap(function(table){return Array.from(table.querySelectorAll('tbody tr'));}).forEach(function(row){
           var contest=row.querySelector('a[href^="/contest/"],a[href^="https://qoj.ac/contest/"]');
           var problemLinks=Array.from(row.querySelectorAll('a[href*="/problem/"]'));
           var cells=Array.from(row.querySelectorAll('td'));
-          if(category){
-            var categoryUrl=absolute(category.getAttribute('href'));
-            var categoryId=(categoryUrl.match(/\/category\/(\d+)/)||[])[1]||categoryUrl;
-            var nums=cells.map(function(cell){return numberFrom(cell.textContent);}).filter(function(v){return v!==null;});
-            entries.push({kind:'category',id:categoryId,title:clean(category.textContent),url:categoryUrl,contestCount:nums.length>1?nums[nums.length-2]:null,problemCount:nums.length?nums[nums.length-1]:null,problems:[]});
-            return;
-          }
           if(!contest&&!problemLinks.length)return;
           var contestUrl=contest?absolute(contest.getAttribute('href')):'';
           var contestId=(contestUrl.match(/\/contest\/(\d+)/)||[])[1]||contestUrl||clean(cells[0]&&cells[0].textContent);
@@ -863,7 +1100,8 @@ fn fetch_qoj_archive_via_webview(
               return{id:'C'+contestId+label,label:label,title:label,url:'https://qoj.ac/contest/'+contestId+'/problem/'+encodeURIComponent(label)};
             });
           }
-          entries.push({kind:'contest',id:contestId,title:title,url:contestUrl,contestCount:null,problemCount:problems.length,problems:problems});
+          var progress=cells.map(function(cell){return progressFrom(cell.textContent);}).filter(Boolean).pop()||null;
+          entries.push({kind:'contest',id:contestId,title:title,url:contestUrl,contestCount:null,solvedCount:progress?progress.solved:null,problemCount:progress?progress.total:problems.length,problems:problems,children:[]});
         });
         if(!entries.length)return;
         var pageTitle=clean(document.title).replace(/\s*-\s*QOJ\.ac.*$/i,'');
@@ -876,7 +1114,7 @@ fn fetch_qoj_archive_via_webview(
         .replace("__PORT__", &port.to_string());
     let window = WebviewWindowBuilder::new(
         app,
-        "qoj_archive",
+        next_qoj_webview_label("qoj_archive"),
         WebviewUrl::External(
             url.parse()
                 .map_err(|error| format!("QOJ 归档链接无效: {error}"))?,
@@ -888,23 +1126,16 @@ fn fetch_qoj_archive_via_webview(
     .initialization_script(&script)
     .build()
     .map_err(|error| format!("创建 QOJ 归档窗口失败: {error}"))?;
-    let challenge_window = window.clone();
-    std::thread::spawn(move || {
-        std::thread::sleep(Duration::from_secs(8));
-        let _ = challenge_window.show();
-        let _ = challenge_window.set_focus();
-        let _ = challenge_window.set_title("QOJ 人机验证 · 完成后将自动读取比赛归档");
-    });
     let result = result_rx
         .recv_timeout(Duration::from_secs(150))
         .map_err(|_| {
-            "QOJ 比赛归档加载超时；若出现 Cloudflare 验证窗口，请完成验证后重试".to_string()
+            "QOJ 比赛归档加载超时；请先到“设置 → OJ 账号”登录 QOJ 或完成验证后重试".to_string()
         })
         .and_then(|payload| {
             serde_json::from_str::<QojArchivePage>(&payload)
                 .map_err(|error| format!("解析 QOJ 比赛归档失败: {error}"))
         });
-    window.close().ok();
+    window.destroy().ok();
     result
 }
 
@@ -999,9 +1230,6 @@ fn qoj_pdf_samples(text: &str) -> Vec<SampleCase> {
 }
 
 fn fetch_qoj_via_webview(app: &AppHandle, target: &QojProblemTarget) -> Result<Problem, String> {
-    if let Some(existing) = app.get_webview_window("qoj_statement") {
-        existing.close().ok();
-    }
     let (port, result_rx) = start_qoj_payload_server()?;
     let problem_id = &target.id;
     let url = target.statement_url.clone();
@@ -1083,7 +1311,7 @@ fn fetch_qoj_via_webview(app: &AppHandle, target: &QojProblemTarget) -> Result<P
     );
     let window = WebviewWindowBuilder::new(
         app,
-        "qoj_statement",
+        next_qoj_webview_label("qoj_statement"),
         WebviewUrl::External(
             url.parse()
                 .map_err(|error| format!("QOJ 题目链接无效: {error}"))?,
@@ -1095,16 +1323,11 @@ fn fetch_qoj_via_webview(app: &AppHandle, target: &QojProblemTarget) -> Result<P
     .initialization_script(&script)
     .build()
     .map_err(|error| format!("创建 QOJ 题面窗口失败: {error}"))?;
-    let challenge_window = window.clone();
-    std::thread::spawn(move || {
-        std::thread::sleep(Duration::from_secs(8));
-        let _ = challenge_window.show();
-        let _ = challenge_window.set_focus();
-        let _ = challenge_window.set_title("QOJ 人机验证 · 完成后将自动抓取题面");
-    });
     let result = result_rx
         .recv_timeout(Duration::from_secs(150))
-        .map_err(|_| "QOJ 题面加载超时；若出现 Cloudflare 验证窗口，请完成验证后重试".to_string())
+        .map_err(|_| {
+            "QOJ 题面加载超时；请先到“设置 → OJ 账号”登录 QOJ 或完成验证后重试".to_string()
+        })
         .and_then(|payload| {
             let mut value: Value = serde_json::from_str(&payload)
                 .map_err(|error| format!("解析 QOJ 题面失败: {error}"))?;
@@ -1135,13 +1358,135 @@ fn fetch_qoj_via_webview(app: &AppHandle, target: &QojProblemTarget) -> Result<P
             }
             Ok(problem)
         });
-    window.close().ok();
+    window.destroy().ok();
     result
+}
+
+fn qoj_fragment_text(fragment: &str) -> String {
+    let document = Html::parse_fragment(fragment);
+    clean_text(document.root_element())
+}
+
+async fn fetch_qoj_direct(target: &QojProblemTarget) -> Result<Problem, String> {
+    let html = fetch_text_with_system_fallback(&target.statement_url, "en-US,en;q=0.9").await?;
+    if Regex::new(r"(?i)just a moment|checking your browser|cf-chl-")
+        .unwrap()
+        .is_match(&html)
+    {
+        return Err("QOJ 需要人机验证".into());
+    }
+    let document = Html::parse_document(&html);
+    let article_selector = Selector::parse("article.uoj-article, article").unwrap();
+    let heading_selector = Selector::parse("h1.page-header, main h1, h1").unwrap();
+    let article = document
+        .select(&article_selector)
+        .next()
+        .ok_or_else(|| "QOJ 页面未返回可解析的本地题面".to_string())?;
+    let title = document
+        .select(&heading_selector)
+        .next()
+        .map(clean_text)
+        .unwrap_or_else(|| format!("QOJ {}", target.id))
+        .trim_start_matches(|value: char| {
+            value == '#' || value.is_ascii_digit() || value == '.' || value.is_whitespace()
+        })
+        .to_string();
+    let page_text = clean_text(document.root_element());
+    let time = Regex::new(r"(?i)Time Limit:\s*([0-9.]+)\s*(ms|s)")
+        .unwrap()
+        .captures(&page_text);
+    let time_limit_ms = time.as_ref().and_then(|captures| {
+        captures.get(1)?.as_str().parse::<f64>().ok().map(|amount| {
+            (amount
+                * if captures
+                    .get(2)
+                    .map(|unit| unit.as_str().eq_ignore_ascii_case("s"))
+                    .unwrap_or(false)
+                {
+                    1000.0
+                } else {
+                    1.0
+                })
+            .round() as u64
+        })
+    });
+    let memory = Regex::new(r"(?i)Memory Limit:\s*([0-9.]+)\s*(KB|MB|GB|KiB|MiB|GiB)")
+        .unwrap()
+        .captures(&page_text);
+    let memory_limit_mb = memory.as_ref().and_then(|captures| {
+        let amount = captures.get(1)?.as_str().parse::<f64>().ok()?;
+        let unit = captures.get(2)?.as_str().to_ascii_lowercase();
+        Some(
+            (amount
+                * if unit.starts_with('g') {
+                    1024.0
+                } else if unit.starts_with('k') {
+                    1.0 / 1024.0
+                } else {
+                    1.0
+                })
+            .round() as u64,
+        )
+    });
+    let article_html = article.inner_html();
+    let sample_pattern = Regex::new(r"(?is)(?:sample|example)\s+(input|output)(?:\s*#?\d+)?[^<]{0,80}(?:</[^>]+>\s*){0,3}<pre[^>]*>(.*?)</pre>").unwrap();
+    let mut inputs = Vec::new();
+    let mut outputs = Vec::new();
+    for captures in sample_pattern.captures_iter(&article_html) {
+        let content = qoj_fragment_text(
+            captures
+                .get(2)
+                .map(|value| value.as_str())
+                .unwrap_or_default(),
+        )
+        .replace('\r', "")
+        .trim_end()
+        .to_string();
+        if captures
+            .get(1)
+            .map(|value| value.as_str().eq_ignore_ascii_case("input"))
+            .unwrap_or(false)
+        {
+            inputs.push(content);
+        } else {
+            outputs.push(content);
+        }
+    }
+    let samples = inputs
+        .into_iter()
+        .zip(outputs)
+        .map(|(input, output)| SampleCase { input, output })
+        .collect::<Vec<_>>();
+    Ok(Problem {
+        id: target.id.clone(),
+        title: if title.is_empty() {
+            format!("QOJ {}", target.id)
+        } else {
+            title
+        },
+        rating: None,
+        tags: vec![],
+        platform: "qoj".into(),
+        difficulty: None,
+        source: Some("QOJ".into()),
+        content_format: Some("markdown".into()),
+        description: Some(clean_text(article)),
+        url: Some(target.public_url.clone()),
+        time_limit_ms,
+        memory_limit_mb,
+        input: None,
+        output: None,
+        note: None,
+        samples: Some(samples),
+    })
 }
 
 #[tauri::command]
 pub async fn fetch_problem_qoj(app: AppHandle, url: String) -> Result<Problem, String> {
     let target = qoj_problem_target(&url)?;
+    if let Ok(problem) = fetch_qoj_direct(&target).await {
+        return Ok(problem);
+    }
     tauri::async_runtime::spawn_blocking(move || fetch_qoj_via_webview(&app, &target))
         .await
         .map_err(|error| format!("QOJ 抓题任务失败: {error}"))?
@@ -1514,6 +1859,17 @@ mod tests {
         assert_eq!(problem.id, "abc350_a");
         assert!(!problem.title.is_empty());
         assert!(!problem.samples.unwrap().is_empty());
+    }
+
+    #[test]
+    #[ignore = "requires network"]
+    fn fetches_live_contest_catalog() {
+        let entries = tokio::runtime::Runtime::new()
+            .unwrap()
+            .block_on(fetch_contest_catalog())
+            .unwrap();
+        assert!(entries.iter().any(|entry| entry.platform == "codeforces"));
+        assert!(entries.iter().any(|entry| entry.platform == "atcoder"));
     }
 
     #[test]

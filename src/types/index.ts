@@ -93,13 +93,15 @@ export interface QojArchiveProblem {
 }
 
 export interface QojArchiveEntry {
-  kind: 'category' | 'contest'
+  kind: 'group' | 'category' | 'contest'
   id: string
   title: string
   url: string
   contestCount?: number
+  solvedCount?: number
   problemCount?: number
   problems: QojArchiveProblem[]
+  children?: QojArchiveEntry[]
 }
 
 export interface QojArchivePage {
@@ -108,10 +110,19 @@ export interface QojArchivePage {
   entries: QojArchiveEntry[]
 }
 
+export interface ContestCatalogEntry {
+  platform: 'codeforces' | 'atcoder'
+  id: string
+  title: string
+  url: string
+  startTimeSeconds?: number
+}
+
 export interface RunResult {
   success: boolean
   stdout: string
   stderr: string
+  compileFailed: boolean
   exitCode: number | null
   durationMs: number
   compileDurationMs?: number
@@ -126,6 +137,7 @@ export interface LocalTestCase {
   expectedOutput: string
   actualOutput: string
   stderr: string
+  compileFailed?: boolean
   status: LocalTestStatus
   durationMs?: number
   compileDurationMs?: number

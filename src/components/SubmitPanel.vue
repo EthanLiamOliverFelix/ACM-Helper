@@ -166,7 +166,7 @@ function formatMem(bytes?: number): string {
           <div class="io-box" :class="{ 'io-box--passed': test.status === 'passed', 'io-box--failed': test.status === 'failed' || test.status === 'error' }">
             <div class="io-box__heading"><span>实际输出</span><button @click.stop="copyBox(test.actualOutput, `${test.id}:actual`)">{{ copiedBox === `${test.id}:actual` ? '已复制' : '复制' }}</button></div>
             <textarea :value="test.actualOutput" readonly spellcheck="false" placeholder="运行后显示程序输出" />
-            <pre v-if="test.stderr" class="io-box__stderr">{{ test.timedOut ? '[运行超时]\n' : '' }}{{ test.stderr }}</pre>
+            <pre v-if="test.stderr && !test.compileFailed" class="io-box__stderr">{{ test.timedOut ? '[运行超时]\n' : '' }}{{ test.stderr }}</pre>
           </div>
         </section>
       </div>
@@ -210,8 +210,7 @@ function formatMem(bytes?: number): string {
         <button v-else-if="store.luoguCaptchaImage" class="submit-btn" disabled>请先完成 {{ store.luoguCaptchaProblemId }} 的验证码</button>
         <button v-else class="submit-btn" :disabled="store.isSubmitting || !store.currentCode.trim()" @click="store.submitLuogu">{{ store.isSubmitting ? '等待洛谷评测…' : '🚀 提交到洛谷' }}</button>
       </template>
-      <button v-else-if="store.currentProblem?.platform === 'atcoder'" class="submit-btn" :disabled="!store.currentProblem?.url || !store.currentCode.trim() || store.isSubmitting || !!store.cfManualConfirmation" @click="handleSubmit">{{ store.isSubmitting ? '正在打开…' : store.cfManualConfirmation ? '请先确认上次提交结果' : '复制代码并打开 AtCoder 提交页 ↗' }}</button>
-      <button v-else-if="store.currentProblem?.platform === 'qoj'" class="submit-btn" :disabled="!store.currentCode.trim() || store.isSubmitting || !!store.cfManualConfirmation" @click="handleSubmit">{{ store.isSubmitting ? '正在打开…' : store.cfManualConfirmation ? '请先确认上次提交结果' : '复制代码并打开 QOJ 提交页 ↗' }}</button>
+      <button v-else-if="store.currentProblem?.platform === 'atcoder'" class="submit-btn" :disabled="!store.currentProblem?.url || !store.currentCode.trim() || store.isSubmitting || !!store.cfManualConfirmation" @click="handleSubmit">{{ store.isSubmitting ? '正在打开…' : store.cfManualConfirmation ? '请先确认上次提交结果' : '复制代码并打开 AtCoder ↗' }}</button>
       <button v-else class="submit-btn submit-btn--external" :disabled="!store.currentProblem?.url" @click="openOriginalOj">在原 OJ 打开提交页 ↗</button>
       <div v-if="store.currentProblem?.platform === 'codeforces'" class="submit-panel__notice">提交前会检测登录状态。代码将复制到剪贴板并打开 Codeforces 官方提交页；账号管理请使用顶部“设置”。</div>
       <div v-if="store.cfManualConfirmation" class="cf-confirm">
@@ -222,8 +221,7 @@ function formatMem(bytes?: number): string {
           <button class="cf-confirm__no" @click="store.confirmCfSubmission(false)">尚未 AC</button>
         </div>
       </div>
-      <div v-if="store.currentProblem?.platform === 'atcoder'" class="submit-panel__notice">代码会复制到剪贴板并打开 AtCoder 官方提交页；提交后请在这里确认结果。</div>
-      <div v-if="store.currentProblem?.platform === 'qoj'" class="submit-panel__notice">代码会复制到剪贴板并打开 QOJ 官方提交页；Cloudflare 验证和提交结果由官方页面处理，提交后请在这里确认结果。</div>
+      <div v-if="store.currentProblem?.platform === 'atcoder'" class="submit-panel__notice">代码会复制到剪贴板，并在隔离进程中打开 AtCoder 官方提交页；网页异常不会阻塞主程序。</div>
       <div v-if="store.currentProblem?.platform === 'luogu'" class="submit-panel__notice">提交前会检测登录状态。需要验证码时会在这里显示；账号管理请使用顶部“设置”。</div>
       <div v-if="store.lastSubmitError" class="submit-panel__error">
         {{ store.lastSubmitError }}

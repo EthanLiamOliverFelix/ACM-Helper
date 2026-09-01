@@ -115,7 +115,7 @@ export const usePracticeStore = defineStore('practice', () => {
   }
 
   const activeProblems = computed(() => records.value
-    .filter((record) => !record.ignored && !record.mastered && (!record.autoArchived || record.pinned))
+    .filter((record) => record.platform !== 'qoj' && !record.ignored && !record.mastered && (!record.autoArchived || record.pinned))
     .map(enrich)
     .sort((a, b) => b.practice.priority - a.practice.priority || b.practice.lastFailureAt - a.practice.lastFailureAt))
   const wrongProblems = computed(() => activeProblems.value)
@@ -146,6 +146,16 @@ export const usePracticeStore = defineStore('practice', () => {
 
   function ignore(key: string) {
     updateControl(key, (previous) => ({ ...previous, pinned: false, ignored: true }))
+  }
+
+  function removeFromWrongbook(key: string) {
+    updateControl(key, (previous) => ({
+      ...previous,
+      pinned: false,
+      ignored: false,
+      snoozedUntil: undefined,
+      removedAt: Date.now(),
+    }))
   }
 
   function restoreIgnored() {
@@ -181,6 +191,7 @@ export const usePracticeStore = defineStore('practice', () => {
     snooze,
     markMastered,
     ignore,
+    removeFromWrongbook,
     restoreIgnored,
     openProblem,
   }

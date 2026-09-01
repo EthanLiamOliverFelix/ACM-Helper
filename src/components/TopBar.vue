@@ -32,6 +32,7 @@ const problems = useProblemStore()
 const notes = useNoteStore()
 const viewOpen = ref(false)
 const settingsOpen = ref(false)
+const settingsPage = ref<'main' | 'translation' | 'solution'>('main')
 const language = ref<Language>('cpp')
 const savedNotice = ref('')
 const dataCenterInfo = ref<DataCenterInfo | null>(currentDataCenterInfo())
@@ -68,6 +69,7 @@ async function saveSettings() {
   window.setTimeout(() => { savedNotice.value = '' }, 1800)
 }
 async function openSettings() {
+  settingsPage.value = 'main'
   settingsOpen.value = true
   viewOpen.value = false
   void problems.refreshAccounts()
@@ -199,8 +201,8 @@ async function moveDataCenter() {
 
   <div v-if="settingsOpen" class="settings-modal" @click.self="settingsOpen = false">
     <section class="settings-card">
-      <header><div><h2>设置</h2><p>新建代码模板与 AI 配置集中管理</p></div><button @click="settingsOpen = false">×</button></header>
-      <div class="settings-grid">
+      <header><button v-if="settingsPage !== 'main'" class="settings-back" @click="settingsPage = 'main'">‹</button><div><h2>{{ settingsPage === 'main' ? '设置' : settingsPage === 'translation' ? '翻译模型' : '解题模型' }}</h2><p>{{ settingsPage === 'main' ? '应用、账号与数据管理' : settingsPage === 'translation' ? '用于翻译 Codeforces 与 AtCoder 英文题面' : '用于刷题助手、题单生成与学习建议' }}</p></div><button class="settings-close" @click="settingsOpen = false">×</button></header>
+      <div v-if="settingsPage === 'main'" class="settings-grid">
         <section>
           <h3>新题目默认代码</h3>
           <div class="language-tabs"><button v-for="item in (['cpp', 'python', 'java'] as Language[])" :key="item" :class="{ active: language === item }" @click="language = item">{{ item === 'cpp' ? 'C++' : item === 'python' ? 'Python' : 'Java' }}</button></div>
@@ -218,15 +220,11 @@ async function moveDataCenter() {
           <div class="toolchain-websites"><span>获取工具链</span><button v-for="website in toolchainWebsites" :key="website.url" type="button" @click="openUrl(website.url)">{{ website.label }} ↗</button></div>
         </section>
         <section>
-          <h3>AI 接口</h3>
-          <label>API 地址<input v-model="ai.endpoint" placeholder="https://api.openai.com/v1" /></label>
-          <label>协议<select v-model="ai.protocol"><option value="responses">Responses API</option><option value="chat_completions">Chat Completions</option></select></label>
-          <label>模型<input v-model="ai.model" placeholder="模型 ID" /></label>
-          <label>API Key<input v-model="ai.apiKey" type="password" autocomplete="off" placeholder="输入 API Key" /></label>
-          <label class="checkbox-label"><input v-model="ai.rememberApiKey" type="checkbox" />将 API Key 保存在这台电脑</label>
-          <p class="privacy">关闭保存开关并点击“保存设置”后，本地 Key 会被删除。请勿在公共电脑启用。</p>
-          <h3>AI 辅助强度</h3>
-          <div class="assist-levels"><button v-for="item in [{ id: 'hint', name: '小提示' }, { id: 'guided', name: '分步引导' }, { id: 'full', name: '完整帮助' }]" :key="item.id" :class="{ active: ai.assistanceLevel === item.id }" @click="ai.assistanceLevel = item.id as typeof ai.assistanceLevel">{{ item.name }}</button></div>
+          <h3>AI 模型</h3>
+          <div class="ai-entry-list">
+            <button @click="settingsPage = 'translation'"><span>译</span><div><strong>翻译模型</strong><small>题面翻译 · {{ ai.translationConfigured ? ai.translationModel : '未配置' }}</small></div><b>进入 ›</b></button>
+            <button @click="settingsPage = 'solution'"><span>解</span><div><strong>解题模型</strong><small>刷题助手、题单生成 · {{ ai.isConfigured ? ai.model : '未配置' }}</small></div><b>进入 ›</b></button>
+          </div>
           <h3 class="account-title">洛谷提交</h3>
           <label>C++ 版本<select v-model.number="settings.luoguCppLanguageId"><option :value="3">C++98</option><option :value="4">C++11</option><option :value="11">C++14</option><option :value="28">C++14 (GCC 9)</option><option :value="12">C++17</option><option :value="27">C++20</option><option :value="34">C++23</option></select></label>
           <label>Python 版本<select v-model.number="settings.luoguPythonLanguageId"><option :value="7">Python 3</option><option :value="25">PyPy 3</option></select></label>
@@ -235,10 +233,32 @@ async function moveDataCenter() {
           <h3 class="account-title">OJ 账号</h3>
           <div class="account-row"><div><span>Codeforces</span><strong :class="{ offline: !problems.isLoggedIn }">{{ problems.isRefreshingAccounts ? '检测中…' : problems.isLoggedIn ? (problems.cfAccount || '已登录') : '未登录' }}</strong></div><button :disabled="problems.isCfLoginOpening" @click="problems.loginViaBrowser">{{ problems.isCfLoginOpening ? '打开中…' : problems.isLoggedIn ? '切换账号' : '登录' }}</button></div>
           <div class="account-row"><div><span>洛谷</span><strong :class="{ offline: !problems.luoguLoggedIn }">{{ problems.isRefreshingAccounts ? '检测中…' : problems.luoguLoggedIn ? (problems.luoguAccount || '已登录') : '未登录' }}</strong></div><button :disabled="problems.isLuoguLoginOpening" @click="problems.loginLuogu">{{ problems.isLuoguLoginOpening ? '打开中…' : problems.luoguLoggedIn ? '切换账号' : '登录' }}</button></div>
+          <div class="account-row"><div><span>AtCoder</span><strong :class="{ offline: !problems.atcoderLoggedIn }">{{ problems.isRefreshingAccounts ? '检测中…' : problems.atcoderLoggedIn ? (problems.atcoderAccount || '已登录') : '未登录' }}</strong></div><button :disabled="problems.isAtcoderLoginOpening" @click="problems.loginExternalAccount('atcoder')">{{ problems.isAtcoderLoginOpening ? '登录中…' : problems.atcoderLoggedIn ? '切换账号' : '登录' }}</button></div>
           <button class="secondary" :disabled="problems.isRefreshingAccounts" @click="problems.refreshAccounts">刷新账号状态</button>
+          <p class="privacy">AtCoder 仍使用单独的内嵌登录窗口；关闭窗口会立即结束本次登录进程。网页异常不会阻塞其他平台和网络任务。</p>
         </section>
       </div>
-      <section class="data-center-settings">
+      <section v-else class="ai-model-settings">
+        <template v-if="settingsPage === 'translation'">
+          <label>API 地址<input v-model="ai.translationEndpoint" placeholder="https://api.openai.com/v1" /></label>
+          <label>协议<select v-model="ai.translationProtocol"><option value="responses">Responses API</option><option value="chat_completions">Chat Completions</option></select></label>
+          <label>模型<input v-model="ai.translationModel" placeholder="翻译模型 ID" /></label>
+          <label>API Key<input v-model="ai.translationApiKey" type="password" autocomplete="off" placeholder="输入 API Key" /></label>
+          <label class="checkbox-label"><input v-model="ai.translationRememberApiKey" type="checkbox" />将翻译模型的 API Key 保存在这台电脑</label>
+          <p class="privacy">翻译只使用这一套接口，不会调用解题模型。旧版本的 AI 配置已自动复制到这里作为初始值。</p>
+        </template>
+        <template v-else>
+          <label>API 地址<input v-model="ai.endpoint" placeholder="https://api.openai.com/v1" /></label>
+          <label>协议<select v-model="ai.protocol"><option value="responses">Responses API</option><option value="chat_completions">Chat Completions</option></select></label>
+          <label>模型<input v-model="ai.model" placeholder="解题模型 ID" /></label>
+          <label>API Key<input v-model="ai.apiKey" type="password" autocomplete="off" placeholder="输入 API Key" /></label>
+          <label class="checkbox-label"><input v-model="ai.rememberApiKey" type="checkbox" />将解题模型的 API Key 保存在这台电脑</label>
+          <h3>AI 辅助强度</h3>
+          <div class="assist-levels"><button v-for="item in [{ id: 'hint', name: '小提示' }, { id: 'guided', name: '分步引导' }, { id: 'full', name: '完整帮助' }]" :key="item.id" :class="{ active: ai.assistanceLevel === item.id }" @click="ai.assistanceLevel = item.id as typeof ai.assistanceLevel">{{ item.name }}</button></div>
+          <p class="privacy">解题模型用于对话、知识点题单生成和学习建议，不参与题面翻译。</p>
+        </template>
+      </section>
+      <section v-if="settingsPage === 'main'" class="data-center-settings">
         <div class="data-center-settings__heading"><div><h3>数据中心</h3><p>代码、笔记、翻译、题单、测试点、学习档案、提交记录和应用设置统一保存在这里。</p></div><span v-if="dataCenterInfo">{{ dataCenterInfo.fileCount }} 个文件 · {{ formatBytes(dataCenterInfo.totalBytes) }}</span></div>
         <label>最终存储地址<div class="path-picker"><input v-model="dataCenterPath" spellcheck="false" /><button type="button" :disabled="dataCenterBusy" @click="browseDataCenter">选择目录</button></div></label>
         <div class="data-center-settings__actions"><button v-if="dataCenterInfo?.isCustom" class="secondary" :disabled="dataCenterBusy" @click="restoreDefaultDataCenter">恢复默认地址</button><button class="migrate" :disabled="dataCenterBusy || !dataCenterPath.trim()" @click="moveDataCenter">{{ dataCenterBusy ? '正在复制并校验…' : '迁移全部数据并切换' }}</button></div>
@@ -247,13 +267,13 @@ async function moveDataCenter() {
         <p class="privacy">默认地址是 %APPDATA%\\Vue。迁移成功前不会切换；WebView2 网页缓存仍由系统管理，不属于业务数据中心。</p>
         <p v-if="dataCenterMessage" class="data-center-settings__success">{{ dataCenterMessage }}</p><p v-if="dataCenterError" class="data-center-settings__error">{{ dataCenterError }}</p>
       </section>
-      <section class="diagnostic-settings">
+      <section v-if="settingsPage === 'main'" class="diagnostic-settings">
         <div><h3>OJ 诊断</h3><p>记录题库、题面、登录、提交和评测详情的阶段、耗时与脱敏错误，不保存 Cookie、验证码、代码或密钥。</p></div>
         <div class="diagnostic-settings__actions"><button @click="exportDiagnostics">导出日志</button><button :disabled="!ojDiagnostics.length" @click="clearDiagnostics">清空</button></div>
         <div v-if="ojDiagnostics.length" class="diagnostic-list"><div v-for="item in ojDiagnostics.slice(0, 6)" :key="`${item.timestamp}-${item.platform}-${item.operation}`" :class="item.status"><span>{{ diagnosticTime(item.timestamp) }}</span><b>{{ item.platform }} · {{ item.operation }}</b><em>{{ item.status === 'success' ? `成功 · ${item.durationMs} ms` : item.message || '失败' }}</em></div></div>
         <p v-else class="privacy">暂无诊断记录。</p>
       </section>
-      <footer><span>{{ savedNotice }}</span><button class="primary" @click="saveSettings">保存设置</button></footer>
+      <footer><span>{{ savedNotice }}</span><button v-if="settingsPage !== 'main'" class="secondary" @click="settingsPage = 'main'">返回设置</button><button class="primary" @click="saveSettings">保存设置</button></footer>
     </section>
   </div>
 </template>
@@ -262,9 +282,11 @@ async function moveDataCenter() {
 .topbar { height: 36px; flex: 0 0 36px; display: flex; align-items: center; padding: 0 10px; border-bottom: 1px solid #383838; background: #181818; color: #ccc; user-select: none; &__brand { margin-right: 15px; color: #75bfff; font-size: 12px; font-weight: 700; } &__menu { position: relative; display: flex; height: 100%; align-items: center; > button { height: 27px; padding: 0 10px; border: 0; border-radius: 4px; background: transparent; color: #bbb; cursor: pointer; } > button:hover, > button.active { background: #353535; color: white; } } &__hint { margin-left: auto; color: #68c58e; font-size: 10px; } }
 .view-menu { position: absolute; top: 32px; left: 0; z-index: 1300; width: 210px; padding: 7px; border: 1px solid #484848; border-radius: 6px; background: #252526; box-shadow: 0 8px 28px #0008; label { display: flex; gap: 8px; align-items: center; padding: 7px; border-radius: 4px; color: #ddd; font-size: 11px; cursor: pointer; &:hover { background: #37373d; } } small { display: block; padding: 7px; border-top: 1px solid #3b3b3b; color: #777; line-height: 1.4; } }
 .settings-modal { position: fixed; inset: 0; z-index: 1800; display: flex; align-items: center; justify-content: center; padding: 24px; background: #000a; }
-.settings-card { width: min(1080px, 96vw); max-height: 92vh; overflow: auto; border: 1px solid #4a4a4a; border-radius: 10px; background: #252526; color: #ddd; box-shadow: 0 20px 70px #000b; > header { display: flex; justify-content: space-between; padding: 17px 20px; border-bottom: 1px solid #3b3b3b; h2 { margin: 0; font-size: 19px; } p { margin: 4px 0 0; color: #858585; font-size: 11px; } button { border: 0; background: transparent; color: #aaa; font-size: 24px; cursor: pointer; } } > footer { display: flex; justify-content: flex-end; align-items: center; gap: 15px; padding: 13px 20px; border-top: 1px solid #3b3b3b; span { color: #68c58e; font-size: 11px; } } }
+.settings-card { width: min(1080px, 96vw); max-height: 92vh; overflow: auto; border: 1px solid #4a4a4a; border-radius: 10px; background: #252526; color: #ddd; box-shadow: 0 20px 70px #000b; > header { display: flex; align-items: center; gap: 10px; padding: 17px 20px; border-bottom: 1px solid #3b3b3b; > div { min-width: 0; flex: 1; } h2 { margin: 0; font-size: 19px; } p { margin: 4px 0 0; color: #858585; font-size: 11px; } button { border: 0; background: transparent; color: #aaa; font-size: 24px; cursor: pointer; } .settings-back { width: 30px; padding: 0; color: #9cdcfe; font-size: 29px; }.settings-close { margin-left: auto; } } > footer { display: flex; justify-content: flex-end; align-items: center; gap: 15px; padding: 13px 20px; border-top: 1px solid #3b3b3b; span { color: #68c58e; font-size: 11px; } } }
 .settings-grid { display: grid; grid-template-columns: 1.2fr 1fr; gap: 24px; padding: 20px; section { min-width: 0; } h3 { margin: 0 0 12px; font-size: 13px; } label { display: block; margin-bottom: 10px; color: #999; font-size: 10px; } input, select, textarea { box-sizing: border-box; width: 100%; margin-top: 4px; padding: 8px; border: 1px solid #444; border-radius: 4px; outline: none; background: #181818; color: #ddd; } textarea { height: 330px; resize: vertical; font: 11px/1.5 Consolas, monospace; } input:focus, select:focus, textarea:focus { border-color: #569cd6; } }
 .language-tabs, .assist-levels { display: flex; gap: 5px; margin-bottom: 8px; button { padding: 6px 9px; border: 1px solid #444; border-radius: 4px; background: #1e1e1e; color: #aaa; cursor: pointer; &.active { border-color: #569cd6; background: #264f78; color: white; } } }
+.ai-entry-list { display: grid; gap: 8px; margin-bottom: 20px; > button { display: grid; grid-template-columns: 34px 1fr auto; align-items: center; gap: 10px; padding: 12px; border: 1px solid #465968; border-radius: 7px; background: #1d2931; color: #ddd; text-align: left; cursor: pointer; &:hover { border-color: #569cd6; background: #203545; } > span { display: grid; place-items: center; width: 32px; height: 32px; border-radius: 7px; background: #264f78; color: #d8efff; font-size: 13px; font-weight: 700; } > div { display: flex; min-width: 0; flex-direction: column; gap: 4px; } strong { font-size: 12px; } small { overflow: hidden; color: #8295a3; font-size: 9px; text-overflow: ellipsis; white-space: nowrap; } b { color: #9cdcfe; font-size: 10px; } } }
+.ai-model-settings { max-width: 720px; min-height: 390px; margin: 0 auto; padding: 28px 24px; label { display: block; margin-bottom: 13px; color: #999; font-size: 10px; } input, select { box-sizing: border-box; width: 100%; margin-top: 5px; padding: 9px; border: 1px solid #444; border-radius: 4px; outline: none; background: #181818; color: #ddd; &:focus { border-color: #569cd6; } } h3 { margin: 22px 0 10px; font-size: 13px; } }
 .privacy { padding: 8px; background: #1e1e1e; color: #858585; font-size: 10px; line-height: 1.5; }.primary, .secondary { padding: 7px 13px; border: 0; border-radius: 4px; color: white; cursor: pointer; }.primary { background: #0e639c; }.secondary { background: #444; font-size: 10px; }
 .runner-settings-title { margin-top: 20px !important; }
 .checkbox-label { display: flex !important; align-items: center; gap: 7px; color: #ccc !important; input { width: auto; margin: 0; } }.account-title { margin-top: 20px !important; }.account-row { display: flex; align-items: center; justify-content: space-between; gap: 10px; padding: 8px 9px; border-bottom: 1px solid #3b3b3b; background: #1e1e1e; font-size: 11px; > div { display: flex; min-width: 0; flex-direction: column; gap: 3px; } strong { overflow: hidden; color: #4ec9b0; text-overflow: ellipsis; white-space: nowrap; } strong.offline { color: #858585; font-weight: 400; } button { flex: 0 0 auto; padding: 5px 8px; border: 1px solid #4b6274; border-radius: 4px; background: #203545; color: #9cdcfe; font-size: 9px; cursor: pointer; &:disabled { opacity: .4; } } }

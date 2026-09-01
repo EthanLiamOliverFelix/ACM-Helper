@@ -6,15 +6,22 @@ use commands::data_center;
 use commands::debug_session;
 use commands::diagnostics;
 use commands::luogu;
+use commands::network_session;
 use commands::notes;
 use commands::oj;
 use commands::workspace;
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
+    let args = std::env::args().collect::<Vec<_>>();
+    if args.get(1).map(String::as_str) == Some("--isolated-webview") {
+        run_isolated_webview(&args);
+        return;
+    }
     tauri::Builder::default()
         .plugin(tauri_plugin_opener::init())
         .manage(debug_session::DebugSessions::default())
+        .manage(network_session::IsolatedWebSessions::default())
         .invoke_handler(tauri::generate_handler![
             codeforces::login_via_browser,
             codeforces::fetch_problems_cf,
@@ -85,6 +92,10 @@ pub fn run() {
             oj::fetch_problems_atcoder,
             oj::fetch_problem_qoj,
             oj::fetch_qoj_archive,
+            oj::fetch_contest_catalog,
+            oj::inspect_external_account,
+            oj::open_external_account,
+            oj::external_account_session_status,
             oj::fetch_luogu_training_list,
             oj::fetch_luogu_training_detail,
             oj::analyze_contest_luogu,
@@ -98,4 +109,88 @@ pub fn run() {
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
+}
+
+fn run_isolated_webview(args: &[String]) {
+    use tauri::{Manager, WebviewUrl, WebviewWindowBuilder, WindowEvent};
+
+    let platform = args.get(2).cloned().unwrap_or_default();
+    let url = args.get(3).cloned().unwrap_or_default();
+    let title = args.get(4).cloned().unwrap_or_else(|| "OJ 账号".into());
+    if network_session::validate_session_url(&platform, &url).is_err() {
+        return;
+    }
+    // 普通 AtCoder 登录会话若已经从持久 Cookie 恢复出用户名，则无需
+    // 继续展示登录页。切换账号使用 /logout，不启用这段自动关闭逻辑。
+    let auto_close_atcoder = platform == "atcoder"
+        && reqwest::Url::parse(&url)
+            .ok()
+            .is_some_and(|value| value.path().trim_end_matches('/') == "/login");
+    let (auto_close_script, mut auto_close_rx) = if auto_close_atcoder {
+        match commands::callback::callback_server() {
+            Ok((port, receiver)) => (
+                format!(
+                    r#"(function(){{
+                      if(window.__acmAtcoderAccountCloser)return;window.__acmAtcoderAccountCloser=true;
+                      var check=function(){{
+                        if(window.__acmAtcoderAccountFound)return;
+                        var link=Array.from(document.querySelectorAll('a[href^="/users/"],a[href*="atcoder.jp/users/"]')).find(function(item){{return /\/users\/[^/?#]+/.test(item.getAttribute('href')||'');}});
+                        if(!link)return;
+                        window.__acmAtcoderAccountFound=true;
+                        new Image().src='http://127.0.0.1:{port}/result?logged-in';
+                      }};
+                      check();setInterval(check,400);window.addEventListener('load',check);
+                    }})();"#
+                ),
+                Some(receiver),
+            ),
+            Err(_) => (String::new(), None),
+        }
+    } else {
+        (String::new(), None)
+    };
+    let mut context = tauri::generate_context!();
+    // The normal application declares its main window in tauri.conf.json.
+    // Remove that declaration for this helper so only the requested OJ window
+    // exists in the child process.
+    context.config_mut().app.windows.clear();
+    tauri::Builder::default()
+        .setup(move |app| {
+            let data_dir = app
+                .path()
+                .app_data_dir()?
+                .join("webview-sessions")
+                .join(&platform);
+            std::fs::create_dir_all(&data_dir)?;
+            let mut window_builder = WebviewWindowBuilder::new(
+                app,
+                "isolated_network_window",
+                WebviewUrl::External(url.parse()?),
+            )
+            .title(format!("{title} · 关闭窗口即结束本次会话"))
+            .inner_size(980.0, 760.0)
+            .min_inner_size(720.0, 520.0)
+            .data_directory(data_dir);
+            if !auto_close_script.is_empty() {
+                window_builder = window_builder.initialization_script(&auto_close_script);
+            }
+            let window = window_builder.build()?;
+            let app_handle = app.handle().clone();
+            window.on_window_event(move |event| {
+                if matches!(event, WindowEvent::CloseRequested { .. }) {
+                    app_handle.exit(0);
+                }
+            });
+            if let Some(receiver) = auto_close_rx.take() {
+                let app_handle = app.handle().clone();
+                std::thread::spawn(move || {
+                    if receiver.recv().is_ok() {
+                        app_handle.exit(0);
+                    }
+                });
+            }
+            Ok(())
+        })
+        .run(context)
+        .expect("isolated webview failed");
 }

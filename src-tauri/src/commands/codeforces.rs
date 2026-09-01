@@ -1,10 +1,11 @@
+use crate::commands::network_session::IsolatedWebSessions;
 use regex::Regex;
 use reqwest::Client;
 use scraper::{Html, Selector};
 use serde::{Deserialize, Serialize};
 use std::io::{BufRead, BufReader, Read, Write};
 use std::net::TcpListener;
-use tauri::{AppHandle, Emitter, Manager, WebviewUrl, WebviewWindowBuilder};
+use tauri::{AppHandle, Emitter, Manager, State, WebviewUrl, WebviewWindowBuilder};
 
 /// Copy the current source code and open the official Codeforces submit page.
 /// The WebView uses the same persistent profile as the login window, so the
@@ -59,11 +60,12 @@ pub async fn open_cf_manual_submit(
     Ok(format!("已复制代码并打开 {problem_id} 的官方提交页"))
 }
 
-/// Copy source and open the corresponding AtCoder submit page in a persistent
-/// official WebView. The user completes submission and confirms the result.
+/// Copy source and open the corresponding AtCoder submit page in the system
+/// browser. AtCoder can hang inside WebView2, while the browser also preserves
+/// the user's existing login session.
 #[tauri::command]
 pub async fn open_atcoder_manual_submit(
-    app: AppHandle,
+    sessions: State<'_, IsolatedWebSessions>,
     problem_url: String,
     code: String,
 ) -> Result<String, String> {
@@ -88,25 +90,13 @@ pub async fn open_atcoder_manual_submit(
     })
     .await
     .map_err(|e| format!("复制代码任务失败：{e}"))??;
-    let url = format!("https://atcoder.jp/contests/{contest}/submit?taskScreenName={task}")
-        .parse()
-        .map_err(|e| format!("提交页地址无效：{e}"))?;
-    if let Some(window) = app.get_webview_window("atcoder_manual_submit") {
-        window
-            .navigate(url)
-            .map_err(|e| format!("无法切换 AtCoder 提交页：{e}"))?;
-        let _ = window.show();
-        let _ = window.set_focus();
-    } else {
-        WebviewWindowBuilder::new(&app, "atcoder_manual_submit", WebviewUrl::External(url))
-            .title(format!("AtCoder {task} · 代码已复制，请粘贴提交"))
-            .inner_size(1080.0, 820.0)
-            .min_inner_size(760.0, 560.0)
-            .visible(true)
-            .build()
-            .map_err(|e| format!("无法打开 AtCoder 提交窗口：{e}"))?;
-    }
-    Ok(format!("已复制代码并打开 {task} 的官方提交页"))
+    let url = format!("https://atcoder.jp/contests/{contest}/submit?taskScreenName={task}");
+    sessions.open(
+        "atcoder",
+        &url,
+        &format!("AtCoder {task} · 代码已复制，请粘贴提交"),
+    )?;
+    Ok(format!("已复制代码并在独立窗口打开 {task} 的官方提交页"))
 }
 
 /// QOJ submission stays in the official browser because accounts, Cloudflare
@@ -472,7 +462,7 @@ fn start_payload_server() -> Result<(u16, std::sync::mpsc::Receiver<String>), St
 
 fn fetch_cf_html_via_webview(app: &AppHandle, url: &str) -> Result<String, String> {
     if let Some(existing) = app.get_webview_window("cf_statement") {
-        existing.close().ok();
+        existing.destroy().ok();
     }
     let (port, result_rx) = start_payload_server()?;
     let window = WebviewWindowBuilder::new(
@@ -509,7 +499,7 @@ fn fetch_cf_html_via_webview(app: &AppHandle, url: &str) -> Result<String, Strin
     let result = result_rx
         .recv_timeout(std::time::Duration::from_secs(35))
         .map_err(|_| "Codeforces 浏览器题面加载超时，请先在官方窗口完成人机验证".to_string());
-    window.close().ok();
+    window.destroy().ok();
     result
 }
 
@@ -530,7 +520,7 @@ pub async fn login_via_browser(
 ) -> Result<LoginResult, String> {
     // 关闭可能已有的旧窗口
     if let Some(existing) = app.get_webview_window("cf_login") {
-        existing.close().ok();
+        existing.destroy().ok();
     }
 
     // 本地回调只传输“登录成功”标记。
@@ -610,14 +600,14 @@ pub async fn login_via_browser(
         match login_rx.recv_timeout(std::time::Duration::from_secs(180)) {
             Ok(_) => {
                 if let Some(wv) = app_for_thread.get_webview_window("cf_login") {
-                    wv.close().ok();
+                    wv.destroy().ok();
                 }
                 let _ = app_for_thread.emit("cf-login-success", true);
             }
             Err(_timeout) => {
                 // 超时，关闭窗口
                 if let Some(wv) = app_for_thread.get_webview_window("cf_login") {
-                    wv.close().ok();
+                    wv.destroy().ok();
                 }
                 let _ =
                     app_for_thread.emit("cf-login-error", "登录超时（3 分钟），请重试".to_string());
@@ -1156,7 +1146,7 @@ pub async fn submit_cf(
     .map_err(|e| format!("等待 Codeforces 结果失败: {}", e))?
     .map_err(|_| "提交或评测超时（210 秒），请到 Codeforces 提交记录确认状态".to_string());
     if let Some(window) = app.get_webview_window(wv_label) {
-        window.close().ok();
+        window.destroy().ok();
     }
     // 回调服务器已完成 URL 解码，这里直接返回 JSON，避免百分号被二次解码。
     result
@@ -1175,7 +1165,7 @@ pub async fn restore_session() -> Result<LoginResult, String> {
 #[tauri::command]
 pub async fn inspect_cf_account(app: AppHandle) -> Result<AccountStatus, String> {
     if let Some(window) = app.get_webview_window("cf_account_check") {
-        let _ = window.close();
+        let _ = window.destroy();
     }
     let (port, rx) = start_signal_server()?;
     let script = format!(
@@ -1203,7 +1193,9 @@ pub async fn inspect_cf_account(app: AppHandle) -> Result<AccountStatus, String>
     WebviewWindowBuilder::new(
         &app,
         "cf_account_check",
-        WebviewUrl::External("https://codeforces.com/".parse().unwrap()),
+        // 登录页会让 Codeforces 恢复 WebView2 中已有的会话；已登录时
+        // 官方页面会直接呈现账号导航，未登录时则保留登录入口。
+        WebviewUrl::External("https://codeforces.com/enter".parse().unwrap()),
     )
     .title("检测 Codeforces 账号")
     .inner_size(1.0, 1.0)
@@ -1218,7 +1210,7 @@ pub async fn inspect_cf_account(app: AppHandle) -> Result<AccountStatus, String>
     .map_err(|e| format!("等待 Codeforces 账号检测失败: {e}"))?
     .map_err(|_| "Codeforces 账号检测超时".to_string());
     if let Some(window) = app.get_webview_window("cf_account_check") {
-        let _ = window.close();
+        let _ = window.destroy();
     }
     serde_json::from_str(&payload?).map_err(|e| format!("解析 Codeforces 账号失败: {e}"))
 }

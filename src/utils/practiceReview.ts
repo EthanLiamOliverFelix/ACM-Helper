@@ -7,6 +7,7 @@ export interface PracticeControl {
   pinned?: boolean
   snoozedUntil?: number
   masteredAt?: number
+  removedAt?: number
 }
 
 export type PracticeControls = Record<string, PracticeControl>
@@ -107,6 +108,7 @@ export function buildPracticeRecords(
     const correctionStage = credited.length
     const lastCompletedAt = credited.length ? credited[credited.length - 1] : undefined
     const control = controls[key] ?? controls[`${group.platform}:${group.problemId}`] ?? {}
+    if (control.removedAt && control.removedAt >= lastFailureAt) continue
     const manuallyMastered = Boolean(control.masteredAt && control.masteredAt >= lastFailureAt)
     const autoArchived = correctionStage >= 4 && !control.pinned
     let nextReviewAt = lastFailureAt

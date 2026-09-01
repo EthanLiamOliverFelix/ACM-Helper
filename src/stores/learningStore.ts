@@ -2,7 +2,7 @@ import { computed, ref } from 'vue'
 import { defineStore } from 'pinia'
 import { invoke } from '@tauri-apps/api/core'
 import { SKILL_BY_ID, SKILL_TREE, skillPrerequisiteClosure } from '../data/skillTree'
-import type { ContestAnalysis, LearningProfile, SkillLearningPlan, SkillNode, SkillPlanProblem, SkillStatus } from '../types'
+import type { ContestAnalysis, LearningProfile, Problem, SkillLearningPlan, SkillNode, SkillPlanProblem, SkillStatus } from '../types'
 
 const REVIEW_AFTER_DAYS = 30
 const DAY_MS = 24 * 60 * 60 * 1000
@@ -236,5 +236,29 @@ export const useLearningStore = defineStore('learning', () => {
     }
   }
 
-  return { profile, selectedSkillId, initialized, contestUrl, contestAnalysis, isAnalyzing, error, mastered, progress, init, statusOf, unmetPrerequisites, plansFor, startSkillPlan, openSkillPlan, closeSkillPlan, planProgress, skillFreshness, toggleSolved, markSolved, recordAccepted, skillsForTags, knowledgeForTags, analyzeContest }
+  async function analyzeContestProblems(contest: { platform: Problem['platform']; contestId: string; title: string; url: string }, problems: Problem[]) {
+    isAnalyzing.value = true
+    error.value = null
+    try {
+      const tags = [...new Set(problems.flatMap((problem) => problem.tags))]
+      contestUrl.value = contest.url
+      contestAnalysis.value = {
+        ...contest,
+        tags,
+        problems: problems.map((problem) => ({
+          id: problem.id,
+          title: problem.title,
+          rating: problem.rating,
+          tags: problem.tags,
+          missingSkills: knowledgeForTags(problem.tags).filter((skill) => !mastered.value.has(skill.id)).map((skill) => skill.name),
+        })),
+      }
+    } catch (e) {
+      error.value = String(e)
+    } finally {
+      isAnalyzing.value = false
+    }
+  }
+
+  return { profile, selectedSkillId, initialized, contestUrl, contestAnalysis, isAnalyzing, error, mastered, progress, init, statusOf, unmetPrerequisites, plansFor, startSkillPlan, openSkillPlan, closeSkillPlan, planProgress, skillFreshness, toggleSolved, markSolved, recordAccepted, skillsForTags, knowledgeForTags, analyzeContest, analyzeContestProblems }
 })

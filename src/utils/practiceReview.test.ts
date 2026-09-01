@@ -54,6 +54,12 @@ describe('practice review aggregation', () => {
     expect(buildPracticeRecords([submission('Wrong Answer', 500)], controls, 600)[0]).toMatchObject({ mastered: false, due: true })
   })
 
+  it('keeps a manually removed problem out until it fails again', () => {
+    const controls = { 'codeforces:977A': { removedAt: 300 } }
+    expect(buildPracticeRecords([submission('Wrong Answer', 100)], controls, 400)).toEqual([])
+    expect(buildPracticeRecords([submission('Wrong Answer', 500)], controls, 600)[0]).toMatchObject({ unresolved: true, due: true })
+  })
+
   it('archives after correction and three properly spaced reviews', () => {
     const attempts = [
       submission('Wrong Answer', 0),

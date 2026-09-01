@@ -9,6 +9,7 @@ import { getDataCenterValue, saveDataCenterValue } from '../dataCenter'
 
 const ProblemDesc = defineAsyncComponent(() => import('../components/ProblemDesc.vue'))
 const CodeEditor = defineAsyncComponent(() => import('../components/CodeEditor.vue'))
+const CompileWorkbench = defineAsyncComponent(() => import('../components/CompileWorkbench.vue'))
 const SubmitPanel = defineAsyncComponent(() => import('../components/SubmitPanel.vue'))
 const LearningPanel = defineAsyncComponent(() => import('../components/LearningPanel.vue'))
 const AiAssistant = defineAsyncComponent(() => import('../components/AiAssistant.vue'))
@@ -87,7 +88,8 @@ onBeforeUnmount(() => { window.removeEventListener('pointermove', resize); windo
       </div>
       <div v-if="layout.showStatement && layout.showEditor" class="resize-handle resize-handle--y" @pointerdown="startResize('statement', $event)" />
       <div v-if="layout.showEditor" class="main-layout__editor">
-        <CodeEditor />
+        <div class="main-layout__editor-main"><CodeEditor /></div>
+        <CompileWorkbench />
       </div>
     </div>
 
@@ -125,9 +127,14 @@ onBeforeUnmount(() => { window.removeEventListener('pointermove', resize); windo
   }
 
   &__editor {
+    display: flex;
     flex: 1;
+    min-height: 0;
+    flex-direction: column;
     overflow: hidden;
   }
+
+  &__editor-main { flex: 1; min-height: 0; overflow: hidden; }
 
   &__right {
     width: 300px;

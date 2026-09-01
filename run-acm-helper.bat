@@ -8,8 +8,6 @@ echo          ACM Helper Launcher
 echo ========================================
 echo.
 
-if exist "src-tauri\target\release\my-acm-helper.exe" goto start_release
-
 where node >nul 2>nul
 if errorlevel 1 goto missing_node
 where npm >nul 2>nul
@@ -26,13 +24,6 @@ echo [2/2] Starting ACM Helper...
 echo.
 call npm run tauri dev
 if errorlevel 1 goto start_failed
-goto finished
-
-:start_release
-echo Starting the packaged ACM Helper...
-echo.
-start "" /wait "src-tauri\target\release\my-acm-helper.exe"
-if errorlevel 1 goto release_failed
 goto finished
 
 :missing_node
@@ -52,11 +43,6 @@ goto failed
 :start_failed
 echo.
 echo [ERROR] ACM Helper failed to start. Review the messages above.
-goto failed
-
-:release_failed
-echo.
-echo [ERROR] The packaged ACM Helper exited with an error.
 goto failed
 
 :finished

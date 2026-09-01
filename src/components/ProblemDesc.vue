@@ -17,7 +17,7 @@ const notes = useNoteStore()
 const problemKey = computed(() => store.currentProblem ? `${store.currentProblem.platform}:${store.currentProblem.id}` : '')
 const translationSupported = computed(() => {
   const problem = store.currentProblem
-  if (!problem || !['codeforces', 'atcoder', 'qoj'].includes(problem.platform)) return false
+  if (!problem || !['codeforces', 'atcoder'].includes(problem.platform)) return false
   if (ai.translations[problemKey.value]) return true
   const source = `${problem.title} ${problem.description ?? ''} ${problem.input ?? ''} ${problem.output ?? ''}`
     .replace(/<[^>]+>/g, ' ')
@@ -43,15 +43,22 @@ function safeRichText(value = '', format: 'html' | 'markdown' | 'text' = 'text',
   let html: string
   if (format === 'markdown') html = renderLuoguMarkdown(normalizeAiMarkdown(value))
   else if (format === 'html') {
-    // QOJ keeps TeX sources beside MathJax's generated SVG. Convert the source
-    // to the same KaTeX renderer used by Markdown before sanitizing the HTML.
+    // OJ 页面会同时保留 TeX 源码与 MathJax 的预览节点。统一转为 KaTeX，
+    // 但行内公式必须拆掉 Markdown 渲染器额外生成的 <p>，否则浏览器会
+    // 自动结束原段落，造成变量各占一行的严重错位。
     const sourceDoc = new DOMParser().parseFromString(`<div id="acm-rich-root">${value}</div>`, 'text/html')
     const sourceRoot = sourceDoc.getElementById('acm-rich-root')!
     sourceRoot.querySelectorAll('.MathJax_Preview,.MathJax_SVG').forEach((node) => node.remove())
-    sourceRoot.querySelectorAll<HTMLScriptElement>('script[type="math/tex"]').forEach((script) => {
+    sourceRoot.querySelectorAll<HTMLScriptElement>('script[type^="math/tex"]').forEach((script) => {
+      const display = script.type.toLowerCase().includes('mode=display')
       const wrapper = sourceDoc.createElement('span')
-      wrapper.innerHTML = renderLuoguMarkdown(`$${script.textContent ?? ''}$`)
-      script.replaceWith(...Array.from(wrapper.childNodes))
+      wrapper.innerHTML = renderLuoguMarkdown(display
+        ? `$$${script.textContent ?? ''}$$`
+        : `$${script.textContent ?? ''}$`)
+      const paragraph = !display && wrapper.childElementCount === 1 && wrapper.firstElementChild?.tagName === 'P'
+        ? wrapper.firstElementChild
+        : null
+      script.replaceWith(...Array.from((paragraph ?? wrapper).childNodes))
     })
     html = sourceRoot.innerHTML
   }
@@ -95,7 +102,7 @@ async function retranslate() {
 
 watch(problemKey, async () => {
   const problem = store.currentProblem
-  if (!problem || !['codeforces', 'atcoder', 'qoj'].includes(problem.platform)) return
+  if (!problem || !['codeforces', 'atcoder'].includes(problem.platform)) return
   try { await ai.loadCachedTranslation(problem.id, problem.platform) } catch (e) { ai.error = String(e) }
 }, { immediate: true })
 
@@ -174,15 +181,15 @@ async function closeProblemNote() {
       <button
         v-if="translationSupported && !ai.translations[problemKey]"
         class="translate-btn"
-        :disabled="ai.isTranslating || !ai.isConfigured"
-        :title="ai.isConfigured ? '使用已配置的 AI 翻译完整题面' : '请先在顶部设置中配置 API'"
+        :disabled="ai.isTranslating || !ai.translationConfigured"
+        :title="ai.translationConfigured ? '使用已配置的翻译模型翻译完整题面' : '请先在顶部设置中配置翻译模型'"
         @click="translate"
       >{{ ai.isTranslating ? '翻译中…' : 'AI 翻译' }}</button>
       <button
         v-if="translationSupported && ai.translations[problemKey]"
         class="retranslate-btn"
-        :disabled="ai.isTranslating || !ai.isConfigured"
-        :title="ai.isConfigured ? '重新调用 AI 并覆盖本地译文' : '请先在顶部设置中配置 API'"
+        :disabled="ai.isTranslating || !ai.translationConfigured"
+        :title="ai.translationConfigured ? '重新调用翻译模型并覆盖本地译文' : '请先在顶部设置中配置翻译模型'"
         @click="retranslate"
       >{{ ai.isTranslating ? '重新翻译中…' : '重新翻译' }}</button>
       <span v-if="learning.profile.solvedProblems.includes(problemKey)" class="solved-btn solved-btn--active">✓ 已完成</span>
@@ -368,7 +375,10 @@ async function closeProblemNote() {
     :deep(img) { max-width: 100%; height: auto; }
     :deep(table) { border-collapse: collapse; max-width: 100%; }
     :deep(th), :deep(td) { border: 1px solid #4a4a4a; padding: 6px 9px; }
+    :deep(.tex-span), :deep(.tex-font-style-it), :deep(.katex) { display: inline; }
+    :deep(.tex-span) { white-space: nowrap; }
     :deep(.tex-font-style-it) { font-family: KaTeX_Math, serif; font-style: italic; }
+    :deep(.katex-display) { display: block; overflow-x: auto; overflow-y: hidden; }
   }
 }
 .translate-btn, .retranslate-btn { padding: 4px 9px; border: 1px solid #7c5bb5; border-radius: 4px; background: #34264b; color: #d8c3ff; cursor: pointer; &:disabled { opacity: .38; cursor: not-allowed; } }

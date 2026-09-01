@@ -22,14 +22,13 @@ fn validate_account_status(mut status: LuoguAccountStatus) -> LuoguAccountStatus
         let trimmed = value.trim().to_string();
         (!trimmed.is_empty()).then_some(trimmed)
     });
-    status.logged_in = status.logged_in && status.username.is_some();
     status
 }
 
 #[tauri::command]
 pub async fn inspect_luogu_account(app: AppHandle) -> Result<LuoguAccountStatus, String> {
     if let Some(window) = app.get_webview_window("luogu_account_check") {
-        let _ = window.close();
+        let _ = window.destroy();
     }
     let (port, rx) = callback_server()?;
     let script = format!(
@@ -56,6 +55,17 @@ pub async fn inspect_luogu_account(app: AppHandle) -> Result<LuoguAccountStatus,
             }}
             return '';
           }}
+          function hasSession(root) {{
+            var data=root&&(root.currentData||root.data||root);
+            var candidates=[
+              data&&data.currentUser, data&&data.user,
+              data&&data.data&&data.data.currentUser, data&&data.data&&data.data.user,
+              root&&root.currentUser, root&&root.user
+            ];
+            return candidates.some(function(user) {{
+              return Boolean(user && typeof user==='object' && (user.uid||user.id||user.name||user.username));
+            }});
+          }}
           function usernameFromPage() {{
             try {{
               var context=document.querySelector('script#lentille-context');
@@ -76,9 +86,13 @@ pub async fn inspect_luogu_account(app: AppHandle) -> Result<LuoguAccountStatus,
               var body=await response.json().catch(function(){{return {{}}}});
               var name=usernameFrom(body);
               if (name) {{ report({{loggedIn:true,username:name}}); return; }}
+              if (hasSession(body)) {{ report({{loggedIn:true,username:null}}); return; }}
             }} catch(e) {{}}
             var pageName=usernameFromPage();
             if (pageName) {{ report({{loggedIn:true,username:pageName}}); return; }}
+            if (document.querySelector('a[href="/auth/logout"],a[href^="/auth/logout?"]')) {{
+              report({{loggedIn:true,username:null}}); return;
+            }}
             // 新版页面的用户上下文可能晚于 load 注入。不要在第一次空响应时
             // 把有效 Cookie 判成未登录，给页面约 8 秒完成 hydration。
             if (document.readyState==='complete' && attempts>=9) report({{loggedIn:false,username:null}});
@@ -90,7 +104,9 @@ pub async fn inspect_luogu_account(app: AppHandle) -> Result<LuoguAccountStatus,
     WebviewWindowBuilder::new(
         &app,
         "luogu_account_check",
-        WebviewUrl::External("https://www.luogu.com.cn/".parse().unwrap()),
+        // 主动进入官方登录页以触发 WebView2 恢复持久会话；若 Cookie
+        // 仍有效，洛谷会返回当前用户上下文或跳转到已登录页面。
+        WebviewUrl::External("https://www.luogu.com.cn/auth/login".parse().unwrap()),
     )
     .title("检测洛谷账号")
     .inner_size(1.0, 1.0)
@@ -104,7 +120,7 @@ pub async fn inspect_luogu_account(app: AppHandle) -> Result<LuoguAccountStatus,
             .map_err(|e| format!("等待洛谷账号检测失败: {e}"))?
             .map_err(|_| "洛谷账号检测超时".to_string());
     if let Some(window) = app.get_webview_window("luogu_account_check") {
-        let _ = window.close();
+        let _ = window.destroy();
     }
     serde_json::from_str(&payload?)
         .map(validate_account_status)
@@ -118,7 +134,7 @@ pub async fn login_luogu_browser(
     current_username: Option<String>,
 ) -> Result<ActionResult, String> {
     if let Some(window) = app.get_webview_window("luogu_login") {
-        let _ = window.close();
+        let _ = window.destroy();
     }
     let (port, rx) = callback_server()?;
     let switching = switch_account.unwrap_or(false);
@@ -219,7 +235,7 @@ pub async fn login_luogu_browser(
         Ok(username) => {
             let _ = app_thread.emit("luogu-login-success", username);
             if let Some(window) = app_thread.get_webview_window("luogu_login") {
-                let _ = window.close();
+                let _ = window.destroy();
             }
         }
         Err(_) => {
@@ -343,7 +359,7 @@ pub async fn submit_luogu(
         port = port
     );
     if let Some(window) = app.get_webview_window("luogu_submit") {
-        let _ = window.close();
+        let _ = window.destroy();
     }
     WebviewWindowBuilder::new(
         &app,
@@ -366,7 +382,7 @@ pub async fn submit_luogu(
             .map_err(|e| format!("等待洛谷结果失败: {}", e))?
             .map_err(|_| "洛谷提交或评测超时（240 秒），请到洛谷评测记录确认状态".to_string())?;
     if let Some(window) = app.get_webview_window("luogu_submit") {
-        let _ = window.close();
+        let _ = window.destroy();
     }
     Ok(result)
 }
@@ -393,7 +409,7 @@ pub async fn fetch_luogu_record_detail(app: AppHandle, rid: u64) -> Result<Strin
         return Err("无效的洛谷评测记录号".into());
     }
     if let Some(window) = app.get_webview_window("luogu_record_detail") {
-        let _ = window.close();
+        let _ = window.destroy();
     }
     let (port, rx) = callback_server()?;
     let script = format!(
@@ -472,7 +488,7 @@ pub async fn fetch_luogu_record_detail(app: AppHandle, rid: u64) -> Result<Strin
             .map_err(|e| format!("等待洛谷记录失败: {}", e))?
             .map_err(|_| "读取洛谷记录超时，请确认登录状态后重试".to_string());
     if let Some(window) = app.get_webview_window("luogu_record_detail") {
-        let _ = window.close();
+        let _ = window.destroy();
     }
     result
 }
@@ -489,7 +505,7 @@ pub async fn find_luogu_record_id(
         return Err("缺少可用于查找旧记录的洛谷账号或题号".into());
     }
     if let Some(window) = app.get_webview_window("luogu_record_finder") {
-        let _ = window.close();
+        let _ = window.destroy();
     }
     let (port, rx) = callback_server()?;
     let pid = problem_id.trim().to_uppercase();
@@ -540,7 +556,7 @@ pub async fn find_luogu_record_id(
             .map_err(|e| format!("等待洛谷记录查找失败: {}", e))?
             .map_err(|_| "查找洛谷历史记录超时".to_string())?;
     if let Some(window) = app.get_webview_window("luogu_record_finder") {
-        let _ = window.close();
+        let _ = window.destroy();
     }
     let rid = payload.parse::<u64>().unwrap_or(0);
     if rid == 0 {
@@ -575,12 +591,13 @@ mod tests {
     }
 
     #[test]
-    fn account_requires_a_real_username() {
+    fn account_session_does_not_require_username_metadata() {
         let empty = validate_account_status(LuoguAccountStatus {
             logged_in: true,
             username: Some("  ".into()),
         });
-        assert!(!empty.logged_in);
+        assert!(empty.logged_in);
+        assert!(empty.username.is_none());
         let valid = validate_account_status(LuoguAccountStatus {
             logged_in: true,
             username: Some(" example_user ".into()),

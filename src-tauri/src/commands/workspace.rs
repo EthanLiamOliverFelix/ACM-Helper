@@ -21,6 +21,7 @@ pub struct RunResult {
     success: bool,
     stdout: String,
     stderr: String,
+    compile_failed: bool,
     exit_code: Option<i32>,
     duration_ms: u128,
     compile_duration_ms: u128,
@@ -1513,9 +1514,24 @@ fn failed(
         success: false,
         stdout: String::new(),
         stderr: message,
+        compile_failed: false,
         exit_code: None,
         duration_ms: started.elapsed().as_millis(),
         compile_duration_ms,
+        timed_out,
+    }
+}
+
+fn compile_failed(message: String, started: Instant, timed_out: bool) -> RunResult {
+    let duration = started.elapsed().as_millis();
+    RunResult {
+        success: false,
+        stdout: String::new(),
+        stderr: message,
+        compile_failed: true,
+        exit_code: None,
+        duration_ms: duration,
+        compile_duration_ms: duration,
         timed_out,
     }
 }
@@ -1541,7 +1557,6 @@ pub async fn run_code(
     timeout_ms: Option<u64>,
     output_line_limit: Option<usize>,
 ) -> Result<RunResult, String> {
-    let started = Instant::now();
     let mut compile_duration_ms = 0;
     let source = draft_path(&app, &platform, &problem_id, None, &language)?;
     if let Some(parent) = source.parent() {
@@ -1571,20 +1586,18 @@ pub async fn run_code(
                     compile_duration_ms = compile_started.elapsed().as_millis();
                 }
                 Ok(output) => {
-                    return Ok(failed(
+                    return Ok(compile_failed(
                         String::from_utf8_lossy(&output.stderr).into_owned(),
-                        started,
+                        compile_started,
                         false,
-                        compile_started.elapsed().as_millis(),
                     ))
                 }
                 Err(e) => {
                     let timed_out = e == "__TIMEOUT__";
-                    return Ok(failed(
+                    return Ok(compile_failed(
                         if timed_out { "编译超时".into() } else { e },
-                        started,
+                        compile_started,
                         timed_out,
-                        compile_started.elapsed().as_millis(),
                     ));
                 }
             }
@@ -1615,20 +1628,18 @@ pub async fn run_code(
                     compile_duration_ms = compile_started.elapsed().as_millis();
                 }
                 Ok(output) => {
-                    return Ok(failed(
+                    return Ok(compile_failed(
                         String::from_utf8_lossy(&output.stderr).into_owned(),
-                        started,
+                        compile_started,
                         false,
-                        compile_started.elapsed().as_millis(),
                     ))
                 }
                 Err(e) => {
                     let timed_out = e == "__TIMEOUT__";
-                    return Ok(failed(
+                    return Ok(compile_failed(
                         if timed_out { "编译超时".into() } else { e },
-                        started,
+                        compile_started,
                         timed_out,
-                        compile_started.elapsed().as_millis(),
                     ));
                 }
             }
@@ -1652,6 +1663,7 @@ pub async fn run_code(
                 String::from_utf8_lossy(&output.stderr).into_owned(),
                 output_line_limit,
             ),
+            compile_failed: false,
             exit_code: output.status.code(),
             duration_ms: run_started.elapsed().as_millis(),
             compile_duration_ms,
@@ -1715,6 +1727,7 @@ async fn run_prepared_code(
                 String::from_utf8_lossy(&output.stderr).into_owned(),
                 output_line_limit,
             ),
+            compile_failed: false,
             exit_code: output.status.code(),
             duration_ms: run_started.elapsed().as_millis(),
             compile_duration_ms,
@@ -1812,13 +1825,15 @@ pub async fn run_test_suite(
     if let Some((message, timed_out)) = compile_error {
         return Ok(inputs
             .into_iter()
-            .map(|_| {
-                failed(
-                    message.clone(),
-                    Instant::now(),
-                    timed_out,
-                    compile_duration_ms,
-                )
+            .map(|_| RunResult {
+                success: false,
+                stdout: String::new(),
+                stderr: message.clone(),
+                compile_failed: true,
+                exit_code: None,
+                duration_ms: compile_duration_ms,
+                compile_duration_ms,
+                timed_out,
             })
             .collect());
     }

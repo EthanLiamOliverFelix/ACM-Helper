@@ -5,6 +5,7 @@ pub mod data_center;
 pub mod debug_session;
 pub mod diagnostics;
 pub mod luogu;
+pub mod network_session;
 pub mod notes;
 pub mod oj;
 pub mod workspace;

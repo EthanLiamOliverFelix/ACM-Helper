@@ -8,6 +8,7 @@ import MarkdownNoteEditor from './MarkdownNoteEditor.vue'
 import DOMPurify from 'dompurify'
 import { renderLuoguMarkdown } from '../utils/luoguMarkdown'
 import { normalizeAiMarkdown } from '../utils/aiMarkdown'
+import { atCoderVarMarkupToTex } from '../utils/atcoderMath'
 import 'katex/dist/katex.min.css'
 
 const store = useProblemStore()
@@ -49,16 +50,24 @@ function safeRichText(value = '', format: 'html' | 'markdown' | 'text' = 'text',
     const sourceDoc = new DOMParser().parseFromString(`<div id="acm-rich-root">${value}</div>`, 'text/html')
     const sourceRoot = sourceDoc.getElementById('acm-rich-root')!
     sourceRoot.querySelectorAll('.MathJax_Preview,.MathJax_SVG').forEach((node) => node.remove())
-    sourceRoot.querySelectorAll<HTMLScriptElement>('script[type^="math/tex"]').forEach((script) => {
-      const display = script.type.toLowerCase().includes('mode=display')
-      const wrapper = sourceDoc.createElement('span')
-      wrapper.innerHTML = renderLuoguMarkdown(display
-        ? `$$${script.textContent ?? ''}$$`
-        : `$${script.textContent ?? ''}$`)
+    const replaceWithKatex = (node: Element, tex: string, display = false) => {
+      if (!tex) return
+      const wrapper = sourceDoc.createElement(display ? 'div' : 'span')
+      wrapper.innerHTML = renderLuoguMarkdown(display ? `$$${tex}$$` : `$${tex}$`)
       const paragraph = !display && wrapper.childElementCount === 1 && wrapper.firstElementChild?.tagName === 'P'
         ? wrapper.firstElementChild
         : null
-      script.replaceWith(...Array.from((paragraph ?? wrapper).childNodes))
+      node.replaceWith(...Array.from((paragraph ?? wrapper).childNodes))
+    }
+    // AtCoder leaves formulas in <var> tags and relies on its own page script to
+    // turn them into MathJax. That script is intentionally not executed here, so
+    // render the TeX ourselves. This also repairs previously cached statements.
+    sourceRoot.querySelectorAll('var').forEach((variable) => {
+      replaceWithKatex(variable, atCoderVarMarkupToTex(variable.innerHTML))
+    })
+    sourceRoot.querySelectorAll<HTMLScriptElement>('script[type^="math/tex"]').forEach((script) => {
+      const display = script.type.toLowerCase().includes('mode=display')
+      replaceWithKatex(script, script.textContent ?? '', display)
     })
     html = sourceRoot.innerHTML
   }

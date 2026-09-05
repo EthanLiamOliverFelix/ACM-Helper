@@ -7,6 +7,22 @@ export interface BatchProblemToken {
   id?: string
   query?: string
 }
+
+/** Run each batch concurrently while keeping results in the original input order. */
+export async function mapInOrderedBatches<T, R>(
+  items: T[],
+  batchSize: number,
+  mapper: (item: T, index: number) => Promise<R>,
+): Promise<PromiseSettledResult<R>[]> {
+  const results: PromiseSettledResult<R>[] = []
+  const size = Math.max(1, Math.floor(batchSize))
+  for (let offset = 0; offset < items.length; offset += size) {
+    const batch = items.slice(offset, offset + size)
+    results.push(...await Promise.allSettled(batch.map((item, index) => mapper(item, offset + index))))
+  }
+  return results
+}
+
 function platformName(value: string): BatchProblemPlatform | undefined {
   if (/^(?:cf|codeforces)$/i.test(value)) return 'codeforces'
   if (/^(?:洛谷|luogu)$/i.test(value)) return 'luogu'

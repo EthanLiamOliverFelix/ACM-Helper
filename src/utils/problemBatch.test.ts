@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { parseBatchProblemInput } from './problemBatch'
+import { mapInOrderedBatches, parseBatchProblemInput } from './problemBatch'
 
 describe('batch problem input', () => {
   it('accepts whitespace-separated links', () => {
@@ -36,5 +36,21 @@ describe('batch problem input', () => {
     expect(parseBatchProblemInput('QOJ-C1096A')).toEqual([
       { raw: 'QOJ-C1096A', platform: 'qoj', id: 'C1096A', query: undefined },
     ])
+  })
+
+  it('keeps input order when concurrent resolutions finish out of order', async () => {
+    let active = 0
+    let peak = 0
+    const result = await mapInOrderedBatches([1, 2, 3, 4, 5], 4, async (value) => {
+      active++
+      peak = Math.max(peak, active)
+      await new Promise((resolve) => setTimeout(resolve, (5 - value) * 2))
+      active--
+      return `problem-${value}`
+    })
+    expect(result.map((item) => item.status === 'fulfilled' ? item.value : 'failed')).toEqual([
+      'problem-1', 'problem-2', 'problem-3', 'problem-4', 'problem-5',
+    ])
+    expect(peak).toBe(4)
   })
 })

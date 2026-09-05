@@ -24,4 +24,13 @@ describe('Codeforces Polygon math', () => {
       { kind: 'text', value: 'broken $$$x' },
     ])
   })
+
+  it.each([4, 5, 6])('collapses duplicated %s-dollar delimiters', (count) => {
+    const dollars = '$'.repeat(count)
+    expect(splitCodeforcesMathText(`before ${dollars}\\sum_i a_i${dollars} after`)).toEqual([
+      { kind: 'text', value: 'before ' },
+      { kind: 'math', value: '\\sum_i a_i' },
+      { kind: 'text', value: ' after' },
+    ])
+  })
 })

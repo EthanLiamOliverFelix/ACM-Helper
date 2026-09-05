@@ -21,6 +21,13 @@ describe('AI Markdown normalization', () => {
     expect(html).not.toContain('katex-display')
   })
 
+  it.each([4, 5, 6])('normalizes duplicated %s-dollar formula delimiters', (count) => {
+    const dollars = '$'.repeat(count)
+    const html = renderLuoguMarkdown(normalizeAiMarkdown(`sum ${dollars}\\sum_i a_i${dollars}`))
+    expect(html).toContain('class="katex"')
+    expect(html).not.toContain('$$$$')
+  })
+
   it('does not remove ordinary fenced code blocks', () => {
     expect(normalizeAiMarkdown('说明\n```cpp\nint main() {}\n```')).toContain('```cpp')
   })

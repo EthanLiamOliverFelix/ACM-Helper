@@ -3,7 +3,7 @@ import { defineStore } from 'pinia'
 import { invoke } from '@tauri-apps/api/core'
 import type { Difficulty, LuoguProblemPage, LuoguTrainingDetail, Problem, SkillPlanProblem } from '../types'
 import { useProblemStore } from './problemStore'
-import { parseBatchProblemInput, type BatchProblemToken } from '../utils/problemBatch'
+import { mapInOrderedBatches, parseBatchProblemInput, type BatchProblemToken } from '../utils/problemBatch'
 import { qojProblemUrl } from '../utils/qoj'
 import { getDataCenterValue, saveDataCenterValue } from '../dataCenter'
 
@@ -264,24 +264,27 @@ export const useProblemSetStore = defineStore('problemSets', () => {
   async function addProblemsBatch(input: string, setId = activeSetId.value) {
     const tokens = parseBatchProblemInput(input)
     if (!tokens.length) throw new Error('请输入题目链接、题号或题目名称')
-    let cursor = 0
     let added = 0
     let duplicates = 0
     const failed: string[] = []
-    async function worker() {
-      while (cursor < tokens.length) {
-        const token = tokens[cursor++]
-        try {
-          const problem = await resolveProblem(token)
-          if (problem.platform !== 'codeforces' && problem.platform !== 'luogu' && problem.platform !== 'atcoder') throw new Error('暂不支持该平台')
-          if (addProblem(problem, setId)) added++
-          else duplicates++
-        } catch {
-          failed.push(token.raw)
-        }
+
+    // 网络抓取仍以四个为一组并发，但所有写入都在抓取完成后按输入下标执行，
+    // 避免响应较快的后置链接先进入题单。
+    const resolved = await mapInOrderedBatches(tokens, 4, resolveProblem)
+    for (let index = 0; index < resolved.length; index++) {
+      const result = resolved[index]
+      if (result.status === 'rejected') {
+        failed.push(tokens[index].raw)
+        continue
       }
+      const problem = result.value
+      if (problem.platform !== 'codeforces' && problem.platform !== 'luogu' && problem.platform !== 'atcoder') {
+        failed.push(tokens[index].raw)
+        continue
+      }
+      if (addProblem(problem, setId)) added++
+      else duplicates++
     }
-    await Promise.all(Array.from({ length: Math.min(4, tokens.length) }, () => worker()))
     return { total: tokens.length, added, duplicates, failed }
   }
 

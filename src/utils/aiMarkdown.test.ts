@@ -15,6 +15,12 @@ describe('AI Markdown normalization', () => {
     expect(html.match(/class="katex"/g)?.length).toBeGreaterThanOrEqual(3)
   })
 
+  it('keeps Codeforces triple-dollar formulas inline', () => {
+    const html = renderLuoguMarkdown(normalizeAiMarkdown('between $$$-100$$$ and $$$100$$$.'))
+    expect(html.match(/class="katex"/g)?.length).toBeGreaterThanOrEqual(2)
+    expect(html).not.toContain('katex-display')
+  })
+
   it('does not remove ordinary fenced code blocks', () => {
     expect(normalizeAiMarkdown('说明\n```cpp\nint main() {}\n```')).toContain('```cpp')
   })

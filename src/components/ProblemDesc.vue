@@ -9,6 +9,8 @@ import DOMPurify from 'dompurify'
 import { renderLuoguMarkdown } from '../utils/luoguMarkdown'
 import { normalizeAiMarkdown } from '../utils/aiMarkdown'
 import { atCoderVarMarkupToTex } from '../utils/atcoderMath'
+import { splitCodeforcesMathText } from '../utils/codeforcesMath'
+import { openUrl } from '@tauri-apps/plugin-opener'
 import 'katex/dist/katex.min.css'
 
 const store = useProblemStore()
@@ -28,6 +30,7 @@ const translationSupported = computed(() => {
 })
 const translationError = computed(() => ai.error)
 const refreshError = ref('')
+const linkError = ref('')
 const refreshNotice = ref('')
 const copiedSample = ref('')
 const noteOpen = ref(false)
@@ -58,6 +61,35 @@ function safeRichText(value = '', format: 'html' | 'markdown' | 'text' = 'text',
         ? wrapper.firstElementChild
         : null
       node.replaceWith(...Array.from((paragraph ?? wrapper).childNodes))
+    }
+    // Codeforces/Polygon embeds inline TeX directly in HTML text as $$$...$$$.
+    // Markdown normalization does not run for HTML statements, so replace only
+    // matching text-node segments and preserve the surrounding DOM structure.
+    const polygonTextNodes: Text[] = []
+    const collectPolygonText = (node: Node) => {
+      if (node.nodeType === Node.TEXT_NODE && node.textContent?.includes('$$$')) {
+        polygonTextNodes.push(node as Text)
+        return
+      }
+      if (node.nodeType !== Node.ELEMENT_NODE) return
+      const tag = (node as Element).tagName.toLowerCase()
+      if (['code', 'pre', 'script', 'style'].includes(tag)) return
+      Array.from(node.childNodes).forEach(collectPolygonText)
+    }
+    collectPolygonText(sourceRoot)
+    for (const textNode of polygonTextNodes) {
+      const segments = splitCodeforcesMathText(textNode.data)
+      if (!segments.some((segment) => segment.kind === 'math')) continue
+      const fragment = sourceDoc.createDocumentFragment()
+      for (const segment of segments) {
+        if (segment.kind === 'text') fragment.append(sourceDoc.createTextNode(segment.value))
+        else {
+          const placeholder = sourceDoc.createElement('span')
+          fragment.append(placeholder)
+          replaceWithKatex(placeholder, segment.value)
+        }
+      }
+      textNode.replaceWith(fragment)
     }
     // AtCoder leaves formulas in <var> tags and relies on its own page script to
     // turn them into MathJax. That script is intentionally not executed here, so
@@ -124,6 +156,30 @@ async function refreshStatement() {
     window.setTimeout(() => { refreshNotice.value = '' }, 2500)
   } catch (e) {
     refreshError.value = typeof e === 'string' ? e : (e as Error)?.message ?? '重新抓取失败'
+  }
+}
+
+async function openStatementLink(event: MouseEvent) {
+  const target = event.target
+  if (!(target instanceof Element)) return
+  const anchor = target.closest('a[href]') as HTMLAnchorElement | null
+  if (!anchor) return
+
+  const href = anchor.getAttribute('href')?.trim() ?? ''
+  // 题面目录、脚注等页内锚点仍由当前页面处理。
+  if (!href || href.startsWith('#')) return
+
+  event.preventDefault()
+  event.stopPropagation()
+  linkError.value = ''
+  try {
+    const url = new URL(href, store.currentProblem?.url)
+    if (url.protocol !== 'http:' && url.protocol !== 'https:') {
+      throw new Error(`不支持打开 ${url.protocol} 链接`)
+    }
+    await openUrl(url.href)
+  } catch (cause) {
+    linkError.value = cause instanceof Error ? cause.message : String(cause)
   }
 }
 
@@ -207,7 +263,7 @@ async function closeProblemNote() {
       <span class="problem-desc__title">未选择题目</span>
     </div>
     <div class="problem-desc__content">
-      <div v-html="renderedHtml" />
+      <div v-html="renderedHtml" @click="openStatementLink" />
       <section v-if="store.currentProblem?.samples?.length" class="statement-samples">
         <article v-for="(sample, index) in store.currentProblem.samples" :key="index" class="statement-sample">
           <div class="statement-sample__heading">
@@ -228,6 +284,7 @@ async function closeProblemNote() {
     <div v-if="refreshNotice" class="problem-desc__notice">{{ refreshNotice }}</div>
     <div v-if="refreshError" class="problem-desc__error">重新抓取失败：{{ refreshError }}（已保留原题面）</div>
     <div v-if="translationError" class="problem-desc__error">{{ translationError }}</div>
+    <div v-if="linkError" class="problem-desc__error">链接打开失败：{{ linkError }}</div>
     <div v-if="noteError && !noteOpen" class="problem-desc__error">笔记打开失败：{{ noteError }}</div>
 
     <div v-if="noteOpen && notes.activeNote" class="problem-note-modal" @click.self="closeProblemNote">

@@ -4,7 +4,7 @@ export function normalizeAiMarkdown(value: string) {
   const fenced = markdown.match(/^```(?:markdown|md)?\s*\r?\n([\s\S]*?)\r?\n```\s*$/i)
   if (fenced) markdown = fenced[1]
   return markdown
-    .replace(/\$\$\$/g, '$$')
+    .replace(/\$\$\$([\s\S]*?)\$\$\$/g, (_, formula: string) => `$${formula}$`)
     .replace(/\\\[([\s\S]*?)\\\]/g, (_, formula: string) => `$$${formula}$$`)
     .replace(/\\\(([^\n]*?)\\\)/g, (_, formula: string) => `$${formula}$`)
 }

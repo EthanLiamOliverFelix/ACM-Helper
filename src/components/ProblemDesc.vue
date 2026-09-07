@@ -11,6 +11,7 @@ import { normalizeAiMarkdown } from '../utils/aiMarkdown'
 import { atCoderVarMarkupToTex } from '../utils/atcoderMath'
 import { splitCodeforcesMathText } from '../utils/codeforcesMath'
 import { openUrl } from '@tauri-apps/plugin-opener'
+import { ojTranslationKey } from '../utils/ojTranslation'
 import 'katex/dist/katex.min.css'
 
 const store = useProblemStore()
@@ -18,10 +19,11 @@ const learning = useLearningStore()
 const ai = useAiStore()
 const notes = useNoteStore()
 const problemKey = computed(() => store.currentProblem ? `${store.currentProblem.platform}:${store.currentProblem.id}` : '')
+const translationKey = computed(() => store.currentProblem ? ojTranslationKey(store.currentProblem.platform, store.currentProblem.id) : '')
 const translationSupported = computed(() => {
   const problem = store.currentProblem
   if (!problem || !['codeforces', 'luogu', 'atcoder'].includes(problem.platform)) return false
-  if (ai.translations[problemKey.value]) return true
+  if (ai.translations[translationKey.value]) return true
   const source = `${problem.title} ${problem.description ?? ''} ${problem.input ?? ''} ${problem.output ?? ''}`
     .replace(/<[^>]+>/g, ' ')
   const latin = (source.match(/[A-Za-z]/g) ?? []).length
@@ -126,7 +128,7 @@ const renderedHtml = computed(() => {
   if (store.isLoadingDetail) return '<div class="desc-placeholder">正在抓取题面和样例…</div>'
   const esc = (value = '') => value.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
   if (!p.description) return `<div class="desc-placeholder">题面抓取失败或暂不可用<br/><a href="${esc(p.url)}" target="_blank">在原 OJ 打开 →</a></div>`
-  const translated = ai.translations[`${p.platform}:${p.id}`]
+  const translated = ai.translations[ojTranslationKey(p.platform, p.id)]
   if (translated) return safeRichText(translated, 'markdown', p.url)
   const format = p.contentFormat ?? 'text'
   const section = (title: string, value?: string) => value ? `<h2 class="desc-h2">${title}</h2><div>${safeRichText(value, format, p.url)}</div>` : ''
@@ -242,16 +244,16 @@ async function closeProblemNote() {
         title="忽略已有题面，重新从原 OJ 抓取；不会影响本地代码"
         @click="refreshStatement"
       >{{ store.isLoadingDetail ? '抓取中…' : '重新抓取' }}</button>
-      <span v-if="translationSupported && ai.translations[problemKey]" class="translation-badge" title="已从本地读取保存的 Markdown 译文">✓ 本地中文题面</span>
+      <span v-if="translationSupported && ai.translations[translationKey]" class="translation-badge" title="已从本地读取保存的 Markdown 译文">✓ 本地中文题面</span>
       <button
-        v-if="translationSupported && !ai.translations[problemKey]"
+        v-if="translationSupported && !ai.translations[translationKey]"
         class="translate-btn"
         :disabled="ai.isTranslating || !ai.translationConfigured"
         :title="ai.translationConfigured ? '使用已配置的翻译模型翻译完整题面' : '请先在顶部设置中配置翻译模型'"
         @click="translate"
       >{{ ai.isTranslating ? '翻译中…' : 'AI 翻译' }}</button>
       <button
-        v-if="translationSupported && ai.translations[problemKey]"
+        v-if="translationSupported && ai.translations[translationKey]"
         class="retranslate-btn"
         :disabled="ai.isTranslating || !ai.translationConfigured"
         :title="ai.translationConfigured ? '重新调用翻译模型并覆盖本地译文' : '请先在顶部设置中配置翻译模型'"

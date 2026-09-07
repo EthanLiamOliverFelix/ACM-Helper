@@ -6,6 +6,7 @@ import { useProblemStore } from './problemStore'
 import { useLearningStore } from './learningStore'
 import { parseChatProblemSetResponse, parseSkillPlanResponse } from '../utils/skillPlan'
 import { getDataCenterValue, saveDataCenterValue } from '../dataCenter'
+import { ojTranslationKey } from '../utils/ojTranslation'
 
 export const useAiStore = defineStore('ai', () => {
   type ModelConfig = { endpoint?: string; model?: string; protocol?: 'responses' | 'chat_completions'; apiKey?: string; rememberApiKey?: boolean }
@@ -130,9 +131,9 @@ export const useAiStore = defineStore('ai', () => {
   }
 
   async function loadCachedTranslation(problemId: string, platform: Platform = 'codeforces'): Promise<string | null> {
-    if (platform !== 'codeforces' && platform !== 'atcoder') return null
+    if (platform !== 'codeforces' && platform !== 'luogu' && platform !== 'atcoder') return null
     const normalizedId = problemId.trim().toUpperCase()
-    const key = `${platform}:${normalizedId}`
+    const key = ojTranslationKey(platform, normalizedId)
     if (translations.value[key]) return translations.value[key]
     const pending = translationLoads.get(key)
     if (pending) return pending
@@ -151,7 +152,7 @@ export const useAiStore = defineStore('ai', () => {
     const problem = problems.currentProblem
     if (!problem || !['codeforces', 'luogu', 'atcoder'].includes(problem.platform)) throw new Error('当前题目不支持 AI 翻译')
     const problemId = problem.id.toUpperCase()
-    const key = `${problem.platform}:${problemId}`
+    const key = ojTranslationKey(problem.platform, problemId)
     if (!force) {
       if (translations.value[key]) return translations.value[key]
       const cached = await loadCachedTranslation(problemId, problem.platform)

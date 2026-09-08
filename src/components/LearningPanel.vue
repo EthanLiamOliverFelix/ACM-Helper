@@ -7,6 +7,7 @@ import { useProblemStore } from '../stores/problemStore'
 import { useProblemSetStore } from '../stores/problemSetStore'
 import type { SkillNode, SkillPlanProblem } from '../types'
 import NoteManager from './NoteManager.vue'
+import PracticeStatistics from './PracticeStatistics.vue'
 
 const learning = useLearningStore()
 const ai = useAiStore()
@@ -18,6 +19,7 @@ const planError = ref('')
 const planImportNotice = ref('')
 const selectedPageIndex = ref(0)
 const notesOpen = ref(false)
+const statisticsOpen = ref(false)
 const selectedSkill = computed(() => learning.selectedSkillId ? SKILL_BY_ID.get(learning.selectedSkillId) ?? null : null)
 const selectedPlans = computed(() => learning.selectedSkillId ? learning.plansFor(learning.selectedSkillId) : [])
 const selectedPlan = computed(() => selectedPlans.value[selectedPageIndex.value] ?? null)
@@ -96,7 +98,7 @@ onMounted(() => learning.init())
   <div class="learning-view">
     <header class="learning-header">
       <div><h1>算法技能树</h1><p>点击可学习的知识点，由 AI 生成约 10 道递进题单；全部完成后自动掌握。</p></div>
-      <div class="learning-header__actions"><button class="notebook-entry" @click="notesOpen = true"><span>📝</span><div><strong>算法笔记本</strong><small>查看和整理全部题目笔记</small></div></button><div class="progress-ring"><strong>{{ learning.progress }}%</strong><span>{{ learning.profile.masteredSkills.length }}/{{ SKILL_TREE.length }}</span></div></div>
+      <div class="learning-header__actions"><button class="header-entry statistics-entry" @click="statisticsOpen = true"><span>▥</span><div><strong>做题统计</strong><small>题量、通过率与练习趋势</small></div></button><button class="header-entry notebook-entry" @click="notesOpen = true"><span>📝</span><div><strong>算法笔记本</strong><small>查看和整理全部题目笔记</small></div></button><div class="progress-ring"><strong>{{ learning.progress }}%</strong><span>{{ learning.profile.masteredSkills.length }}/{{ SKILL_TREE.length }}</span></div></div>
     </header>
 
     <section class="vp-card">
@@ -138,6 +140,7 @@ onMounted(() => learning.init())
     </main>
 
     <div v-if="notesOpen" class="notes-modal"><NoteManager @close="notesOpen = false" /></div>
+    <div v-if="statisticsOpen" class="statistics-modal"><PracticeStatistics @close="statisticsOpen = false" /></div>
 
     <div v-if="selectedSkill" class="plan-modal" @click.self="learning.closeSkillPlan">
       <section class="plan-card">
@@ -171,7 +174,7 @@ onMounted(() => learning.init())
 <style scoped lang="scss">
 .learning-view { height: 100%; overflow-y: auto; background: #181818; color: #d4d4d4; padding: 28px 34px 60px; }
 .learning-header { display: flex; justify-content: space-between; align-items: center; max-width: 1200px; margin: auto; h1 { margin: 0 0 6px; font-size: 26px; } p { color: #858585; } }
-.learning-header__actions { display: flex; align-items: center; gap: 16px; }.notebook-entry { display: flex; align-items: center; gap: 9px; min-width: 215px; padding: 10px 13px; border: 1px solid #4d718f; border-radius: 8px; background: #203545; color: #d7efff; text-align: left; cursor: pointer; > span { font-size: 21px; } > div { display: flex; flex-direction: column; } strong { font-size: 13px; } small { margin-top: 2px; color: #82a9c2; font-size: 9px; } &:hover { border-color: #6ba5d1; background: #26445a; } }
+.learning-header__actions { display: flex; align-items: center; gap: 10px; }.header-entry { display: flex; align-items: center; gap: 9px; min-width: 185px; padding: 10px 13px; border: 1px solid #4d718f; border-radius: 8px; background: #203545; color: #d7efff; text-align: left; cursor: pointer; > span { font-size: 21px; } > div { display: flex; flex-direction: column; } strong { font-size: 13px; } small { margin-top: 2px; color: #82a9c2; font-size: 9px; } &:hover { border-color: #6ba5d1; background: #26445a; } }.statistics-entry { border-color: #4d725f; background: #20362a; color: #d9f4e4; > div small { color: #83aa92; } &:hover { border-color: #69a982; background: #274635; } }
 .progress-ring { width: 86px; height: 86px; border: 7px solid #264f78; border-radius: 50%; display: flex; flex-direction: column; align-items: center; justify-content: center; strong { color: #4ec9b0; font-size: 19px; } span { color: #858585; font-size: 11px; } }
 .vp-card { max-width: 1200px; margin: 24px auto 30px; padding: 20px; border: 1px solid #3c3c3c; border-radius: 10px; background: #252526; h2 { margin: 0 0 4px; font-size: 17px; } p { color: #858585; font-size: 13px; } }
 .vp-form { display: flex; gap: 8px; margin-top: 14px; input { flex: 1; padding: 10px 12px; background: #181818; border: 1px solid #3c3c3c; border-radius: 5px; color: #ddd; outline: none; } input:focus { border-color: #569cd6; } button { padding: 0 18px; border: 0; border-radius: 5px; background: #0e639c; color: white; cursor: pointer; } button:disabled { opacity: .45; } }
@@ -187,6 +190,7 @@ onMounted(() => learning.init())
 .plan-error { max-width: 1200px; margin: -18px auto 24px; padding: 10px 12px; border: 1px solid #a84848; border-radius: 6px; background: #3b2020; color: #f5a3a3; font-size: 12px; }
 .plan-modal { position: fixed; inset: 36px 0 0; z-index: 1500; display: flex; align-items: center; justify-content: center; padding: 25px; background: #000a; }
 .notes-modal { position: fixed; inset: 36px 0 0; z-index: 1550; background: #181818; }
+.statistics-modal { position: fixed; inset: 36px 0 0; z-index: 1550; background: #181818; }
 .plan-card { width: min(820px, 92vw); max-height: 86vh; overflow: auto; padding: 20px; border: 1px solid #4b4b4b; border-radius: 10px; background: #252526; box-shadow: 0 18px 60px #0009; > header { display: flex; justify-content: space-between; align-items: flex-start; h2 { margin: 3px 0 0; } small { color: #858585; } } > p { color: #9e9e9e; font-size: 12px; } }
 .plan-card__actions { display: flex; align-items: center; gap: 8px; }.plan-import, .plan-generate { padding: 7px 10px; border: 1px solid #3b6e90; border-radius: 4px; background: #20394a; color: #9cdcfe; cursor: pointer; &:disabled { opacity: .5; cursor: wait; } }.plan-generate { border-color: #4c7d4d; background: #203b27; color: #9fdaa7; }.plan-close { border: 0; background: transparent; color: #aaa; font-size: 24px; cursor: pointer; }
 .plan-pager { display: flex; align-items: center; justify-content: center; gap: 12px; margin: 14px 0 4px; button { padding: 5px 9px; border: 1px solid #444; border-radius: 4px; background: #333; color: #ccc; cursor: pointer; &:disabled { opacity: .35; cursor: default; } } span { min-width: 86px; color: #bbb; font-size: 11px; text-align: center; } }

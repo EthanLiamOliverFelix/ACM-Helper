@@ -35,3 +35,6 @@ arboard = "3"
 rfd = "0.15"
 base64 = "0.22"
 pdf-extract = "0.7"
+
+[target.'cfg(windows)'.dependencies]
+winreg = "0.55"

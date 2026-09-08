@@ -828,6 +828,28 @@ pub fn tool_command(app: &AppHandle, key: &str, fallback: &str) -> String {
         .unwrap_or_else(|| fallback.into())
 }
 
+fn normalize_cpp_standard(value: Option<&str>) -> &'static str {
+    match value {
+        Some("c++17") => "-std=c++17",
+        Some("c++20") => "-std=c++20",
+        _ => "-std=c++23",
+    }
+}
+
+pub fn cpp_standard_flag(app: &AppHandle) -> &'static str {
+    let configured = state_path(app, "settings")
+        .ok()
+        .and_then(|path| fs::read_to_string(path).ok())
+        .and_then(|content| serde_json::from_str::<Value>(&content).ok())
+        .and_then(|value| {
+            value
+                .get("cppStandard")
+                .and_then(Value::as_str)
+                .map(str::to_string)
+        });
+    normalize_cpp_standard(configured.as_deref())
+}
+
 fn find_bundled_tool(directory: &Path, executable_name: &str, depth: usize) -> Option<PathBuf> {
     if depth > 6 || !directory.is_dir() {
         return None;
@@ -884,6 +906,15 @@ mod tests {
         assert!(valid_state_key("ui-layout-2"));
         assert!(!valid_state_key("../session"));
         assert!(!valid_state_key("Settings"));
+    }
+
+    #[test]
+    fn validates_cpp_standard_and_defaults_to_cpp23() {
+        assert_eq!(normalize_cpp_standard(Some("c++17")), "-std=c++17");
+        assert_eq!(normalize_cpp_standard(Some("c++20")), "-std=c++20");
+        assert_eq!(normalize_cpp_standard(Some("c++23")), "-std=c++23");
+        assert_eq!(normalize_cpp_standard(Some("malicious")), "-std=c++23");
+        assert_eq!(normalize_cpp_standard(None), "-std=c++23");
     }
 
     #[test]

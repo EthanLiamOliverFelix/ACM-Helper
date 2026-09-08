@@ -86,6 +86,7 @@ pub fn run() {
             notes::delete_note_entry,
             notes::paste_note_entry,
             workspace::detect_toolchains,
+            ai::list_ai_models,
             ai::ai_chat,
             oj::import_problem_url,
             oj::fetch_problems_luogu,

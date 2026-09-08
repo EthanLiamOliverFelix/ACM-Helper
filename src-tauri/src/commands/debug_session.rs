@@ -475,7 +475,8 @@ pub async fn start_debug_session(
             .map_err(|error| format!("准备源码失败: {}", error))?;
         let mut compile = Command::new(data_center::tool_command(&app, "cppCompiler", "g++"));
         compile
-            .args(["-std=c++17", "-g", "-O0", "-fno-omit-frame-pointer"])
+            .arg(data_center::cpp_standard_flag(&app))
+            .args(["-g", "-O0", "-fno-omit-frame-pointer"])
             .arg(&source)
             .arg("-o")
             .arg(&executable)

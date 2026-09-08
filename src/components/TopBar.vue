@@ -1,5 +1,6 @@
 <script setup lang="ts">
 import { ref } from 'vue'
+import { invoke } from '@tauri-apps/api/core'
 import { useAiStore } from '../stores/aiStore'
 import { useSettingsStore } from '../stores/settingsStore'
 import { useProblemStore } from '../stores/problemStore'
@@ -35,6 +36,10 @@ const settingsOpen = ref(false)
 const settingsPage = ref<'main' | 'translation' | 'solution'>('main')
 const language = ref<Language>('cpp')
 const savedNotice = ref('')
+type AiModelKind = 'translation' | 'solution'
+const availableModels = ref<Record<AiModelKind, string[]>>({ translation: [], solution: [] })
+const modelListLoading = ref<Record<AiModelKind, boolean>>({ translation: false, solution: false })
+const modelListError = ref<Record<AiModelKind, string>>({ translation: '', solution: '' })
 const dataCenterInfo = ref<DataCenterInfo | null>(currentDataCenterInfo())
 const dataCenterPath = ref(dataCenterInfo.value?.path ?? '')
 const dataCenterBusy = ref(false)
@@ -67,6 +72,39 @@ async function saveSettings() {
   await Promise.all([settings.save(), ai.saveConfig()])
   savedNotice.value = '设置已保存'
   window.setTimeout(() => { savedNotice.value = '' }, 1800)
+}
+function modelConnection(kind: AiModelKind) {
+  return kind === 'translation'
+    ? { endpoint: ai.translationEndpoint, apiKey: ai.translationApiKey, model: ai.translationModel }
+    : { endpoint: ai.endpoint, apiKey: ai.apiKey, model: ai.model }
+}
+async function loadAiModels(kind: AiModelKind) {
+  const connection = modelConnection(kind)
+  modelListError.value[kind] = ''
+  if (!connection.endpoint.trim() || !connection.apiKey.trim()) {
+    availableModels.value[kind] = []
+    modelListError.value[kind] = '填写 API 地址和 API Key 后才能读取模型。'
+    return
+  }
+  modelListLoading.value[kind] = true
+  try {
+    availableModels.value[kind] = await invoke<string[]>('list_ai_models', {
+      endpoint: connection.endpoint,
+      apiKey: connection.apiKey,
+    })
+  } catch (cause) {
+    availableModels.value[kind] = []
+    modelListError.value[kind] = String(cause)
+  } finally {
+    modelListLoading.value[kind] = false
+  }
+}
+function ensureAiModels(kind: AiModelKind) {
+  if (!availableModels.value[kind].length && !modelListLoading.value[kind]) void loadAiModels(kind)
+}
+function modelIsUnavailable(kind: AiModelKind) {
+  const selected = modelConnection(kind).model.trim()
+  return Boolean(selected && availableModels.value[kind].length && !availableModels.value[kind].includes(selected))
 }
 async function openSettings() {
   settingsPage.value = 'main'
@@ -216,6 +254,7 @@ async function moveDataCenter() {
           <p class="privacy">也可以随时按 Shift+Alt+F 手动格式化。内置支持 C++、Python 和 Java，无需另装格式化工具。</p>
           <h3 class="runner-settings-title">本地工具链路径</h3>
           <p class="privacy">留空时自动使用系统 PATH；适合免安装 MinGW、多 Python 环境或自定义 JDK。</p>
+          <label>本地 C++ 标准<select v-model="settings.cppStandard"><option value="c++17">C++17</option><option value="c++20">C++20</option><option value="c++23">C++23（默认）</option></select></label>
           <label v-for="field in toolchainFields" :key="field.key">{{ field.label }}<div class="path-picker"><input v-model="settings.toolchainPaths[field.key]" :placeholder="`留空使用 ${field.fallback}`" /><button type="button" @click="browseToolchain(field.key, field.label)">浏览</button></div></label>
           <div class="toolchain-websites"><span>获取工具链</span><button v-for="website in toolchainWebsites" :key="website.url" type="button" @click="openUrl(website.url)">{{ website.label }} ↗</button></div>
         </section>
@@ -240,18 +279,24 @@ async function moveDataCenter() {
       </div>
       <section v-else class="ai-model-settings">
         <template v-if="settingsPage === 'translation'">
-          <label>API 地址<input v-model="ai.translationEndpoint" placeholder="https://api.openai.com/v1" /></label>
+          <label>API 地址<input v-model="ai.translationEndpoint" placeholder="https://api.openai.com/v1" @change="loadAiModels('translation')" /></label>
           <label>协议<select v-model="ai.translationProtocol"><option value="responses">Responses API</option><option value="chat_completions">Chat Completions</option></select></label>
-          <label>模型<input v-model="ai.translationModel" placeholder="翻译模型 ID" /></label>
-          <label>API Key<input v-model="ai.translationApiKey" type="password" autocomplete="off" placeholder="输入 API Key" /></label>
+          <label>模型<div class="model-picker"><input v-model="ai.translationModel" list="translation-model-options" placeholder="输入或搜索模型 ID" @focus="ensureAiModels('translation')" /><button type="button" :disabled="modelListLoading.translation || !ai.translationEndpoint.trim() || !ai.translationApiKey.trim()" @click="loadAiModels('translation')">{{ modelListLoading.translation ? '读取中…' : '刷新列表' }}</button></div><datalist id="translation-model-options"><option v-for="model in availableModels.translation" :key="model" :value="model" /></datalist></label>
+          <label>API Key<input v-model="ai.translationApiKey" type="password" autocomplete="off" placeholder="输入 API Key" @change="loadAiModels('translation')" /></label>
+          <p v-if="modelListError.translation" class="model-list-status error">{{ modelListError.translation }}</p>
+          <p v-else-if="modelIsUnavailable('translation')" class="model-list-status warning">当前模型不在接口返回的列表中，可能是模型 ID 错误或此 Key 没有权限。</p>
+          <p v-else-if="availableModels.translation.length" class="model-list-status success">已读取 {{ availableModels.translation.length }} 个可用模型；可输入关键字搜索。</p>
           <label class="checkbox-label"><input v-model="ai.translationRememberApiKey" type="checkbox" />将翻译模型的 API Key 保存在这台电脑</label>
           <p class="privacy">翻译只使用这一套接口，不会调用解题模型。旧版本的 AI 配置已自动复制到这里作为初始值。</p>
         </template>
         <template v-else>
-          <label>API 地址<input v-model="ai.endpoint" placeholder="https://api.openai.com/v1" /></label>
+          <label>API 地址<input v-model="ai.endpoint" placeholder="https://api.openai.com/v1" @change="loadAiModels('solution')" /></label>
           <label>协议<select v-model="ai.protocol"><option value="responses">Responses API</option><option value="chat_completions">Chat Completions</option></select></label>
-          <label>模型<input v-model="ai.model" placeholder="解题模型 ID" /></label>
-          <label>API Key<input v-model="ai.apiKey" type="password" autocomplete="off" placeholder="输入 API Key" /></label>
+          <label>模型<div class="model-picker"><input v-model="ai.model" list="solution-model-options" placeholder="输入或搜索模型 ID" @focus="ensureAiModels('solution')" /><button type="button" :disabled="modelListLoading.solution || !ai.endpoint.trim() || !ai.apiKey.trim()" @click="loadAiModels('solution')">{{ modelListLoading.solution ? '读取中…' : '刷新列表' }}</button></div><datalist id="solution-model-options"><option v-for="model in availableModels.solution" :key="model" :value="model" /></datalist></label>
+          <label>API Key<input v-model="ai.apiKey" type="password" autocomplete="off" placeholder="输入 API Key" @change="loadAiModels('solution')" /></label>
+          <p v-if="modelListError.solution" class="model-list-status error">{{ modelListError.solution }}</p>
+          <p v-else-if="modelIsUnavailable('solution')" class="model-list-status warning">当前模型不在接口返回的列表中，可能是模型 ID 错误或此 Key 没有权限。</p>
+          <p v-else-if="availableModels.solution.length" class="model-list-status success">已读取 {{ availableModels.solution.length }} 个可用模型；可输入关键字搜索。</p>
           <label class="checkbox-label"><input v-model="ai.rememberApiKey" type="checkbox" />将解题模型的 API Key 保存在这台电脑</label>
           <h3>AI 辅助强度</h3>
           <div class="assist-levels"><button v-for="item in [{ id: 'hint', name: '小提示' }, { id: 'guided', name: '分步引导' }, { id: 'full', name: '完整帮助' }]" :key="item.id" :class="{ active: ai.assistanceLevel === item.id }" @click="ai.assistanceLevel = item.id as typeof ai.assistanceLevel">{{ item.name }}</button></div>
@@ -287,6 +332,8 @@ async function moveDataCenter() {
 .language-tabs, .assist-levels { display: flex; gap: 5px; margin-bottom: 8px; button { padding: 6px 9px; border: 1px solid #444; border-radius: 4px; background: #1e1e1e; color: #aaa; cursor: pointer; &.active { border-color: #569cd6; background: #264f78; color: white; } } }
 .ai-entry-list { display: grid; gap: 8px; margin-bottom: 20px; > button { display: grid; grid-template-columns: 34px 1fr auto; align-items: center; gap: 10px; padding: 12px; border: 1px solid #465968; border-radius: 7px; background: #1d2931; color: #ddd; text-align: left; cursor: pointer; &:hover { border-color: #569cd6; background: #203545; } > span { display: grid; place-items: center; width: 32px; height: 32px; border-radius: 7px; background: #264f78; color: #d8efff; font-size: 13px; font-weight: 700; } > div { display: flex; min-width: 0; flex-direction: column; gap: 4px; } strong { font-size: 12px; } small { overflow: hidden; color: #8295a3; font-size: 9px; text-overflow: ellipsis; white-space: nowrap; } b { color: #9cdcfe; font-size: 10px; } } }
 .ai-model-settings { max-width: 720px; min-height: 390px; margin: 0 auto; padding: 28px 24px; label { display: block; margin-bottom: 13px; color: #999; font-size: 10px; } input, select { box-sizing: border-box; width: 100%; margin-top: 5px; padding: 9px; border: 1px solid #444; border-radius: 4px; outline: none; background: #181818; color: #ddd; &:focus { border-color: #569cd6; } } h3 { margin: 22px 0 10px; font-size: 13px; } }
+.model-picker { display: flex; gap: 7px; margin-top: 5px; input { min-width: 0; margin-top: 0 !important; } button { flex: 0 0 auto; padding: 0 12px; border: 1px solid #4b6274; border-radius: 4px; background: #203545; color: #9cdcfe; cursor: pointer; &:disabled { cursor: default; opacity: .45; } } }
+.model-list-status { margin: -3px 0 13px; padding: 8px 10px; border-radius: 4px; font-size: 10px; line-height: 1.45; &.success { background: #173126; color: #73d49f; } &.warning { background: #3b321d; color: #e8c56b; } &.error { background: #3f2020; color: #f48771; } }
 .privacy { padding: 8px; background: #1e1e1e; color: #858585; font-size: 10px; line-height: 1.5; }.primary, .secondary { padding: 7px 13px; border: 0; border-radius: 4px; color: white; cursor: pointer; }.primary { background: #0e639c; }.secondary { background: #444; font-size: 10px; }
 .runner-settings-title { margin-top: 20px !important; }
 .checkbox-label { display: flex !important; align-items: center; gap: 7px; color: #ccc !important; input { width: auto; margin: 0; } }.account-title { margin-top: 20px !important; }.account-row { display: flex; align-items: center; justify-content: space-between; gap: 10px; padding: 8px 9px; border-bottom: 1px solid #3b3b3b; background: #1e1e1e; font-size: 11px; > div { display: flex; min-width: 0; flex-direction: column; gap: 3px; } strong { overflow: hidden; color: #4ec9b0; text-overflow: ellipsis; white-space: nowrap; } strong.offline { color: #858585; font-weight: 400; } button { flex: 0 0 auto; padding: 5px 8px; border: 1px solid #4b6274; border-radius: 4px; background: #203545; color: #9cdcfe; font-size: 9px; cursor: pointer; &:disabled { opacity: .4; } } }

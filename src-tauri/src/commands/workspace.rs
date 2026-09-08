@@ -1578,7 +1578,8 @@ pub async fn run_code(
             let executable = workdir.join("main.exe");
             let mut compile = Command::new(data_center::tool_command(&app, "cppCompiler", "g++"));
             compile
-                .args(["-std=c++17", "-O2", "-pipe"])
+                .arg(data_center::cpp_standard_flag(&app))
+                .args(["-O2", "-pipe"])
                 .arg(&source)
                 .arg("-o")
                 .arg(&executable)
@@ -1778,7 +1779,8 @@ pub async fn run_test_suite(
             let executable = workdir.join("main.exe");
             let mut compile = Command::new(data_center::tool_command(&app, "cppCompiler", "g++"));
             compile
-                .args(["-std=c++17", "-O2", "-pipe"])
+                .arg(data_center::cpp_standard_flag(&app))
+                .args(["-O2", "-pipe"])
                 .arg(&source)
                 .arg("-o")
                 .arg(&executable)
@@ -2032,7 +2034,8 @@ pub async fn debug_code(
             let executable = gdb_workdir.join("debug-main.exe");
             let mut compile = Command::new(data_center::tool_command(&app, "cppCompiler", "g++"));
             compile
-                .args(["-std=c++17", "-g", "-O0", "-fno-omit-frame-pointer"])
+                .arg(data_center::cpp_standard_flag(&app))
+                .args(["-g", "-O0", "-fno-omit-frame-pointer"])
                 .arg(&debug_source)
                 .arg("-o")
                 .arg(&executable)

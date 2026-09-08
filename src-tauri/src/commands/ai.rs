@@ -1,6 +1,7 @@
-use reqwest::Client;
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
+
+use super::network_client;
 
 #[derive(Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -30,6 +31,41 @@ fn endpoint_url(base: &str, protocol: &str) -> String {
     }
 }
 
+fn models_url(base: &str) -> String {
+    let trimmed = base.trim().trim_end_matches('/');
+    let root = trimmed
+        .strip_suffix("/chat/completions")
+        .or_else(|| trimmed.strip_suffix("/responses"))
+        .or_else(|| trimmed.strip_suffix("/models"))
+        .unwrap_or(trimmed);
+    format!("{root}/models")
+}
+
+fn extract_model_ids(body: &Value) -> Vec<String> {
+    let entries = body
+        .get("data")
+        .or_else(|| body.get("models"))
+        .unwrap_or(body)
+        .as_array();
+    let mut models = entries
+        .into_iter()
+        .flatten()
+        .filter_map(|item| {
+            item.as_str().or_else(|| {
+                item.get("id")
+                    .or_else(|| item.get("name"))
+                    .and_then(Value::as_str)
+            })
+        })
+        .map(str::trim)
+        .filter(|id| !id.is_empty())
+        .map(str::to_string)
+        .collect::<Vec<_>>();
+    models.sort_by_key(|id| id.to_lowercase());
+    models.dedup();
+    models
+}
+
 fn assistance_instruction(level: &str) -> &'static str {
     match level {
         "full" => "用户允许完整解法与代码。先简述算法和复杂度，再给出可运行代码，并指出易错点。",
@@ -53,6 +89,57 @@ fn extract_responses_text(body: &Value) -> String {
         .filter_map(|part| part.get("text").and_then(Value::as_str))
         .collect::<Vec<_>>()
         .join("\n")
+}
+
+fn extract_api_error(body: &Value) -> Option<&str> {
+    body.pointer("/error/message")
+        .and_then(Value::as_str)
+        .or_else(|| body.get("msg").and_then(Value::as_str))
+        .or_else(|| body.get("message").and_then(Value::as_str))
+        .or_else(|| body.get("error").and_then(Value::as_str))
+}
+
+#[tauri::command]
+pub async fn list_ai_models(endpoint: String, api_key: String) -> Result<Vec<String>, String> {
+    if endpoint.trim().is_empty() {
+        return Err("请先填写 API 地址".into());
+    }
+    if api_key.trim().is_empty() {
+        return Err("请先填写 API Key".into());
+    }
+
+    let (client_builder, proxy_configured) = network_client::builder();
+    let response = client_builder
+        .timeout(std::time::Duration::from_secs(30))
+        .build()
+        .map_err(|e| format!("创建 AI 客户端失败: {e}"))?
+        .get(models_url(&endpoint))
+        .bearer_auth(api_key.trim())
+        .send()
+        .await
+        .map_err(|e| {
+            let proxy_hint = if proxy_configured {
+                "（已通过系统代理连接）"
+            } else {
+                "（未检测到可用代理）"
+            };
+            format!("获取模型列表失败{proxy_hint}: {e}")
+        })?;
+    let status = response.status();
+    let body: Value = response
+        .json()
+        .await
+        .map_err(|e| format!("模型列表返回内容不是有效 JSON: {e}"))?;
+    if !status.is_success() {
+        let message = extract_api_error(&body).unwrap_or("未知 API 错误");
+        return Err(format!("模型列表 API {status}: {message}"));
+    }
+
+    let models = extract_model_ids(&body);
+    if models.is_empty() {
+        return Err("接口调用成功，但没有返回可用模型".into());
+    }
+    Ok(models)
 }
 
 #[tauri::command]
@@ -97,7 +184,8 @@ pub async fn ai_chat(
         }
         body
     };
-    let response = Client::builder()
+    let (client_builder, proxy_configured) = network_client::builder();
+    let response = client_builder
         .timeout(std::time::Duration::from_secs(120))
         .build()
         .map_err(|e| format!("创建 AI 客户端失败: {}", e))?
@@ -106,17 +194,21 @@ pub async fn ai_chat(
         .json(&request_body)
         .send()
         .await
-        .map_err(|e| format!("AI 请求失败: {}", e))?;
+        .map_err(|e| {
+            let proxy_hint = if proxy_configured {
+                "（已通过系统代理连接）"
+            } else {
+                "（未检测到可用代理）"
+            };
+            format!("AI 请求失败{proxy_hint}: {e}")
+        })?;
     let status = response.status();
     let body: Value = response
         .json()
         .await
         .map_err(|e| format!("AI 返回内容不是有效 JSON: {}", e))?;
     if !status.is_success() {
-        let message = body
-            .pointer("/error/message")
-            .and_then(Value::as_str)
-            .unwrap_or("未知 API 错误");
+        let message = extract_api_error(&body).unwrap_or("未知 API 错误");
         return Err(format!("AI API {}: {}", status, message));
     }
     let text = if protocol == "chat_completions" {
@@ -156,6 +248,34 @@ mod tests {
     }
 
     #[test]
+    fn builds_models_endpoint_from_base_or_request_endpoint() {
+        assert_eq!(
+            models_url("https://api.openai.com/v1/"),
+            "https://api.openai.com/v1/models"
+        );
+        assert_eq!(
+            models_url("https://example.test/v1/chat/completions"),
+            "https://example.test/v1/models"
+        );
+        assert_eq!(
+            models_url("https://example.test/v1/models"),
+            "https://example.test/v1/models"
+        );
+    }
+
+    #[test]
+    fn extracts_and_sorts_common_model_list_shapes() {
+        assert_eq!(
+            extract_model_ids(&json!({"data":[{"id":"gpt-z"},{"id":"gpt-a"},{"id":"gpt-a"}]})),
+            vec!["gpt-a", "gpt-z"]
+        );
+        assert_eq!(
+            extract_model_ids(&json!({"models":[{"name":"model-b"}, "model-a"]})),
+            vec!["model-a", "model-b"]
+        );
+    }
+
+    #[test]
     fn assistance_levels_enforce_distinct_disclosure() {
         assert!(assistance_instruction("hint").contains("最小必要提示"));
         assert!(assistance_instruction("guided").contains("不要直接给完整"));
@@ -171,5 +291,17 @@ mod tests {
             ]
         });
         assert_eq!(extract_responses_text(&body), "第一段\n第二段");
+    }
+
+    #[test]
+    fn extracts_openai_and_gateway_error_messages() {
+        assert_eq!(
+            extract_api_error(&json!({"error":{"message":"OpenAI error"}})),
+            Some("OpenAI error")
+        );
+        assert_eq!(
+            extract_api_error(&json!({"code":401,"msg":"Invalid API Key!"})),
+            Some("Invalid API Key!")
+        );
     }
 }

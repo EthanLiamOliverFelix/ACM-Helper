@@ -13,6 +13,8 @@ export interface ToolchainPaths {
   javaDebugger: string
 }
 
+export type CppStandard = 'c++17' | 'c++20' | 'c++23'
+
 export const DEFAULT_CODE_TEMPLATES: Record<Language, string> = {
   cpp: '#include <bits/stdc++.h>\nusing namespace std;\n\nint main() {\n    ios::sync_with_stdio(false);\n    cin.tie(nullptr);\n\n    return 0;\n}\n',
   python: 'import sys\n\ndef solve():\n    pass\n\nif __name__ == "__main__":\n    solve()\n',
@@ -24,6 +26,7 @@ export const useSettingsStore = defineStore('settings', () => {
     codeTemplates?: Partial<Record<Language, string>>
     outputLineLimit?: number
     formatOnSave?: boolean
+    cppStandard?: CppStandard
     luoguCppLanguageId?: number
     luoguPythonLanguageId?: number
     luoguEnableO2?: boolean
@@ -37,6 +40,8 @@ export const useSettingsStore = defineStore('settings', () => {
   })
   const outputLineLimit = ref(normalizeOutputLineLimit(saved.outputLineLimit))
   const formatOnSave = ref(saved.formatOnSave ?? false)
+  const cppStandards: CppStandard[] = ['c++17', 'c++20', 'c++23']
+  const cppStandard = ref<CppStandard>(cppStandards.includes(saved.cppStandard as CppStandard) ? saved.cppStandard as CppStandard : 'c++23')
   const cppLanguageIds = [3, 4, 11, 12, 27, 28, 34]
   const pythonLanguageIds = [7, 25]
   const luoguCppLanguageId = ref(cppLanguageIds.includes(Number(saved.luoguCppLanguageId)) ? Number(saved.luoguCppLanguageId) : 34)
@@ -59,6 +64,7 @@ export const useSettingsStore = defineStore('settings', () => {
       codeTemplates,
       outputLineLimit: outputLineLimit.value,
       formatOnSave: formatOnSave.value,
+      cppStandard: cppStandard.value,
       luoguCppLanguageId: luoguCppLanguageId.value,
       luoguPythonLanguageId: luoguPythonLanguageId.value,
       luoguEnableO2: luoguEnableO2.value,
@@ -75,6 +81,7 @@ export const useSettingsStore = defineStore('settings', () => {
     codeTemplates,
     outputLineLimit,
     formatOnSave,
+    cppStandard,
     luoguCppLanguageId,
     luoguPythonLanguageId,
     luoguEnableO2,

@@ -1,4 +1,5 @@
-export type MarkdownFormat = 'bold' | 'italic' | 'underline' | 'code' | 'formula' | 'formula-block' | 'heading' | 'list' | 'link'
+export type MarkdownColor = 'red' | 'orange' | 'yellow' | 'green' | 'blue' | 'purple'
+export type MarkdownFormat = 'bold' | 'italic' | 'underline' | 'strikethrough' | 'code' | 'formula' | 'formula-block' | 'heading' | 'list' | 'link' | `color-${MarkdownColor}`
 
 export interface MarkdownEditResult {
   text: string
@@ -10,6 +11,7 @@ const wrappers: Partial<Record<MarkdownFormat, [string, string, string]>> = {
   bold: ['**', '**', '加粗内容'],
   italic: ['*', '*', '斜体内容'],
   underline: [':underline[', ']', '下划线内容'],
+  strikethrough: ['~~', '~~', '删除内容'],
   code: ['`', '`', '代码'],
   formula: ['$', '$', 'a_i'],
   'formula-block': ['$$\n', '\n$$', '公式'],
@@ -18,7 +20,10 @@ const wrappers: Partial<Record<MarkdownFormat, [string, string, string]>> = {
 
 export function applyMarkdownFormat(text: string, start: number, end: number, format: MarkdownFormat): MarkdownEditResult {
   const selected = text.slice(start, end)
-  const wrapper = wrappers[format]
+  const color = format.startsWith('color-') ? format.slice('color-'.length) : ''
+  const wrapper: [string, string, string] | undefined = color
+    ? [':color[', `]{name=${color}}`, '彩色文字']
+    : wrappers[format]
   if (wrapper) {
     const [before, after, placeholder] = wrapper
     const body = selected || placeholder

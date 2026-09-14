@@ -6,6 +6,7 @@ import { listen } from '@tauri-apps/api/event'
 import type { Problem, Language, Platform, Submission, Verdict, RunResult, DebugResult, DebugSessionState, ToolchainInfo, DraftFileInfo, LuoguProblemPage, LuoguTag, LocalTestCase, LuoguRecordDetail, QojArchivePage, QojArchiveEntry, QojArchiveProblem } from '../types'
 import { useLearningStore } from './learningStore'
 import { useSettingsStore } from './settingsStore'
+import { selectWorkbenchResult } from '../utils/runDiagnostics'
 import { getDataCenterValue, saveDataCenterValue } from '../dataCenter'
 import { withOjDiagnostic } from '../diagnostics'
 
@@ -63,6 +64,7 @@ export const useProblemStore = defineStore('problem', () => {
   const allTestRunSummary = ref<null | { status: 'running' | 'passed' | 'failed'; text: string }>(null)
   const activeTestCaseId = ref('')
   const draftPath = ref('')
+  const localStatement = ref('')
   const contextFileName = computed(() => {
     const localName = draftPath.value.split(/[\\/]/).pop()
     if (localName) return localName
@@ -78,7 +80,7 @@ export const useProblemStore = defineStore('problem', () => {
   const luoguCaptchaImage = ref('')
   const luoguCaptcha = ref('')
   const luoguCaptchaProblemId = ref('')
-  const cfManualConfirmation = ref<null | { submissionId: string; platform: 'codeforces' | 'atcoder' | 'qoj'; problemId: string; title: string; tags: string[] }>(null)
+  const cfManualConfirmation = ref<null | { submissionId: string; platform: 'codeforces' | 'atcoder' | 'qoj'; problemId: string; title: string; tags: string[]; language: Language; code: string }>(null)
   let luoguPendingPayload: { problemId: string; code: string; language: Language; tags: string[]; languageId: number; enableO2: boolean } | null = null
   let saveTimer: ReturnType<typeof setTimeout> | null = null
   // 切题、打开本地文件和切换语言都涉及“保存旧草稿 → 更换标识 →
@@ -414,6 +416,23 @@ export const useProblemStore = defineStore('problem', () => {
     await invoke('save_submissions', { submissions: submissions.value })
   }
 
+  function submittedVersionName(timestamp: number, status: Verdict) {
+    const date = new Date(timestamp)
+    const part = (value: number) => String(value).padStart(2, '0')
+    const time = `${date.getFullYear()}-${part(date.getMonth() + 1)}-${part(date.getDate())} ${part(date.getHours())}:${part(date.getMinutes())}:${part(date.getSeconds())}`
+    return `${time} · ${status}`
+  }
+
+  async function saveSubmittedCodeVersion(platform: Platform, problemId: string, language: Language, code: string, timestamp: number, status: Verdict) {
+    await invoke('create_code_snapshot', {
+      platform,
+      problemId,
+      language,
+      code,
+      name: submittedVersionName(timestamp, status),
+    })
+  }
+
   // ── 筛选/翻页操作 ──
   async function toggleTag(tag: string) {
     const next = new Set(selectedTags.value)
@@ -597,6 +616,8 @@ export const useProblemStore = defineStore('problem', () => {
       luoguCaptchaProblemId.value = ''
       luoguPendingPayload = null
       if (sub.status === 'Accepted') await useLearningStore().recordAccepted(`luogu:${payload.problemId}`, payload.tags)
+      await saveSubmittedCodeVersion('luogu', payload.problemId, payload.language, payload.code, sub.timestamp, sub.status)
+        .catch((cause) => { error.value = `提交成功，但自动保存代码版本失败：${String(cause)}` })
     } catch (e) {
       luoguCaptchaImage.value = ''
       luoguCaptcha.value = ''
@@ -985,6 +1006,7 @@ export const useProblemStore = defineStore('problem', () => {
             : file.platform === 'qoj'
               ? qojProblemUrl(file.problemId)
             : undefined
+      localStatement.value = file.unbound ? (file.statementMarkdown ?? '') : ''
       currentProblem.value = boundProblem ?? {
         id: file.problemId,
         title: file.title || file.problemId.replace(/^\d+_/, '').split('_').join(' '),
@@ -992,7 +1014,7 @@ export const useProblemStore = defineStore('problem', () => {
         tags: [],
         contentFormat: 'markdown',
         description: file.unbound
-          ? '这是一个未绑定题目的本地代码文件。可以正常运行和调试，但不会提交到 OJ。'
+          ? localStatement.value.trim() || '这是一个未绑定题目的本地代码文件。可以正常运行和调试，但不会提交到 OJ。'
           : '正在根据本地记录恢复原题信息。',
         url: fallbackUrl,
       }
@@ -1018,6 +1040,20 @@ export const useProblemStore = defineStore('problem', () => {
     await openDraftFile(file)
   }
 
+  async function saveLocalStatement(markdown: string) {
+    if (!currentProblem.value || currentProblem.value.platform !== 'local' || !draftPath.value) {
+      throw new Error('只有资源管理器中的未绑定本地代码文件可以编辑题面')
+    }
+    await invoke('save_local_statement', { path: draftPath.value, statementMarkdown: markdown })
+    localStatement.value = markdown
+    currentProblem.value.description = markdown.trim()
+      ? markdown
+      : '这是一个未绑定题目的本地代码文件。可以正常运行和调试，但不会提交到 OJ。'
+    currentProblem.value.contentFormat = 'markdown'
+    const draft = draftFiles.value.find((item) => item.path === draftPath.value)
+    if (draft) draft.statementMarkdown = markdown
+  }
+
   function workspacePathChanged(oldPath: string, newPath: string) {
     if (!draftPath.value) return
     const oldNormalized = oldPath.replace(/\\/g, '/').toLowerCase()
@@ -1038,6 +1074,7 @@ export const useProblemStore = defineStore('problem', () => {
     if (saveTimer) clearTimeout(saveTimer)
     if (debugSession.value?.sessionId) await stopDebugSession()
     currentProblem.value = null
+    localStatement.value = ''
     currentCode.value = ''
     draftPath.value = ''
     draftDirty.value = false
@@ -1256,6 +1293,8 @@ export const useProblemStore = defineStore('problem', () => {
         const test = testCases.value[index]
         if (test) applyTestResult(test, result)
       })
+      // A later successful test must not hide an earlier compiler/runtime diagnostic.
+      runResult.value = selectWorkbenchResult(results)
       const lastTest = testCases.value[testCases.value.length - 1]
       if (lastTest) {
         activeTestCaseId.value = lastTest.id
@@ -1275,8 +1314,10 @@ export const useProblemStore = defineStore('problem', () => {
         allTestRunSummary.value = { status: 'failed', text: `测试点 ${firstFailureIndex + 1} · ${reason}` }
       }
     } catch (e) {
+      const message = String(e)
       allTestRunSummary.value = { status: 'failed', text: '运行全部失败' }
-      error.value = String(e)
+      error.value = message
+      runResult.value = { success: false, stdout: '', stderr: message, compileFailed: false, exitCode: null, durationMs: 0, timedOut: false }
     } finally {
       isRunning.value = false
     }
@@ -1388,7 +1429,7 @@ export const useProblemStore = defineStore('problem', () => {
       sub.message = submittedProblem.platform === 'codeforces'
         ? await invoke<string>('open_cf_manual_submit', { problemId: submittedProblem.id, code: currentCode.value })
         : await invoke<string>('open_atcoder_manual_submit', { problemUrl: submittedProblem.url, code: currentCode.value })
-      cfManualConfirmation.value = { submissionId: sub.id, platform: submittedProblem.platform, problemId: submittedProblem.id, title: submittedProblem.title, tags: submittedTags }
+      cfManualConfirmation.value = { submissionId: sub.id, platform: submittedProblem.platform, problemId: submittedProblem.id, title: submittedProblem.title, tags: submittedTags, language: submittedLanguage, code: currentCode.value }
       await persistSubmissions().catch(() => undefined)
     } catch (e: any) {
       sub.status = 'Failed'
@@ -1410,6 +1451,10 @@ export const useProblemStore = defineStore('problem', () => {
     }
     if (accepted) {
       await useLearningStore().recordAccepted(`${confirmation.platform}:${confirmation.problemId}`, confirmation.tags)
+    }
+    if (submission) {
+      await saveSubmittedCodeVersion(confirmation.platform, confirmation.problemId, confirmation.language, confirmation.code, submission.timestamp, submission.status)
+        .catch((cause) => { error.value = `提交成功，但自动保存代码版本失败：${String(cause)}` })
     }
     cfManualConfirmation.value = null
     await persistSubmissions().catch(() => undefined)
@@ -1475,6 +1520,7 @@ export const useProblemStore = defineStore('problem', () => {
     allTestRunSummary,
     activeTestCaseId,
     draftPath,
+    localStatement,
     contextFileName,
     draftSaveStatus,
     draftDirty,
@@ -1565,6 +1611,7 @@ export const useProblemStore = defineStore('problem', () => {
     loadDraftFiles,
     openDraftFile,
     createEmptyDraft,
+    saveLocalStatement,
     workspacePathChanged,
     workspacePathDeleted,
     submitCode,

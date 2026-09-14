@@ -39,10 +39,16 @@ const noteOpen = ref(false)
 const noteMode = ref<'read' | 'edit'>('edit')
 const noteLoading = ref(false)
 const noteError = ref('')
+const statementOpen = ref(false)
+const statementMode = ref<'read' | 'edit'>('edit')
+const statementDraft = ref('')
+const statementSaving = ref(false)
+const statementError = ref('')
+const statementDirty = computed(() => statementDraft.value !== store.localStatement)
 const difficultyColors: Record<string, string> = {
-  '暂无评定': '#bfbfbf', '入门': '#fe4c61', '普及-': '#f39c11', '普及': '#ffc116',
-  '普及+/提高-': '#52c41a', '提高': '#13c2c2', '提高+/省选-': '#3498db',
-  '省选/NOI-': '#9d3dcf', 'NOI/NOI+/CTS': '#7187d8',
+  '暂无评定': 'var(--color-tone-bfbfbf)', '入门': 'var(--color-tone-fe4c61)', '普及-': 'var(--color-tone-f39c11)', '普及': 'var(--color-tone-ffc116)',
+  '普及+/提高-': 'var(--color-tone-52c41a)', '提高': 'var(--color-tone-13c2c2)', '提高+/省选-': 'var(--color-tone-3498db)',
+  '省选/NOI-': 'var(--color-tone-9d3dcf)', 'NOI/NOI+/CTS': 'var(--color-tone-7187d8)',
 }
 
 function safeRichText(value = '', format: 'html' | 'markdown' | 'text' = 'text', baseUrl?: string) {
@@ -124,7 +130,7 @@ function safeRichText(value = '', format: 'html' | 'markdown' | 'text' = 'text',
 
 const renderedHtml = computed(() => {
   const p = store.currentProblem
-  if (!p) return '<p style="color:#858585">请从左侧列表选择一道题目</p>'
+  if (!p) return '<p style="color:var(--color-text-muted)">请从左侧列表选择一道题目</p>'
   if (store.isLoadingDetail) return '<div class="desc-placeholder">正在抓取题面和样例…</div>'
   const esc = (value = '') => value.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
   if (!p.description) return `<div class="desc-placeholder">题面抓取失败或暂不可用<br/><a href="${esc(p.url)}" target="_blank">在原 OJ 打开 →</a></div>`
@@ -213,6 +219,29 @@ async function closeProblemNote() {
   await notes.saveActive().catch((cause) => { noteError.value = String(cause) })
   noteOpen.value = false
 }
+
+function openLocalStatement() {
+  statementDraft.value = store.localStatement
+  statementMode.value = 'edit'
+  statementError.value = ''
+  statementOpen.value = true
+}
+
+async function saveLocalStatement() {
+  if (statementSaving.value || !statementDirty.value) return
+  statementSaving.value = true
+  statementError.value = ''
+  try { await store.saveLocalStatement(statementDraft.value) }
+  catch (cause) { statementError.value = cause instanceof Error ? cause.message : String(cause); throw cause }
+  finally { statementSaving.value = false }
+}
+
+async function closeLocalStatement() {
+  if (statementDirty.value) {
+    try { await saveLocalStatement() } catch { return }
+  }
+  statementOpen.value = false
+}
 </script>
 
 <template>
@@ -238,13 +267,18 @@ async function closeProblemNote() {
       <span v-if="store.currentProblem.memoryLimitMb" class="problem-desc__limit">{{ store.currentProblem.memoryLimitMb }} MB</span>
       <button class="note-btn" :disabled="noteLoading" title="打开这道题的本地 Markdown 笔记" @click="openProblemNote">{{ noteLoading ? '打开中…' : '📝 题目笔记' }}</button>
       <button
+        v-if="store.currentProblem.platform === 'local' && store.draftPath"
+        class="statement-edit-btn"
+        title="用 Markdown 记录这份本地代码对应的题面"
+        @click="openLocalStatement"
+      >📄 编辑题面</button>
+      <button
         v-if="store.currentProblem.platform !== 'local'"
         class="refresh-btn"
         :disabled="store.isLoadingDetail"
         title="忽略已有题面，重新从原 OJ 抓取；不会影响本地代码"
         @click="refreshStatement"
       >{{ store.isLoadingDetail ? '抓取中…' : '重新抓取' }}</button>
-      <span v-if="translationSupported && ai.translations[translationKey]" class="translation-badge" title="已从本地读取保存的 Markdown 译文">✓ 本地中文题面</span>
       <button
         v-if="translationSupported && !ai.translations[translationKey]"
         class="translate-btn"
@@ -299,6 +333,17 @@ async function closeProblemNote() {
         <MarkdownNoteEditor :model-value="notes.activeNote.content" :mode="noteMode" @update:model-value="notes.updateContent" @save="notes.saveActive" />
       </section>
     </div>
+
+    <div v-if="statementOpen" class="problem-note-modal" @click.self="closeLocalStatement">
+      <section>
+        <header>
+          <div><strong>{{ store.currentProblem?.title }} · 本地题面</strong><span :title="store.draftPath">{{ store.draftPath }}</span></div>
+          <nav><button :class="{ active: statementMode === 'read' }" @click="saveLocalStatement().then(() => { statementMode = 'read' }).catch(() => undefined)">预览</button><button :class="{ active: statementMode === 'edit' }" @click="statementMode = 'edit'">编辑</button><button v-if="statementMode === 'edit'" class="save" :disabled="statementSaving || !statementDirty" @click="saveLocalStatement">{{ statementSaving ? '保存中…' : statementDirty ? '保存' : '已保存' }}</button><button class="close" aria-label="关闭" @click="closeLocalStatement">×</button></nav>
+        </header>
+        <div v-if="statementError" class="problem-note-modal__error">题面保存失败：{{ statementError }}</div>
+        <MarkdownNoteEditor v-model="statementDraft" :mode="statementMode" placeholder="粘贴或输入题面，支持 Markdown、LaTeX 公式、表格和代码块…" @save="saveLocalStatement" />
+      </section>
+    </div>
   </div>
 </template>
 
@@ -307,7 +352,7 @@ async function closeProblemNote() {
   height: 100%;
   display: flex;
   flex-direction: column;
-  background: #1e1e1e;
+  background: var(--color-bg-app);
   overflow: hidden;
 
   &__header {
@@ -315,7 +360,7 @@ async function closeProblemNote() {
     align-items: center;
     gap: 12px;
     padding: 14px 20px;
-    border-bottom: 1px solid #3c3c3c;
+    border-bottom: 1px solid var(--color-border);
     flex-shrink: 0;
 
     &--empty {
@@ -326,8 +371,8 @@ async function closeProblemNote() {
   &__id {
     font-family: 'Consolas', 'Courier New', monospace;
     font-size: 12px;
-    color: #858585;
-    background: #2d2d30;
+    color: var(--color-text-muted);
+    background: var(--color-bg-control);
     padding: 2px 8px;
     border-radius: 4px;
   }
@@ -335,7 +380,7 @@ async function closeProblemNote() {
   &__title {
     font-size: 16px;
     font-weight: 600;
-    color: #d4d4d4;
+    color: var(--color-text-primary);
     flex: 1;
   }
 
@@ -352,11 +397,11 @@ async function closeProblemNote() {
     font-weight: 600;
     padding: 2px 10px;
     border-radius: 4px;
-    background: #3a351b;
-    color: #dcdcaa;
+    background: var(--color-tone-3a351b);
+    color: var(--color-warning);
   }
 
-  &__limit { font-size: 11px; color: #858585; white-space: nowrap; }
+  &__limit { font-size: 11px; color: var(--color-text-muted); white-space: nowrap; }
 
   &__content {
     flex: 1;
@@ -364,31 +409,31 @@ async function closeProblemNote() {
     padding: 20px;
     font-size: 14px;
     line-height: 1.75;
-    color: #d4d4d4;
+    color: var(--color-text-primary);
 
     :deep(.desc-h2) {
       font-size: 18px;
       font-weight: 600;
-      color: #569cd6;
+      color: var(--color-accent);
       margin: 16px 0 8px;
       padding-bottom: 6px;
-      border-bottom: 1px solid #3c3c3c;
+      border-bottom: 1px solid var(--color-border);
     }
 
     :deep(.desc-h3) {
       font-size: 15px;
       font-weight: 600;
-      color: #dcdcaa;
+      color: var(--color-warning);
       margin: 12px 0 6px;
     }
 
     :deep(.desc-code) {
-      background: #2d2d30;
+      background: var(--color-bg-control);
       padding: 1px 6px;
       border-radius: 3px;
       font-family: 'Consolas', 'Courier New', monospace;
       font-size: 13px;
-      color: #ce9178;
+      color: var(--color-code);
     }
 
     :deep(.desc-table) {
@@ -397,7 +442,7 @@ async function closeProblemNote() {
       width: 100%;
 
       td {
-        border: 1px solid #3c3c3c;
+        border: 1px solid var(--color-border);
         padding: 6px 12px;
         font-family: 'Consolas', 'Courier New', monospace;
         font-size: 13px;
@@ -405,23 +450,23 @@ async function closeProblemNote() {
     }
 
     :deep(.desc-latex) {
-      color: #c586c0;
+      color: var(--color-tone-c586c0);
       font-family: 'Consolas', 'Courier New', monospace;
       font-style: italic;
     }
 
     :deep(strong) {
-      color: #e0e0e0;
+      color: var(--color-tone-e0e0e0);
     }
 
     :deep(.desc-placeholder) {
       text-align: center;
       padding: 40px 0;
-      color: #858585;
+      color: var(--color-text-muted);
       line-height: 2;
 
       a {
-        color: #569cd6;
+        color: var(--color-accent);
         font-size: 14px;
       }
     }
@@ -430,10 +475,10 @@ async function closeProblemNote() {
       margin: 8px 0 14px;
       padding: 12px;
       overflow-x: auto;
-      background: #252526;
-      border: 1px solid #3c3c3c;
+      background: var(--color-bg-panel);
+      border: 1px solid var(--color-border);
       border-radius: 6px;
-      color: #d4d4d4;
+      color: var(--color-text-primary);
       font: 13px/1.5 'Cascadia Code', Consolas, monospace;
       white-space: pre;
     }
@@ -442,39 +487,45 @@ async function closeProblemNote() {
     :deep(ul), :deep(ol) { margin: 8px 0 12px 24px; }
     :deep(img) { max-width: 100%; height: auto; }
     :deep(table) { border-collapse: collapse; max-width: 100%; }
-    :deep(th), :deep(td) { border: 1px solid #4a4a4a; padding: 6px 9px; }
+    :deep(th), :deep(td) { border: 1px solid var(--color-border-input); padding: 6px 9px; }
     :deep(.tex-span), :deep(.tex-font-style-it), :deep(.katex) { display: inline; }
     :deep(.tex-span) { white-space: nowrap; }
     :deep(.tex-font-style-it) { font-family: KaTeX_Math, serif; font-style: italic; }
     :deep(.katex-display) { display: block; overflow-x: auto; overflow-y: hidden; }
+    :deep(.markdown-color-red) { color: var(--color-tone-ff7b72); }
+    :deep(.markdown-color-orange) { color: var(--color-tone-ffa657); }
+    :deep(.markdown-color-yellow) { color: var(--color-tone-e3d45b); }
+    :deep(.markdown-color-green) { color: var(--color-tone-7ee787); }
+    :deep(.markdown-color-blue) { color: var(--color-tone-79c0ff); }
+    :deep(.markdown-color-purple) { color: var(--color-tone-d2a8ff); }
   }
 }
-.translate-btn, .retranslate-btn { padding: 4px 9px; border: 1px solid #7c5bb5; border-radius: 4px; background: #34264b; color: #d8c3ff; cursor: pointer; &:disabled { opacity: .38; cursor: not-allowed; } }
-.retranslate-btn { border-color: #66527f; background: #2b2435; color: #bda8d7; }
-.translation-badge { flex: 0 0 auto; padding: 4px 8px; border: 1px solid #34745b; border-radius: 4px; background: #1f392f; color: #70d6ae; font-size: 11px; }
-.refresh-btn { padding: 4px 9px; border: 1px solid #4d718f; border-radius: 4px; background: #233544; color: #9cdcfe; cursor: pointer; white-space: nowrap; &:disabled { opacity: .45; cursor: wait; } }
-.note-btn { padding: 4px 9px; border: 1px solid #4c7d4d; border-radius: 4px; background: #203b27; color: #a9dbb1; cursor: pointer; white-space: nowrap; &:disabled { opacity: .45; cursor: wait; } }
+.translate-btn, .retranslate-btn { padding: 4px 9px; border: 1px solid var(--color-tone-7c5bb5); border-radius: 4px; background: var(--color-tone-34264b); color: var(--color-tone-d8c3ff); cursor: pointer; &:disabled { opacity: .38; cursor: not-allowed; } }
+.retranslate-btn { border-color: var(--color-tone-66527f); background: var(--color-tone-2b2435); color: var(--color-tone-bda8d7); }
+.refresh-btn { padding: 4px 9px; border: 1px solid var(--color-accent-border); border-radius: 4px; background: var(--color-tone-233544); color: var(--color-accent-text); cursor: pointer; white-space: nowrap; &:disabled { opacity: .45; cursor: wait; } }
+.note-btn { padding: 4px 9px; border: 1px solid var(--color-tone-4c7d4d); border-radius: 4px; background: var(--color-tone-203b27); color: var(--color-tone-a9dbb1); cursor: pointer; white-space: nowrap; &:disabled { opacity: .45; cursor: wait; } }
+.statement-edit-btn { padding: 4px 9px; border: 1px solid var(--color-tone-7b6841); border-radius: 4px; background: var(--color-tone-3a3020); color: var(--color-tone-e5c77d); cursor: pointer; white-space: nowrap; }
 .statement-samples { margin-top: 18px; }
 .statement-sample { margin-top: 16px; }
-.statement-sample__heading { display: flex; align-items: center; justify-content: space-between; gap: 12px; padding-bottom: 6px; border-bottom: 1px solid #3c3c3c; h2 { margin: 0; color: #569cd6; font-size: 18px; } button { padding: 4px 8px; border: 1px solid #4d718f; border-radius: 4px; background: #233544; color: #9cdcfe; font-size: 11px; cursor: pointer; } }
-.statement-io { margin-top: 10px; border: 1px solid #3c3c3c; border-radius: 6px; overflow: hidden; background: #181818; }
-.statement-io__heading { display: flex; align-items: center; justify-content: space-between; padding: 5px 9px; border-bottom: 1px solid #3c3c3c; background: #292929; color: #dcdcaa; font-size: 12px; font-weight: 600; button { padding: 2px 7px; border: 0; background: transparent; color: #75a9cf; font-size: 10px; cursor: pointer; } }
-.statement-io pre { max-height: 260px; overflow: auto; margin: 0; padding: 12px; color: #d4d4d4; font: 13px/1.5 'Cascadia Code', Consolas, monospace; white-space: pre; }
-:deep(.luogu-callout), :deep(.luogu-directive-fallback) { margin: 12px 0; padding: 10px 12px; border: 1px solid #4a4a4a; border-left-width: 4px; border-radius: 5px; background: #252526; }
+.statement-sample__heading { display: flex; align-items: center; justify-content: space-between; gap: 12px; padding-bottom: 6px; border-bottom: 1px solid var(--color-border); h2 { margin: 0; color: var(--color-accent); font-size: 18px; } button { padding: 4px 8px; border: 1px solid var(--color-accent-border); border-radius: 4px; background: var(--color-tone-233544); color: var(--color-accent-text); font-size: 11px; cursor: pointer; } }
+.statement-io { margin-top: 10px; border: 1px solid var(--color-border); border-radius: 6px; overflow: hidden; background: var(--color-bg-deep); }
+.statement-io__heading { display: flex; align-items: center; justify-content: space-between; padding: 5px 9px; border-bottom: 1px solid var(--color-border); background: var(--color-bg-control-alt); color: var(--color-warning); font-size: 12px; font-weight: 600; button { padding: 2px 7px; border: 0; background: transparent; color: var(--color-tone-75a9cf); font-size: 10px; cursor: pointer; } }
+.statement-io pre { max-height: 260px; overflow: auto; margin: 0; padding: 12px; color: var(--color-text-primary); font: 13px/1.5 'Cascadia Code', Consolas, monospace; white-space: pre; }
+:deep(.luogu-callout), :deep(.luogu-directive-fallback) { margin: 12px 0; padding: 10px 12px; border: 1px solid var(--color-border-input); border-left-width: 4px; border-radius: 5px; background: var(--color-bg-panel); }
 :deep(.luogu-callout summary) { cursor: pointer; font-weight: 600; }
-:deep(.luogu-callout-info) { border-left-color: #569cd6; }
-:deep(.luogu-callout-success) { border-left-color: #4ec9b0; }
-:deep(.luogu-callout-warning) { border-left-color: #dcdcaa; }
-:deep(.luogu-callout-error), :deep(.luogu-directive-fallback-anti-ai) { border-left-color: #f44747; }
-:deep(.luogu-directive-fallback-label) { margin-bottom: 5px; color: #dcdcaa; font-weight: 600; }
-:deep(.luogu-directive-fallback-inline) { padding: 1px 4px; border-radius: 3px; background: #3a3030; }
+:deep(.luogu-callout-info) { border-left-color: var(--color-accent); }
+:deep(.luogu-callout-success) { border-left-color: var(--color-success); }
+:deep(.luogu-callout-warning) { border-left-color: var(--color-warning); }
+:deep(.luogu-callout-error), :deep(.luogu-directive-fallback-anti-ai) { border-left-color: var(--color-danger-strong); }
+:deep(.luogu-directive-fallback-label) { margin-bottom: 5px; color: var(--color-warning); font-weight: 600; }
+:deep(.luogu-directive-fallback-inline) { padding: 1px 4px; border-radius: 3px; background: var(--color-tone-3a3030); }
 :deep(.luogu-align-center) { text-align: center; }
 :deep(.luogu-align-right) { text-align: right; }
-:deep(.luogu-epigraph footer) { margin-top: 6px; text-align: right; color: #999; }
+:deep(.luogu-epigraph footer) { margin-top: 6px; text-align: right; color: var(--color-tone-999); }
 :deep(.luogu-cute-table) { border-collapse: collapse; }
-:deep(.luogu-cute-table th), :deep(.luogu-cute-table td) { padding: 6px 9px; border: 1px solid #555; }
-.problem-desc__error { padding: 6px 20px; border-top: 1px solid #5a3030; color: #f48771; background: #2b1d1d; font-size: 11px; }
-.problem-desc__notice { padding: 6px 20px; border-top: 1px solid #315b4c; color: #4ec9b0; background: #192b25; font-size: 11px; }
-.solved-btn { padding: 4px 8px; border: 1px solid #555; border-radius: 4px; background: transparent; color: #aaa; font-size: 11px; cursor: pointer; &--active { border-color: #4ec9b0; color: #4ec9b0; background: #1b3029; } }
-.problem-note-modal { position: fixed; inset: 36px 0 0; z-index: 1600; display: grid; place-items: center; padding: 24px; background: #000a; > section { width: min(980px, 94vw); height: min(760px, 88vh); display: flex; flex-direction: column; overflow: hidden; border: 1px solid #505050; border-radius: 9px; background: #1e1e1e; box-shadow: 0 18px 60px #000b; > header { display: flex; align-items: center; gap: 12px; padding: 10px 13px; border-bottom: 1px solid #3c3c3c; background: #252526; > div { min-width: 0; flex: 1; display: flex; flex-direction: column; } strong { font-size: 14px; } span { overflow: hidden; color: #777; font: 8px Consolas, monospace; text-overflow: ellipsis; white-space: nowrap; } nav { display: flex; align-items: center; gap: 4px; } button { padding: 5px 9px; border: 1px solid #444; border-radius: 4px; background: #292929; color: #aaa; font-size: 10px; cursor: pointer; &.active { border-color: #4d718f; background: #20394a; color: #9cdcfe; } &.save { border-color: #39704f; background: #20372a; color: #8ad0a1; } &.close { padding: 0 7px; border: 0; background: transparent; font-size: 22px; } &:disabled { opacity: .5; } } } } &__error { padding: 6px 10px; color: #f48771; background: #341f1f; font-size: 10px; } }
+:deep(.luogu-cute-table th), :deep(.luogu-cute-table td) { padding: 6px 9px; border: 1px solid var(--color-border-strong); }
+.problem-desc__error { padding: 6px 20px; border-top: 1px solid var(--color-danger-border); color: var(--color-danger); background: var(--color-tone-2b1d1d); font-size: 11px; }
+.problem-desc__notice { padding: 6px 20px; border-top: 1px solid var(--color-tone-315b4c); color: var(--color-success); background: var(--color-tone-192b25); font-size: 11px; }
+.solved-btn { padding: 4px 8px; border: 1px solid var(--color-border-strong); border-radius: 4px; background: transparent; color: var(--color-text-soft); font-size: 11px; cursor: pointer; &--active { border-color: var(--color-success); color: var(--color-success); background: var(--color-tone-1b3029); } }
+.problem-note-modal { position: fixed; inset: 36px 0 0; z-index: 1600; display: grid; place-items: center; padding: 24px; background: var(--color-overlay); > section { width: min(980px, 94vw); height: min(760px, 88vh); display: flex; flex-direction: column; overflow: hidden; border: 1px solid var(--color-tone-505050); border-radius: 9px; background: var(--color-bg-app); box-shadow: 0 18px 60px var(--color-overlay-strong); > header { display: flex; align-items: center; gap: 12px; padding: 10px 13px; border-bottom: 1px solid var(--color-border); background: var(--color-bg-panel); > div { min-width: 0; flex: 1; display: flex; flex-direction: column; } strong { font-size: 14px; } span { overflow: hidden; color: var(--color-text-faint); font: 8px Consolas, monospace; text-overflow: ellipsis; white-space: nowrap; } nav { display: flex; align-items: center; gap: 4px; } button { padding: 5px 9px; border: 1px solid var(--color-border-control); border-radius: 4px; background: var(--color-bg-control-alt); color: var(--color-text-soft); font-size: 10px; cursor: pointer; &.active { border-color: var(--color-accent-border); background: var(--color-accent-surface-hover); color: var(--color-accent-text); } &.save { border-color: var(--color-tone-39704f); background: var(--color-tone-20372a); color: var(--color-tone-8ad0a1); } &.close { padding: 0 7px; border: 0; background: transparent; font-size: 22px; } &:disabled { opacity: .5; } } } } &__error { padding: 6px 10px; color: var(--color-danger); background: var(--color-danger-surface); font-size: 10px; } }
 </style>

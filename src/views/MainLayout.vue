@@ -107,7 +107,7 @@ onBeforeUnmount(() => { window.removeEventListener('pointermove', resize); windo
   flex-direction: column;
   width: 100vw;
   height: 100vh;
-  background: #1e1e1e;
+  background: var(--color-bg-app);
   overflow: hidden;
 
   &__body { flex: 1; min-height: 0; display: flex; overflow: hidden; }
@@ -122,7 +122,7 @@ onBeforeUnmount(() => { window.removeEventListener('pointermove', resize); windo
 
   &__desc {
     flex: 0 0 42%;
-    border-bottom: 1px solid #3c3c3c;
+    border-bottom: 1px solid var(--color-border);
     overflow: hidden;
   }
 
@@ -139,12 +139,12 @@ onBeforeUnmount(() => { window.removeEventListener('pointermove', resize); windo
   &__right {
     width: 300px;
     min-width: 300px;
-    border-left: 1px solid #3c3c3c;
+    border-left: 1px solid var(--color-border);
     overflow: hidden;
   }
 
   &__learning { flex: 1; min-width: 0; }
 }
-.resize-handle { flex: 0 0 5px; z-index: 20; background: transparent; transition: background .12s; &:hover { background: #569cd6; } &--x { cursor: col-resize; margin: 0 -2px; } &--y { width: 100%; height: 5px; flex-basis: 5px; cursor: row-resize; margin: -2px 0; } }
+.resize-handle { flex: 0 0 5px; z-index: 20; background: transparent; transition: background .12s; &:hover { background: var(--color-accent); } &--x { cursor: col-resize; margin: 0 -2px; } &--y { width: 100%; height: 5px; flex-basis: 5px; cursor: row-resize; margin: -2px 0; } }
 :global(body.is-resizing) { user-select: none; cursor: col-resize; }
 </style>

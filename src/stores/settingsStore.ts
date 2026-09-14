@@ -1,8 +1,9 @@
-import { reactive, ref } from 'vue'
+import { computed, reactive, ref, watch } from 'vue'
 import { defineStore } from 'pinia'
 import type { Language } from '../types'
 import { normalizeOutputLineLimit } from '../utils/outputLimit'
 import { getDataCenterValue, saveDataCenterValue } from '../dataCenter'
+import { applyResolvedTheme, normalizeThemeMode, resolveThemeMode, type ThemeMode } from '../theme'
 
 export interface ToolchainPaths {
   cppCompiler: string
@@ -31,6 +32,7 @@ export const useSettingsStore = defineStore('settings', () => {
     luoguPythonLanguageId?: number
     luoguEnableO2?: boolean
     toolchainPaths?: Partial<ToolchainPaths>
+    theme?: ThemeMode
   }>('settings', {})
 
   const codeTemplates = reactive<Record<Language, string>>({
@@ -40,6 +42,18 @@ export const useSettingsStore = defineStore('settings', () => {
   })
   const outputLineLimit = ref(normalizeOutputLineLimit(saved.outputLineLimit))
   const formatOnSave = ref(saved.formatOnSave ?? false)
+  const theme = ref<ThemeMode>(normalizeThemeMode(saved.theme))
+  const systemPrefersDark = ref(typeof window === 'undefined' || !window.matchMedia
+    ? true
+    : window.matchMedia('(prefers-color-scheme: dark)').matches)
+  const resolvedTheme = computed(() => resolveThemeMode(theme.value, systemPrefersDark.value))
+  if (typeof window !== 'undefined' && window.matchMedia) {
+    const media = window.matchMedia('(prefers-color-scheme: dark)')
+    const syncSystemTheme = (event: MediaQueryListEvent) => { systemPrefersDark.value = event.matches }
+    if (typeof media.addEventListener === 'function') media.addEventListener('change', syncSystemTheme)
+    else media.addListener(syncSystemTheme)
+  }
+  watch(resolvedTheme, applyResolvedTheme, { immediate: true })
   const cppStandards: CppStandard[] = ['c++17', 'c++20', 'c++23']
   const cppStandard = ref<CppStandard>(cppStandards.includes(saved.cppStandard as CppStandard) ? saved.cppStandard as CppStandard : 'c++23')
   const cppLanguageIds = [3, 4, 11, 12, 27, 28, 34]
@@ -69,6 +83,7 @@ export const useSettingsStore = defineStore('settings', () => {
       luoguPythonLanguageId: luoguPythonLanguageId.value,
       luoguEnableO2: luoguEnableO2.value,
       toolchainPaths,
+      theme: theme.value,
     })
   }
 
@@ -81,6 +96,8 @@ export const useSettingsStore = defineStore('settings', () => {
     codeTemplates,
     outputLineLimit,
     formatOnSave,
+    theme,
+    resolvedTheme,
     cppStandard,
     luoguCppLanguageId,
     luoguPythonLanguageId,

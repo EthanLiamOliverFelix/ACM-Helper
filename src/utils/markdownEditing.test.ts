@@ -18,6 +18,14 @@ describe('Markdown note editing helpers', () => {
     expect(applyMarkdownFormat('a\nb', 0, 3, 'list').text).toBe('- a\n- b')
   })
 
+  it('adds strikethrough and safe palette color markup', () => {
+    expect(applyMarkdownFormat('旧结论', 0, 3, 'strikethrough').text).toBe('~~旧结论~~')
+    expect(renderLuoguMarkdown('~~旧结论~~')).toContain('<del>旧结论</del>')
+    const colored = applyMarkdownFormat('重点', 0, 2, 'color-red').text
+    expect(colored).toBe(':color[重点]{name=red}')
+    expect(renderLuoguMarkdown(colored)).toContain('markdown-color-red')
+  })
+
   it('inserts an editable formula placeholder when selection is empty', () => {
     const result = applyMarkdownFormat('', 0, 0, 'formula')
     expect(result.text).toBe('$a_i$')

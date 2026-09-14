@@ -28,22 +28,22 @@ const store = useProblemStore()
   width: 250px;
   min-width: 250px;
   height: 100%;
-  background: #1e1e1e;
-  border-right: 1px solid #3c3c3c;
+  background: var(--color-bg-app);
+  border-right: 1px solid var(--color-border);
   display: flex;
   flex-direction: column;
   overflow: hidden;
 
   &__header {
     padding: 16px 20px;
-    border-bottom: 1px solid #2d2d2d;
+    border-bottom: 1px solid var(--color-tone-2d2d2d);
   }
 
   &__title {
     margin: 0;
     font-size: 18px;
     font-weight: 700;
-    color: #569cd6;
+    color: var(--color-accent);
     letter-spacing: 0.5px;
   }
 
@@ -54,12 +54,12 @@ const store = useProblemStore()
     padding: 8px;
   }
 
-  &__views { display: flex; gap: 5px; padding: 8px; button { flex: 1; padding: 7px 3px; border: 1px solid #333; border-radius: 5px; background: transparent; color: #858585; font-size: 11px; cursor: pointer; } button.active { background: #264f78; color: white; border-color: #569cd6; } }
+  &__views { display: flex; gap: 5px; padding: 8px; button { flex: 1; padding: 7px 3px; border: 1px solid var(--color-bg-subtle); border-radius: 5px; background: transparent; color: var(--color-text-muted); font-size: 11px; cursor: pointer; } button.active { background: var(--color-selection); color: var(--color-text-on-accent); border-color: var(--color-accent); } }
 
   &__divider {
     height: 1px;
     margin: 4px 12px;
-    background: #3c3c3c;
+    background: var(--color-border);
   }
 
   &__list {
@@ -78,22 +78,22 @@ const store = useProblemStore()
   border: none;
   border-radius: 6px;
   background: transparent;
-  color: #cccccc;
+  color: var(--color-tone-cccccc);
   font-size: 14px;
   cursor: pointer;
   transition: background 0.15s, color 0.15s;
 
   &:hover {
-    background: #2a2d2e;
-    color: #e0e0e0;
+    background: var(--color-bg-hover);
+    color: var(--color-tone-e0e0e0);
   }
 
   &--active {
-    background: #37373d;
-    color: #ffffff;
+    background: var(--color-bg-selected);
+    color: var(--color-text-on-accent);
 
     .platform-btn__icon {
-      background: #569cd6;
+      background: var(--color-accent);
     }
   }
 
@@ -104,8 +104,8 @@ const store = useProblemStore()
     width: 28px;
     height: 28px;
     border-radius: 6px;
-    background: #4a4a4a;
-    color: #fff;
+    background: var(--color-border-input);
+    color: var(--color-text-on-accent);
     font-size: 13px;
     font-weight: 700;
     flex-shrink: 0;

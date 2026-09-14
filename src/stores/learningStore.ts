@@ -3,6 +3,7 @@ import { defineStore } from 'pinia'
 import { invoke } from '@tauri-apps/api/core'
 import { SKILL_BY_ID, SKILL_TREE, skillPrerequisiteClosure } from '../data/skillTree'
 import type { ContestAnalysis, LearningProfile, Problem, SkillLearningPlan, SkillNode, SkillPlanProblem, SkillStatus } from '../types'
+import { skillPrerequisitesMet } from '../utils/skillUnlock'
 
 const REVIEW_AFTER_DAYS = 30
 const DAY_MS = 24 * 60 * 60 * 1000
@@ -15,7 +16,7 @@ export type SkillFreshness = {
 }
 
 export const useLearningStore = defineStore('learning', () => {
-  const profile = ref<LearningProfile>({ solvedProblems: [], learningSkills: [], masteredSkills: [], updatedAt: 0, skillEvidence: {}, skillPlans: {}, skillPlanPages: {}, skillLastPracticedAt: {} })
+  const profile = ref<LearningProfile>({ solvedProblems: [], learningSkills: [], masteredSkills: [], skippedSkills: [], updatedAt: 0, skillEvidence: {}, skillPlans: {}, skillPlanPages: {}, skillLastPracticedAt: {} })
   const selectedSkillId = ref<string | null>(null)
   const initialized = ref(false)
   const contestUrl = ref('')
@@ -25,16 +26,18 @@ export const useLearningStore = defineStore('learning', () => {
 
   const mastered = computed(() => new Set(profile.value.masteredSkills))
   const learning = computed(() => new Set(profile.value.learningSkills))
+  const skipped = computed(() => new Set(profile.value.skippedSkills))
   const progress = computed(() => Math.round(profile.value.masteredSkills.length / SKILL_TREE.length * 100))
 
   function statusOf(skill: SkillNode): SkillStatus {
     if (mastered.value.has(skill.id)) return 'mastered'
-    if ((learning.value.has(skill.id) || plansFor(skill.id).length) && skill.prerequisites.every((id) => mastered.value.has(id))) return 'learning'
-    return skill.prerequisites.every((id) => mastered.value.has(id)) ? 'available' : 'locked'
+    if (skipped.value.has(skill.id)) return 'skipped'
+    if ((learning.value.has(skill.id) || plansFor(skill.id).length) && skillPrerequisitesMet(skill, mastered.value, skipped.value)) return 'learning'
+    return skillPrerequisitesMet(skill, mastered.value, skipped.value) ? 'available' : 'locked'
   }
 
   function unmetPrerequisites(skill: SkillNode): SkillNode[] {
-    return skill.prerequisites.filter((id) => !mastered.value.has(id)).map((id) => SKILL_BY_ID.get(id)!).filter(Boolean)
+    return skill.prerequisites.filter((id) => !mastered.value.has(id) && !skipped.value.has(id)).map((id) => SKILL_BY_ID.get(id)!).filter(Boolean)
   }
 
   async function persist() {
@@ -60,6 +63,7 @@ export const useLearningStore = defineStore('learning', () => {
         solvedProblems: loaded.solvedProblems ?? [],
         learningSkills: loaded.learningSkills ?? [],
         masteredSkills: loaded.masteredSkills ?? [],
+        skippedSkills: (loaded.skippedSkills ?? []).filter((id) => SKILL_BY_ID.has(id) && !(loaded.masteredSkills ?? []).includes(id)),
         updatedAt: loaded.updatedAt ?? 0,
         skillEvidence: loaded.skillEvidence ?? {},
         skillPlans: legacyPlans,
@@ -83,6 +87,7 @@ export const useLearningStore = defineStore('learning', () => {
   function reconcilePlanMastery() {
     const learningSet = new Set(profile.value.learningSkills)
     const masteredSet = new Set(profile.value.masteredSkills)
+    const skippedSet = new Set(profile.value.skippedSkills)
     const solved = new Set(profile.value.solvedProblems)
     let changed = true
     while (changed) {
@@ -90,11 +95,12 @@ export const useLearningStore = defineStore('learning', () => {
       for (const skill of SKILL_TREE) {
         const plans = plansFor(skill.id)
         if (!plans.length) continue // 保留旧版本中没有题单的历史掌握记录。
-        const unlocked = skill.prerequisites.every((id) => masteredSet.has(id))
+        const unlocked = skillPrerequisitesMet(skill, masteredSet, skippedSet)
         // 重复练习不会撤销已经取得的掌握状态：任意一页完整完成即可。
         const complete = plans.some((plan) => plan.problems.length > 0 && plan.problems.every((problem) => solved.has(`${problem.platform}:${problem.id}`)))
         if (unlocked && complete) {
           if (!masteredSet.has(skill.id)) { masteredSet.add(skill.id); changed = true }
+          skippedSet.delete(skill.id)
           learningSet.delete(skill.id)
         } else {
           if (masteredSet.delete(skill.id)) changed = true
@@ -105,6 +111,17 @@ export const useLearningStore = defineStore('learning', () => {
     }
     profile.value.learningSkills = [...learningSet]
     profile.value.masteredSkills = [...masteredSet]
+    profile.value.skippedSkills = [...skippedSet]
+  }
+
+  async function toggleSkillSkipped(skillId: string) {
+    if (!SKILL_BY_ID.has(skillId) || mastered.value.has(skillId)) return
+    const next = new Set(profile.value.skippedSkills)
+    if (next.has(skillId)) next.delete(skillId)
+    else next.add(skillId)
+    profile.value.skippedSkills = [...next]
+    reconcilePlanMastery()
+    await persist()
   }
 
   async function startSkillPlan(skill: SkillNode, problems: SkillPlanProblem[]) {
@@ -260,5 +277,5 @@ export const useLearningStore = defineStore('learning', () => {
     }
   }
 
-  return { profile, selectedSkillId, initialized, contestUrl, contestAnalysis, isAnalyzing, error, mastered, progress, init, statusOf, unmetPrerequisites, plansFor, startSkillPlan, openSkillPlan, closeSkillPlan, planProgress, skillFreshness, toggleSolved, markSolved, recordAccepted, skillsForTags, knowledgeForTags, analyzeContest, analyzeContestProblems }
+  return { profile, selectedSkillId, initialized, contestUrl, contestAnalysis, isAnalyzing, error, mastered, skipped, progress, init, statusOf, unmetPrerequisites, plansFor, startSkillPlan, openSkillPlan, closeSkillPlan, planProgress, skillFreshness, toggleSkillSkipped, toggleSolved, markSolved, recordAccepted, skillsForTags, knowledgeForTags, analyzeContest, analyzeContestProblems }
 })

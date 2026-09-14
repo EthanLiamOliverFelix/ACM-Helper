@@ -190,6 +190,29 @@ export interface DraftFileInfo {
   path: string
   createdAt: number
   unbound: boolean
+  statementMarkdown: string
+}
+
+export interface CodeSnapshot {
+  id: string
+  name: string
+  createdAt: number
+  code: string
+}
+
+export interface CodeBranch {
+  name: string
+  snapshots: CodeSnapshot[]
+}
+
+export interface CodeHistory {
+  activeBranch: string
+  branches: CodeBranch[]
+}
+
+export interface CodeHistoryCheckout {
+  history: CodeHistory
+  code: string
 }
 
 export interface WorkspaceEntry {
@@ -216,7 +239,7 @@ export interface NoteDocument {
   updatedAt: number
 }
 
-export type SkillStatus = 'locked' | 'available' | 'learning' | 'mastered'
+export type SkillStatus = 'locked' | 'available' | 'learning' | 'skipped' | 'mastered'
 
 export interface SkillNode {
   id: string
@@ -232,6 +255,8 @@ export interface LearningProfile {
   solvedProblems: string[]
   learningSkills: string[]
   masteredSkills: string[]
+  /** Unlocks dependent skills without marking this skill or its problems as completed. */
+  skippedSkills: string[]
   updatedAt: number
   skillEvidence: Record<string, string[]>
   /** Latest plan kept for backward compatibility with older profiles. */

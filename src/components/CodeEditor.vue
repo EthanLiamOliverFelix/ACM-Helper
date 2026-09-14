@@ -7,6 +7,7 @@ import { monaco } from '../monaco'
 import { configureMonaco } from '../monaco'
 import { VueMonacoEditor } from '@guolao/vue-monaco-editor'
 import { formatCode } from '../utils/codeFormatter'
+import CodeVersionManager from './CodeVersionManager.vue'
 
 const store = useProblemStore()
 const settings = useSettingsStore()
@@ -143,6 +144,7 @@ watch(
 )
 watch(() => store.breakpoints, renderBreakpoints, { deep: true })
 watch(() => store.debugSession?.line, renderDebugLine)
+watch(() => settings.resolvedTheme, () => { editorKey.value++ })
 
 const editorOptions = {
   automaticLayout: true,
@@ -189,6 +191,7 @@ onBeforeUnmount(() => {
       </span>
       <button class="code-editor__format" :disabled="store.isFormatting || !store.currentCode.trim()" title="格式化文档 (Shift+Alt+F)" @click="formatDocument()">{{ store.isFormatting ? '格式化中…' : '格式化' }}</button>
       <button class="code-editor__reset" title="恢复为设置中的初始代码片段" @click="confirmResetCode">重置代码</button>
+      <CodeVersionManager />
       <span class="code-editor__shortcuts">Ctrl+F5 运行 · F5 调试 · Alt+F9 断点</span>
       <span v-if="store.formatError" class="code-editor__format-error" :title="store.formatError">{{ store.formatError }}</span>
       <span class="code-editor__saved" :class="`code-editor__saved--${store.draftSaveStatus}`">{{ { template: '尚未创建本地文件', saved: '✓ 已保存', saving: '保存中…', error: '保存失败' }[store.draftSaveStatus] }}</span>
@@ -200,7 +203,7 @@ onBeforeUnmount(() => {
         :key="editorKey"
         :language="LANGUAGE_MAP[store.currentLanguage]"
         :value="store.currentCode"
-        theme="vs-dark"
+        :theme="settings.resolvedTheme === 'light' ? 'vs' : 'vs-dark'"
         :options="editorOptions"
         @mount="handleMount"
         @change="handleChange"
@@ -214,7 +217,7 @@ onBeforeUnmount(() => {
   height: 100%;
   display: flex;
   flex-direction: column;
-  background: #1e1e1e;
+  background: var(--color-bg-app);
   overflow: hidden;
 
   &__toolbar {
@@ -222,30 +225,30 @@ onBeforeUnmount(() => {
     align-items: center;
     gap: 16px;
     padding: 8px 16px;
-    background: #252526;
-    border-bottom: 1px solid #3c3c3c;
+    background: var(--color-bg-panel);
+    border-bottom: 1px solid var(--color-border);
     flex-shrink: 0;
   }
 
   &__lang-select {
     display: flex;
     gap: 2px;
-    background: #1e1e1e;
+    background: var(--color-bg-app);
     border-radius: 4px;
     padding: 2px;
   }
 
   &__filename {
     font-size: 12px;
-    color: #858585;
+    color: var(--color-text-muted);
     font-family: 'Consolas', 'Courier New', monospace;
   }
 
-  &__shortcuts { margin-left: auto; color: #666; font-size: 10px; }
-  &__format { padding: 3px 8px; border: 1px solid #464646; border-radius: 3px; background: #303030; color: #bbb; font-size: 10px; cursor: pointer; &:hover:not(:disabled) { border-color: #569cd6; color: #fff; } &:disabled { opacity: .4; cursor: not-allowed; } }
-  &__format-error { max-width: 210px; overflow: hidden; color: #f48771; font-size: 9px; text-overflow: ellipsis; white-space: nowrap; }
-  &__reset { padding: 4px 7px; border: 1px solid #6f4b4b; border-radius: 4px; background: #342424; color: #e8aaaa; font-size: 10px; cursor: pointer; &:hover { border-color: #b35d5d; color: #ffd0d0; } }
-  &__saved { color: #4ec9b0; font-size: 11px; &--template { color: #777; } &--saving { color: #dcdcaa; } &--error { color: #f48771; } }
+  &__shortcuts { margin-left: auto; color: var(--color-text-disabled); font-size: 10px; }
+  &__format { padding: 3px 8px; border: 1px solid var(--color-tone-464646); border-radius: 3px; background: var(--color-bg-raised); color: var(--color-text-secondary); font-size: 10px; cursor: pointer; &:hover:not(:disabled) { border-color: var(--color-accent); color: var(--color-text-on-accent); } &:disabled { opacity: .4; cursor: not-allowed; } }
+  &__format-error { max-width: 210px; overflow: hidden; color: var(--color-danger); font-size: 9px; text-overflow: ellipsis; white-space: nowrap; }
+  &__reset { padding: 4px 7px; border: 1px solid var(--color-tone-6f4b4b); border-radius: 4px; background: var(--color-tone-342424); color: var(--color-tone-e8aaaa); font-size: 10px; cursor: pointer; &:hover { border-color: var(--color-tone-b35d5d); color: var(--color-tone-ffd0d0); } }
+  &__saved { color: var(--color-success); font-size: 11px; &--template { color: var(--color-text-faint); } &--saving { color: var(--color-warning); } &--error { color: var(--color-danger); } }
 
   &__editor {
     flex: 1;
@@ -258,19 +261,19 @@ onBeforeUnmount(() => {
   border: none;
   border-radius: 3px;
   background: transparent;
-  color: #cccccc;
+  color: var(--color-tone-cccccc);
   font-size: 12px;
   cursor: pointer;
   transition: background 0.12s, color 0.12s;
 
   &:hover {
-    background: #2a2d2e;
-    color: #e0e0e0;
+    background: var(--color-bg-hover);
+    color: var(--color-tone-e0e0e0);
   }
 
   &--active {
-    background: #37373d;
-    color: #ffffff;
+    background: var(--color-bg-selected);
+    color: var(--color-text-on-accent);
   }
 
   &:disabled { opacity: .45; cursor: not-allowed; }
@@ -280,10 +283,10 @@ onBeforeUnmount(() => {
 <style lang="scss">
 .monaco-editor .margin-view-overlays .acm-breakpoint,
 .monaco-editor .margin-view-overlays .acm-breakpoint-hover { border-radius: 50%; width: 11px !important; height: 11px !important; margin-left: 4px; margin-top: 4px; cursor: pointer; }
-.monaco-editor .margin-view-overlays .acm-breakpoint { background: #e64a4a; box-shadow: 0 0 0 2px #7d2424; }
-.monaco-editor .margin-view-overlays .acm-breakpoint-hover { background: #e64a4a55; box-shadow: inset 0 0 0 1px #e64a4a; }
-.monaco-editor .margin-view-overlays .acm-breakpoint-line { border-left: 2px solid #e64a4a; }
-.monaco-editor .view-overlays .acm-debug-current-line { background: rgba(255, 210, 73, .13); border-top: 1px solid rgba(255, 210, 73, .35); border-bottom: 1px solid rgba(255, 210, 73, .2); }
-.monaco-editor .margin-view-overlays .acm-debug-current-arrow::before { content: '▶'; color: #ffd249; font-size: 10px; line-height: 19px; margin-left: 2px; }
+.monaco-editor .margin-view-overlays .acm-breakpoint { background: var(--color-tone-e64a4a); box-shadow: 0 0 0 2px var(--color-tone-7d2424); }
+.monaco-editor .margin-view-overlays .acm-breakpoint-hover { background: var(--color-tone-e64a4a55); box-shadow: inset 0 0 0 1px var(--color-tone-e64a4a); }
+.monaco-editor .margin-view-overlays .acm-breakpoint-line { border-left: 2px solid var(--color-tone-e64a4a); }
+.monaco-editor .view-overlays .acm-debug-current-line { background: var(--color-tone-rgba-255-210-73-13); border-top: 1px solid var(--color-tone-rgba-255-210-73-35); border-bottom: 1px solid var(--color-tone-rgba-255-210-73-2); }
+.monaco-editor .margin-view-overlays .acm-debug-current-arrow::before { content: '▶'; color: var(--color-tone-ffd249); font-size: 10px; line-height: 19px; margin-left: 2px; }
 .monaco-editor .margin-view-overlays .line-numbers { cursor: pointer !important; }
 </style>

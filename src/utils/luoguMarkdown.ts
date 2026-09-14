@@ -16,6 +16,7 @@ type Node = {
 const calloutTitles: Record<string, string> = {
   info: '提示', success: '成功', warning: '警告', error: '错误',
 }
+const noteColors = new Set(['red', 'orange', 'yellow', 'green', 'blue', 'purple'])
 
 function hasOwn(value: object, key: string) {
   return Object.prototype.hasOwnProperty.call(value, key)
@@ -55,6 +56,14 @@ function transformDirective(node: Node) {
   if (node.type === 'textDirective' && (node.name === 'underline' || node.name === 'u')) {
     ;(node.data ??= {}).hName = 'u'
     return
+  }
+  if (node.type === 'textDirective' && node.name === 'color') {
+    const color = node.attributes?.name?.toLowerCase() ?? ''
+    if (noteColors.has(color)) {
+      ;(node.data ??= {}).hName = 'span'
+      addClass(node, 'markdown-color', `markdown-color-${color}`)
+      return
+    }
   }
   if (node.type === 'containerDirective' && node.name === 'align') {
     ;(node.data ??= {}).hName = 'div'

@@ -60,6 +60,37 @@ pub struct DraftFileInfo {
     path: String,
     created_at: u64,
     unbound: bool,
+    statement_markdown: String,
+}
+
+#[derive(Serialize, Deserialize, Clone)]
+#[serde(rename_all = "camelCase")]
+pub struct CodeSnapshot {
+    id: String,
+    name: String,
+    created_at: u64,
+    code: String,
+}
+
+#[derive(Serialize, Deserialize, Clone)]
+#[serde(rename_all = "camelCase")]
+pub struct CodeBranch {
+    name: String,
+    snapshots: Vec<CodeSnapshot>,
+}
+
+#[derive(Serialize, Deserialize, Clone)]
+#[serde(rename_all = "camelCase")]
+pub struct CodeHistory {
+    active_branch: String,
+    branches: Vec<CodeBranch>,
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct CodeHistoryCheckout {
+    history: CodeHistory,
+    code: String,
 }
 
 #[derive(Serialize)]
@@ -81,6 +112,7 @@ struct DraftMetadata {
     platform: String,
     problem_id: String,
     file_stem: String,
+    statement_markdown: String,
 }
 
 static DRAFT_DIRECTORY_CACHE: OnceLock<Mutex<HashMap<String, (PathBuf, String)>>> = OnceLock::new();
@@ -105,6 +137,309 @@ fn unix_now_millis() -> u128 {
         .duration_since(std::time::UNIX_EPOCH)
         .map(|duration| duration.as_millis())
         .unwrap_or(0)
+}
+
+fn new_code_history() -> CodeHistory {
+    CodeHistory {
+        active_branch: "main".into(),
+        branches: vec![CodeBranch {
+            name: "main".into(),
+            snapshots: Vec::new(),
+        }],
+    }
+}
+
+fn validate_history_label(value: &str, kind: &str) -> Result<String, String> {
+    let value = value.trim();
+    if value.is_empty() {
+        return Err(format!("{}不能为空", kind));
+    }
+    if value.chars().count() > 80 || value.chars().any(char::is_control) {
+        return Err(format!("{}不能超过 80 个字符或包含控制字符", kind));
+    }
+    Ok(value.to_string())
+}
+
+fn code_history_path(
+    app: &AppHandle,
+    platform: &str,
+    problem_id: &str,
+    language: &str,
+) -> Result<PathBuf, String> {
+    if !matches!(
+        platform,
+        "local" | "codeforces" | "luogu" | "atcoder" | "qoj"
+    ) {
+        return Err("不支持当前题目来源的版本管理".into());
+    }
+    if !matches!(language, "cpp" | "python" | "java") {
+        return Err("不支持当前代码语言的版本管理".into());
+    }
+    let problem_id = problem_id.trim();
+    if problem_id.is_empty() || problem_id.chars().count() > 240 {
+        return Err("题目标识无效".into());
+    }
+    // 使用固定 FNV-1a，避免题目标识含 Windows 特殊字符，也保证重启后路径稳定。
+    let identity = format!("{}\0{}\0{}", platform, problem_id, language);
+    let hash = identity
+        .as_bytes()
+        .iter()
+        .fold(0xcbf29ce484222325u64, |hash, byte| {
+            (hash ^ u64::from(*byte)).wrapping_mul(0x100000001b3)
+        });
+    Ok(data_center::root(app)?
+        .join("code-history")
+        .join(format!("{:016x}.json", hash)))
+}
+
+fn read_code_history(path: &Path) -> Result<CodeHistory, String> {
+    if !path.exists() {
+        return Ok(new_code_history());
+    }
+    let content =
+        std::fs::read_to_string(path).map_err(|e| format!("读取代码版本库失败: {}", e))?;
+    let mut history: CodeHistory =
+        serde_json::from_str(&content).map_err(|e| format!("代码版本库格式损坏: {}", e))?;
+    if history.branches.is_empty() {
+        history = new_code_history();
+    }
+    if !history
+        .branches
+        .iter()
+        .any(|branch| branch.name == history.active_branch)
+    {
+        history.active_branch = history.branches[0].name.clone();
+    }
+    Ok(history)
+}
+
+fn write_code_history(path: &Path, history: &CodeHistory) -> Result<(), String> {
+    if let Some(parent) = path.parent() {
+        std::fs::create_dir_all(parent).map_err(|e| format!("创建代码版本库失败: {}", e))?;
+    }
+    let content =
+        serde_json::to_vec_pretty(history).map_err(|e| format!("序列化代码版本库失败: {}", e))?;
+    std::fs::write(path, content).map_err(|e| format!("保存代码版本库失败: {}", e))
+}
+
+fn snapshot_id(history: &CodeHistory) -> String {
+    let count: usize = history
+        .branches
+        .iter()
+        .map(|branch| branch.snapshots.len())
+        .sum();
+    format!("v{}_{}", unix_now_millis(), count + 1)
+}
+
+fn commit_code_history(history: &mut CodeHistory, name: &str, code: String) -> Result<(), String> {
+    let name = validate_history_label(name, "版本名称")?;
+    let id = snapshot_id(history);
+    let branch = history
+        .branches
+        .iter_mut()
+        .find(|branch| branch.name == history.active_branch)
+        .ok_or_else(|| "当前分支不存在".to_string())?;
+    branch.snapshots.push(CodeSnapshot {
+        id,
+        name,
+        created_at: unix_now(),
+        code,
+    });
+    Ok(())
+}
+
+fn create_code_history_branch(
+    history: &mut CodeHistory,
+    name: &str,
+    code: String,
+) -> Result<(), String> {
+    let name = validate_history_label(name, "分支名称")?;
+    if history.branches.iter().any(|branch| branch.name == name) {
+        return Err("同名分支已经存在".into());
+    }
+    let active_is_empty = history
+        .branches
+        .iter()
+        .find(|branch| branch.name == history.active_branch)
+        .map(|branch| branch.snapshots.is_empty())
+        .unwrap_or(false);
+    if active_is_empty {
+        commit_code_history(history, "建立版本库", code.clone())?;
+    }
+    let id = snapshot_id(history);
+    history.branches.push(CodeBranch {
+        name: name.clone(),
+        snapshots: vec![CodeSnapshot {
+            id,
+            name: format!("创建分支 {}", name),
+            created_at: unix_now(),
+            code,
+        }],
+    });
+    history.active_branch = name;
+    Ok(())
+}
+
+fn remove_code_history_snapshot(
+    history: &mut CodeHistory,
+    branch_name: &str,
+    snapshot_id: &str,
+) -> Result<(), String> {
+    let branch = history
+        .branches
+        .iter_mut()
+        .find(|branch| branch.name == branch_name)
+        .ok_or_else(|| "找不到代码分支".to_string())?;
+    let before = branch.snapshots.len();
+    branch
+        .snapshots
+        .retain(|snapshot| snapshot.id != snapshot_id);
+    if branch.snapshots.len() == before {
+        return Err("找不到要删除的代码版本".into());
+    }
+    Ok(())
+}
+
+fn remove_code_history_branch(history: &mut CodeHistory, branch_name: &str) -> Result<(), String> {
+    if branch_name == history.active_branch {
+        return Err("请先切换到其他分支，再删除当前分支".into());
+    }
+    if history.branches.len() <= 1 {
+        return Err("版本库至少需要保留一个分支".into());
+    }
+    let before = history.branches.len();
+    history.branches.retain(|branch| branch.name != branch_name);
+    if history.branches.len() == before {
+        return Err("找不到要删除的代码分支".into());
+    }
+    Ok(())
+}
+
+fn history_file(
+    app: &AppHandle,
+    platform: &str,
+    problem_id: &str,
+    language: &str,
+) -> Result<(PathBuf, CodeHistory), String> {
+    let path = code_history_path(app, platform, problem_id, language)?;
+    let history = read_code_history(&path)?;
+    Ok((path, history))
+}
+
+#[tauri::command]
+pub fn load_code_history(
+    app: AppHandle,
+    platform: String,
+    problem_id: String,
+    language: String,
+) -> Result<CodeHistory, String> {
+    let (_, history) = history_file(&app, &platform, &problem_id, &language)?;
+    Ok(history)
+}
+
+#[tauri::command]
+pub fn create_code_snapshot(
+    app: AppHandle,
+    platform: String,
+    problem_id: String,
+    language: String,
+    name: String,
+    code: String,
+) -> Result<CodeHistory, String> {
+    let (path, mut history) = history_file(&app, &platform, &problem_id, &language)?;
+    commit_code_history(&mut history, &name, code)?;
+    write_code_history(&path, &history)?;
+    Ok(history)
+}
+
+#[tauri::command]
+pub fn create_code_branch(
+    app: AppHandle,
+    platform: String,
+    problem_id: String,
+    language: String,
+    name: String,
+    code: String,
+) -> Result<CodeHistory, String> {
+    let (path, mut history) = history_file(&app, &platform, &problem_id, &language)?;
+    create_code_history_branch(&mut history, &name, code)?;
+    write_code_history(&path, &history)?;
+    Ok(history)
+}
+
+#[tauri::command]
+pub fn switch_code_branch(
+    app: AppHandle,
+    platform: String,
+    problem_id: String,
+    language: String,
+    branch_name: String,
+) -> Result<CodeHistoryCheckout, String> {
+    let (path, mut history) = history_file(&app, &platform, &problem_id, &language)?;
+    let branch_name = validate_history_label(&branch_name, "分支名称")?;
+    let code = history
+        .branches
+        .iter()
+        .find(|branch| branch.name == branch_name)
+        .and_then(|branch| branch.snapshots.last())
+        .map(|snapshot| snapshot.code.clone())
+        .ok_or_else(|| "目标分支还没有可载入的版本".to_string())?;
+    history.active_branch = branch_name;
+    write_code_history(&path, &history)?;
+    Ok(CodeHistoryCheckout { history, code })
+}
+
+#[tauri::command]
+pub fn restore_code_snapshot(
+    app: AppHandle,
+    platform: String,
+    problem_id: String,
+    language: String,
+    branch_name: String,
+    snapshot_id: String,
+) -> Result<String, String> {
+    let (_, history) = history_file(&app, &platform, &problem_id, &language)?;
+    history
+        .branches
+        .iter()
+        .find(|branch| branch.name == branch_name)
+        .and_then(|branch| {
+            branch
+                .snapshots
+                .iter()
+                .find(|snapshot| snapshot.id == snapshot_id)
+        })
+        .map(|snapshot| snapshot.code.clone())
+        .ok_or_else(|| "找不到要回退的代码版本".to_string())
+}
+
+#[tauri::command]
+pub fn delete_code_snapshot(
+    app: AppHandle,
+    platform: String,
+    problem_id: String,
+    language: String,
+    branch_name: String,
+    snapshot_id: String,
+) -> Result<CodeHistory, String> {
+    let (path, mut history) = history_file(&app, &platform, &problem_id, &language)?;
+    remove_code_history_snapshot(&mut history, &branch_name, &snapshot_id)?;
+    write_code_history(&path, &history)?;
+    Ok(history)
+}
+
+#[tauri::command]
+pub fn delete_code_branch(
+    app: AppHandle,
+    platform: String,
+    problem_id: String,
+    language: String,
+    branch_name: String,
+) -> Result<CodeHistory, String> {
+    let (path, mut history) = history_file(&app, &platform, &problem_id, &language)?;
+    remove_code_history_branch(&mut history, &branch_name)?;
+    write_code_history(&path, &history)?;
+    Ok(history)
 }
 
 fn workspace_root(app: &AppHandle) -> Result<PathBuf, String> {
@@ -179,6 +514,7 @@ pub struct LearningProfile {
     solved_problems: Vec<String>,
     learning_skills: Vec<String>,
     mastered_skills: Vec<String>,
+    skipped_skills: Vec<String>,
     updated_at: u64,
     skill_evidence: HashMap<String, Vec<String>>,
     skill_plans: HashMap<String, SkillLearningPlan>,
@@ -316,6 +652,7 @@ fn migrate_legacy_directory(
         platform: platform.to_string(),
         problem_id: problem_id.to_string(),
         file_stem: file_stem.clone(),
+        statement_markdown: existing.statement_markdown,
     };
     for (language, ext) in [("cpp", "cpp"), ("python", "py"), ("java", "java")] {
         let source = legacy.join(format!("main.{}", extension(language)?));
@@ -463,6 +800,7 @@ pub async fn save_draft(
                 .and_then(|value| value.to_str())
                 .unwrap_or("main")
                 .to_string(),
+            statement_markdown: existing.statement_markdown,
         };
         write_source_metadata(&path, &metadata)?;
     }
@@ -543,6 +881,7 @@ pub async fn create_empty_draft(
             .and_then(|value| value.to_str())
             .unwrap_or("main")
             .to_string(),
+        statement_markdown: String::new(),
     };
     write_source_metadata(&path, &metadata)?;
     Ok(DraftFileInfo {
@@ -553,6 +892,7 @@ pub async fn create_empty_draft(
         path: path.to_string_lossy().into_owned(),
         created_at: now,
         unbound: true,
+        statement_markdown: String::new(),
     })
 }
 
@@ -565,6 +905,10 @@ fn draft_info_for_path(path: &Path) -> Option<DraftFileInfo> {
     }
     let language = source_language(path)?.to_string();
     let metadata = read_source_metadata(path);
+    let statement_markdown = metadata
+        .as_ref()
+        .map(|item| item.statement_markdown.clone())
+        .unwrap_or_default();
     let file_metadata = std::fs::metadata(path).ok();
     let created_at = metadata
         .as_ref()
@@ -635,6 +979,7 @@ fn draft_info_for_path(path: &Path) -> Option<DraftFileInfo> {
         path: path.to_string_lossy().into_owned(),
         created_at,
         unbound,
+        statement_markdown,
     })
 }
 
@@ -979,6 +1324,7 @@ pub async fn create_workspace_file(
             .and_then(|value| value.to_str())
             .unwrap_or("未命名")
             .to_string(),
+        statement_markdown: String::new(),
         created_at: unix_now(),
         platform: "local".into(),
         problem_id: format!("local_{}", unix_now_millis()),
@@ -1014,6 +1360,38 @@ pub async fn save_workspace_file(app: AppHandle, path: String, code: String) -> 
     tokio::fs::write(target, code)
         .await
         .map_err(|e| format!("保存代码文件失败: {}", e))
+}
+
+#[tauri::command]
+pub async fn save_local_statement(
+    app: AppHandle,
+    path: String,
+    statement_markdown: String,
+) -> Result<(), String> {
+    let root = workspace_root(&app)?;
+    let target = canonical_workspace_target(&root, Path::new(&path))?;
+    if target.is_dir() {
+        return Err("不能给文件夹保存题面".into());
+    }
+    let info =
+        draft_info_for_path(&target).ok_or_else(|| "无法识别当前本地代码文件".to_string())?;
+    if !info.unbound {
+        return Err("只允许编辑未绑定 OJ 的本地代码文件题面".into());
+    }
+    let mut metadata = read_source_metadata(&target).unwrap_or_else(|| DraftMetadata {
+        title: info.title.unwrap_or_else(|| info.problem_id.clone()),
+        created_at: info.created_at,
+        platform: "local".into(),
+        problem_id: info.problem_id,
+        file_stem: target
+            .file_stem()
+            .and_then(|value| value.to_str())
+            .unwrap_or("main")
+            .to_string(),
+        statement_markdown: String::new(),
+    });
+    metadata.statement_markdown = statement_markdown;
+    write_source_metadata(&target, &metadata)
 }
 
 #[tauri::command]
@@ -2301,6 +2679,7 @@ mod debug_tests {
                 platform: "luogu".into(),
                 problem_id: "P1000".into(),
                 file_stem: "P1000 超级玛丽游戏".into(),
+                statement_markdown: String::new(),
             })
             .unwrap(),
         )
@@ -2343,6 +2722,7 @@ mod debug_tests {
                 platform: String::new(),
                 problem_id: String::new(),
                 file_stem: String::new(),
+                statement_markdown: String::new(),
             })
             .unwrap(),
         )
@@ -2355,6 +2735,50 @@ mod debug_tests {
         assert_eq!(files[0].title.as_deref(), Some("Theatre Square"));
         assert_eq!(files[0].created_at, 1_700_000_000);
         let _ = fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn local_statement_is_loaded_from_the_source_sidecar() {
+        let root = temp_test_dir("local-statement");
+        let source = root.join("自定义题目.cpp");
+        fs::write(&source, "int main() {}\n").unwrap();
+        write_source_metadata(
+            &source,
+            &DraftMetadata {
+                title: "自定义题目".into(),
+                created_at: 1_700_000_000,
+                platform: "local".into(),
+                problem_id: "local_test".into(),
+                file_stem: "自定义题目".into(),
+                statement_markdown: "# 题目\n\n求 $a+b$。".into(),
+            },
+        )
+        .unwrap();
+
+        let draft = draft_info_for_path(&source).unwrap();
+        assert!(draft.unbound);
+        assert_eq!(draft.problem_id, "local_test");
+        assert_eq!(draft.statement_markdown, "# 题目\n\n求 $a+b$。");
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn code_history_supports_snapshots_branches_and_safe_deletion() {
+        let mut history = new_code_history();
+        commit_code_history(&mut history, "初始解法", "int main() {}".into()).unwrap();
+        let main_snapshot = history.branches[0].snapshots[0].id.clone();
+        create_code_history_branch(&mut history, "优化", "int main() { return 0; }".into())
+            .unwrap();
+        assert_eq!(history.active_branch, "优化");
+        assert_eq!(history.branches.len(), 2);
+        assert!(create_code_history_branch(&mut history, "优化", String::new()).is_err());
+        assert!(remove_code_history_branch(&mut history, "优化").is_err());
+
+        history.active_branch = "main".into();
+        remove_code_history_branch(&mut history, "优化").unwrap();
+        remove_code_history_snapshot(&mut history, "main", &main_snapshot).unwrap();
+        assert!(history.branches[0].snapshots.is_empty());
+        assert!(remove_code_history_branch(&mut history, "main").is_err());
     }
 
     #[test]
@@ -2371,6 +2795,7 @@ mod debug_tests {
                 platform: String::new(),
                 problem_id: String::new(),
                 file_stem: String::new(),
+                statement_markdown: String::new(),
             })
             .unwrap(),
         )

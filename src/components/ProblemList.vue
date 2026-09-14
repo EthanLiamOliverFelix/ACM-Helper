@@ -17,9 +17,9 @@ const sourceOptions = [
 ]
 
 const difficultyColor: Record<string, string> = {
-  '暂无评定': '#bfbfbf', '入门': '#fe4c61', '普及-': '#f39c11', '普及': '#ffc116',
-  '普及+/提高-': '#52c41a', '提高': '#13c2c2', '提高+/省选-': '#3498db',
-  '省选/NOI-': '#9d3dcf', 'NOI/NOI+/CTS': '#7187d8',
+  '暂无评定': 'var(--color-tone-bfbfbf)', '入门': 'var(--color-tone-fe4c61)', '普及-': 'var(--color-tone-f39c11)', '普及': 'var(--color-tone-ffc116)',
+  '普及+/提高-': 'var(--color-tone-52c41a)', '提高': 'var(--color-tone-13c2c2)', '提高+/省选-': 'var(--color-tone-3498db)',
+  '省选/NOI-': 'var(--color-tone-9d3dcf)', 'NOI/NOI+/CTS': 'var(--color-tone-7187d8)',
 }
 
 const ratingPresets = [
@@ -235,7 +235,7 @@ function onSearchInput() {
     flex-shrink: 0;
   }
 
-  &__tabs { display: flex; padding: 5px 9px; gap: 3px; border-bottom: 1px solid #333; button { flex: 1; padding: 6px; border: 0; border-radius: 4px; background: transparent; color: #888; cursor: pointer; font-size: 11px; } button.active { background: #37373d; color: white; } }
+  &__tabs { display: flex; padding: 5px 9px; gap: 3px; border-bottom: 1px solid var(--color-bg-subtle); button { flex: 1; padding: 6px; border: 0; border-radius: 4px; background: transparent; color: var(--color-tone-888); cursor: pointer; font-size: 11px; } button.active { background: var(--color-bg-selected); color: var(--color-text-on-subtle-selection); } }
 
   &__ratings {
     display: flex;
@@ -245,9 +245,9 @@ function onSearchInput() {
     flex-wrap: wrap;
   }
 
-  &__sources { display: flex; align-items: center; gap: 3px; padding: 7px 10px 2px; span { margin-right: 3px; color: #777; font-size: 10px; } button { padding: 4px 7px; border: 0; border-radius: 4px; background: transparent; color: #aaa; font-size: 10px; cursor: pointer; } button.active { background: #1684c7; color: white; } }
+  &__sources { display: flex; align-items: center; gap: 3px; padding: 7px 10px 2px; span { margin-right: 3px; color: var(--color-text-faint); font-size: 10px; } button { padding: 4px 7px; border: 0; border-radius: 4px; background: transparent; color: var(--color-text-soft); font-size: 10px; cursor: pointer; } button.active { background: var(--color-tone-1684c7); color: var(--color-text-on-accent); } }
   &__filter-row { display: flex; gap: 5px; padding: 3px 10px 5px; }
-  &__selected { display: flex; flex-wrap: wrap; align-items: center; gap: 4px; padding: 4px 10px 7px; color: #777; font-size: 10px; span { margin-right: 2px; } em { color: #666; font-style: normal; } button { padding: 2px 5px; border: 1px solid #3b5b72; border-radius: 3px; background: #203545; color: #9cdcfe; font-size: 9px; cursor: pointer; } }
+  &__selected { display: flex; flex-wrap: wrap; align-items: center; gap: 4px; padding: 4px 10px 7px; color: var(--color-text-faint); font-size: 10px; span { margin-right: 2px; } em { color: var(--color-text-disabled); font-style: normal; } button { padding: 2px 5px; border: 1px solid var(--color-tone-3b5b72); border-radius: 3px; background: var(--color-accent-surface); color: var(--color-accent-text); font-size: 9px; cursor: pointer; } }
 
   &__tags-filter {
     padding: 0 12px 6px;
@@ -268,7 +268,7 @@ function onSearchInput() {
     justify-content: space-between;
     padding: 6px 20px;
     font-size: 12px;
-    color: #858585;
+    color: var(--color-text-muted);
     flex-shrink: 0;
   }
 
@@ -288,78 +288,78 @@ function onSearchInput() {
     justify-content: center;
     gap: 12px;
     padding: 8px 12px;
-    border-top: 1px solid #3c3c3c;
+    border-top: 1px solid var(--color-border);
     flex-shrink: 0;
   }
 }
 
 .problem-item { content-visibility: auto; contain-intrinsic-size: 76px; }
-.problem-item__solved { display: inline-flex; align-items: center; justify-content: center; width: 13px; height: 13px; margin-right: 6px; border: 1px solid #36b36a; border-radius: 2px; color: #4ec982; font-size: 9px; font-weight: 700; vertical-align: 1px; }
-.filter-menu { position: relative; flex: 1; min-width: 0; summary { padding: 6px 7px; border: 1px solid #444; border-radius: 4px; color: #bbb; background: #252526; font-size: 10px; cursor: pointer; list-style: none; } &__popup { position: absolute; z-index: 50; top: calc(100% + 3px); left: 0; display: flex; flex-wrap: wrap; gap: 4px; width: 210px; max-height: 240px; overflow: auto; padding: 8px; border: 1px solid #555; border-radius: 5px; background: #252526; box-shadow: 0 8px 22px #0008; } &--wide .filter-menu__popup { left: auto; right: 0; width: 300px; } }
-.problem-import { display: flex; gap: 5px; padding: 8px 12px 2px; input { min-width: 0; flex: 1; padding: 6px 7px; border: 1px solid #3c3c3c; border-radius: 4px; background: #252526; color: #ddd; font-size: 10px; outline: none; } input:focus { border-color: #569cd6; } button { padding: 0 9px; border: 0; border-radius: 4px; background: #0e639c; color: white; font-size: 10px; cursor: pointer; } button:disabled { opacity: .4; } &__error { padding: 4px 12px; color: #f48771; font-size: 10px; line-height: 1.4; } }
+.problem-item__solved { display: inline-flex; align-items: center; justify-content: center; width: 13px; height: 13px; margin-right: 6px; border: 1px solid var(--color-tone-36b36a); border-radius: 2px; color: var(--color-success-bright); font-size: 9px; font-weight: 700; vertical-align: 1px; }
+.filter-menu { position: relative; flex: 1; min-width: 0; summary { padding: 6px 7px; border: 1px solid var(--color-border-control); border-radius: 4px; color: var(--color-text-secondary); background: var(--color-bg-panel); font-size: 10px; cursor: pointer; list-style: none; } &__popup { position: absolute; z-index: 50; top: calc(100% + 3px); left: 0; display: flex; flex-wrap: wrap; gap: 4px; width: 210px; max-height: 240px; overflow: auto; padding: 8px; border: 1px solid var(--color-border-strong); border-radius: 5px; background: var(--color-bg-panel); box-shadow: 0 8px 22px var(--color-tone-0008); } &--wide .filter-menu__popup { left: auto; right: 0; width: 300px; } }
+.problem-import { display: flex; gap: 5px; padding: 8px 12px 2px; input { min-width: 0; flex: 1; padding: 6px 7px; border: 1px solid var(--color-border); border-radius: 4px; background: var(--color-bg-panel); color: var(--color-text-strong); font-size: 10px; outline: none; } input:focus { border-color: var(--color-accent); } button { padding: 0 9px; border: 0; border-radius: 4px; background: var(--color-accent-strong); color: var(--color-text-on-accent); font-size: 10px; cursor: pointer; } button:disabled { opacity: .4; } &__error { padding: 4px 12px; color: var(--color-danger); font-size: 10px; line-height: 1.4; } }
 
 // ── 搜索输入 ──
 .search-input {
   min-width: 0;
   flex: 1;
   padding: 7px 10px;
-  border: 1px solid #3c3c3c;
+  border: 1px solid var(--color-border);
   border-radius: 6px;
-  background: #2d2d30;
-  color: #d4d4d4;
+  background: var(--color-bg-control);
+  color: var(--color-text-primary);
   font-size: 13px;
   outline: none;
   transition: border-color 0.15s;
 
-  &::placeholder { color: #6a6a6a; }
-  &:focus { border-color: #569cd6; }
+  &::placeholder { color: var(--color-tone-6a6a6a); }
+  &:focus { border-color: var(--color-accent); }
 }
-.search-button { flex: 0 0 auto; padding: 0 10px; border: 0; border-radius: 5px; background: #0e639c; color: white; cursor: pointer; font-size: 11px; &:disabled { opacity: .5; } }
+.search-button { flex: 0 0 auto; padding: 0 10px; border: 0; border-radius: 5px; background: var(--color-accent-strong); color: var(--color-text-on-accent); cursor: pointer; font-size: 11px; &:disabled { opacity: .5; } }
 
 // ── 难度快捷按钮 ──
 .rating-chip {
   padding: 2px 8px;
-  border: 1px solid #3c3c3c;
+  border: 1px solid var(--color-border);
   border-radius: 10px;
   background: transparent;
-  color: #9a9a9a;
+  color: var(--color-tone-9a9a9a);
   font-size: 11px;
   cursor: pointer;
   transition: all 0.12s;
 
-  &:hover { border-color: #569cd6; color: #d4d4d4; }
-  &--active { background: #264f78; border-color: #569cd6; color: #fff; }
+  &:hover { border-color: var(--color-accent); color: var(--color-text-primary); }
+  &--active { background: var(--color-selection); border-color: var(--color-accent); color: var(--color-text-on-accent); }
 }
 
 // ── 标签选择 ──
 .tag-chip {
   padding: 2px 7px;
-  border: 1px solid #3c3c3c;
+  border: 1px solid var(--color-border);
   border-radius: 4px;
   background: transparent;
-  color: #9a9a9a;
+  color: var(--color-tone-9a9a9a);
   font-size: 10px;
   cursor: pointer;
   transition: all 0.12s;
   white-space: nowrap;
 
-  &:hover { border-color: #9cdcfe; color: #d4d4d4; }
-  &--active { background: #1b3a2e; border-color: #4ec9b0; color: #4ec9b0; }
+  &:hover { border-color: var(--color-accent-text); color: var(--color-text-primary); }
+  &--active { background: var(--color-tone-1b3a2e); border-color: var(--color-success); color: var(--color-success); }
 }
 
 // ── 清除按钮 ──
 .clear-btn {
   background: none;
   border: none;
-  color: #f44747;
+  color: var(--color-danger-strong);
   font-size: 11px;
   cursor: pointer;
   padding: 2px 6px;
   border-radius: 3px;
-  &:hover { background: #3a1b1b; }
+  &:hover { background: var(--color-tone-3a1b1b); }
 }
-.tag-visibility-btn { padding: 3px 7px; border: 1px solid #444; border-radius: 4px; background: #292929; color: #aaa; font-size: 10px; cursor: pointer; &:hover, &.active { border-color: #4d718f; color: #9cdcfe; background: #203545; } }
-.catalog-refresh-btn { padding: 3px 7px; border: 1px solid #456b5b; border-radius: 4px; background: #20332b; color: #8fd5b2; font-size: 10px; cursor: pointer; &:disabled { opacity: .5; cursor: wait; } }
+.tag-visibility-btn { padding: 3px 7px; border: 1px solid var(--color-border-control); border-radius: 4px; background: var(--color-bg-control-alt); color: var(--color-text-soft); font-size: 10px; cursor: pointer; &:hover, &.active { border-color: var(--color-accent-border); color: var(--color-accent-text); background: var(--color-accent-surface); } }
+.catalog-refresh-btn { padding: 3px 7px; border: 1px solid var(--color-success-border); border-radius: 4px; background: var(--color-success-surface); color: var(--color-tone-8fd5b2); font-size: 10px; cursor: pointer; &:disabled { opacity: .5; cursor: wait; } }
 
 // ── 题目列表项 ──
 .problem-item {
@@ -372,12 +372,12 @@ function onSearchInput() {
   border-left: 3px solid transparent;
   transition: background 0.12s, border-color 0.12s;
 
-  &:hover { background: #2a2d2e; }
-  &--active { background: #37373d; border-left-color: #569cd6; }
+  &:hover { background: var(--color-bg-hover); }
+  &--active { background: var(--color-bg-selected); border-left-color: var(--color-accent); }
 
   &__id {
     font-size: 11px;
-    color: #858585;
+    color: var(--color-text-muted);
     font-family: 'Consolas', 'Courier New', monospace;
   }
 
@@ -390,7 +390,7 @@ function onSearchInput() {
 
   &__title {
     font-size: 14px;
-    color: #d4d4d4;
+    color: var(--color-text-primary);
     white-space: nowrap;
     overflow: hidden;
     text-overflow: ellipsis;
@@ -398,7 +398,7 @@ function onSearchInput() {
 
   &__meta { flex-shrink: 0; }
   &__difficulty { font-size: 11px; font-weight: 600; }
-  &__rating { font-size: 11px; color: #dcdcaa; font-weight: 600; }
+  &__rating { font-size: 11px; color: var(--color-warning); font-weight: 600; }
 
   &__tags {
     display: flex;
@@ -406,15 +406,15 @@ function onSearchInput() {
     gap: 4px;
   }
 }
-.problem-item__add { position: absolute; top: 8px; right: 7px; width: 23px; height: 23px; padding: 0; border: 1px solid #444; border-radius: 4px; background: #292929; color: #9cdcfe; cursor: pointer; opacity: 0; transition: opacity .12s; &.added { color: #4ec9b0; opacity: .65; } }
+.problem-item__add { position: absolute; top: 8px; right: 7px; width: 23px; height: 23px; padding: 0; border: 1px solid var(--color-border-control); border-radius: 4px; background: var(--color-bg-control-alt); color: var(--color-accent-text); cursor: pointer; opacity: 0; transition: opacity .12s; &.added { color: var(--color-success); opacity: .65; } }
 .problem-item:hover .problem-item__add { opacity: 1; }
 
 .tag {
   display: inline-block;
   padding: 1px 6px;
   border-radius: 3px;
-  background: #3c3c3c;
-  color: #9cdcfe;
+  background: var(--color-border);
+  color: var(--color-accent-text);
   font-size: 10px;
   font-family: 'Consolas', 'Courier New', monospace;
 }
@@ -422,21 +422,21 @@ function onSearchInput() {
 // ── 翻页按钮 ──
 .page-btn {
   padding: 4px 12px;
-  border: 1px solid #3c3c3c;
+  border: 1px solid var(--color-border);
   border-radius: 4px;
   background: transparent;
-  color: #cccccc;
+  color: var(--color-tone-cccccc);
   font-size: 12px;
   cursor: pointer;
   transition: all 0.12s;
 
-  &:hover:not(:disabled) { border-color: #569cd6; color: #fff; }
+  &:hover:not(:disabled) { border-color: var(--color-accent); color: var(--color-text-on-accent); }
   &:disabled { opacity: 0.3; cursor: not-allowed; }
 }
 
 .page-info {
   font-size: 12px;
-  color: #858585;
+  color: var(--color-text-muted);
   font-family: 'Consolas', 'Courier New', monospace;
 }
 </style>

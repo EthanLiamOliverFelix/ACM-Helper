@@ -34,6 +34,7 @@ tokio = { version = "1", features = ["sync", "process", "time", "io-util", "macr
 arboard = "3"
 rfd = "0.15"
 base64 = "0.22"
+image = { version = "0.25", default-features = false, features = ["png"] }
 pdf-extract = "0.7"
 
 [target.'cfg(windows)'.dependencies]

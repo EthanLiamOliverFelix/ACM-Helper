@@ -239,6 +239,13 @@ export interface NoteDocument {
   updatedAt: number
 }
 
+export interface NoteImageAsset {
+  id: string
+  reference: string
+  dataUrl: string
+  displayName: string
+}
+
 export type SkillStatus = 'locked' | 'available' | 'learning' | 'skipped' | 'mastered'
 
 export interface SkillNode {

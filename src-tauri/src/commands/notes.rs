@@ -1,12 +1,17 @@
+use base64::Engine;
 use serde::Serialize;
 use std::collections::HashMap;
+use std::fs;
 use std::path::{Path, PathBuf};
+use std::time::{SystemTime, UNIX_EPOCH};
 use tauri::AppHandle;
 
 use super::data_center;
 
 const UNFILED_FOLDER: &str = "未归档";
 const INDEX_FILE: &str = ".problem-note-index.json";
+const ASSET_FOLDER: &str = ".assets";
+const MAX_IMAGE_BYTES: u64 = 20 * 1024 * 1024;
 
 #[derive(Serialize, Clone)]
 #[serde(rename_all = "camelCase")]
@@ -25,6 +30,190 @@ pub struct NoteDocument {
     path: String,
     content: String,
     updated_at: u64,
+}
+
+#[derive(Serialize, Clone)]
+#[serde(rename_all = "camelCase")]
+pub struct NoteImageAsset {
+    id: String,
+    reference: String,
+    data_url: String,
+    display_name: String,
+}
+
+fn image_format(path: &Path) -> Option<(&'static str, &'static str)> {
+    match path.extension()?.to_str()?.to_ascii_lowercase().as_str() {
+        "png" => Some(("png", "image/png")),
+        "jpg" | "jpeg" => Some(("jpg", "image/jpeg")),
+        "gif" => Some(("gif", "image/gif")),
+        "webp" => Some(("webp", "image/webp")),
+        "bmp" => Some(("bmp", "image/bmp")),
+        _ => None,
+    }
+}
+
+fn note_assets_directory(app: &AppHandle, note_path: &str) -> Result<PathBuf, String> {
+    let root = notes_root(app)?;
+    let note = canonical_target(&root, Path::new(note_path))?;
+    if !is_markdown(&note) {
+        return Err("图片只能插入 Markdown 笔记".into());
+    }
+    let directory = canonical_root(&root)?.join(ASSET_FOLDER);
+    fs::create_dir_all(&directory).map_err(|error| format!("创建笔记图片目录失败: {error}"))?;
+    Ok(directory)
+}
+
+fn unique_asset_path(directory: &Path, extension: &str) -> PathBuf {
+    let timestamp = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|duration| duration.as_millis())
+        .unwrap_or(0);
+    for suffix in 0..10_000_u32 {
+        let id = if suffix == 0 {
+            format!("{timestamp}.{extension}")
+        } else {
+            format!("{timestamp}-{suffix}.{extension}")
+        };
+        let candidate = directory.join(id);
+        if !candidate.exists() {
+            return candidate;
+        }
+    }
+    directory.join(format!("{timestamp}-overflow.{extension}"))
+}
+
+fn asset_document(path: &Path, display_name: String) -> Result<NoteImageAsset, String> {
+    let id = path
+        .file_name()
+        .and_then(|value| value.to_str())
+        .ok_or_else(|| "笔记图片文件名无效".to_string())?
+        .to_string();
+    let (_, mime) = image_format(path).ok_or_else(|| "不支持该图片格式".to_string())?;
+    let metadata = fs::metadata(path).map_err(|error| format!("读取笔记图片信息失败: {error}"))?;
+    if metadata.len() > MAX_IMAGE_BYTES {
+        return Err("笔记图片不能超过 20 MB".into());
+    }
+    let bytes = fs::read(path).map_err(|error| format!("读取笔记图片失败: {error}"))?;
+    Ok(NoteImageAsset {
+        reference: format!("acm-note-image://{id}"),
+        data_url: format!(
+            "data:{mime};base64,{}",
+            base64::engine::general_purpose::STANDARD.encode(bytes)
+        ),
+        id,
+        display_name,
+    })
+}
+
+fn validate_asset_id(value: &str) -> Result<&str, String> {
+    if value.is_empty()
+        || value.len() > 128
+        || !value.chars().all(|character| {
+            character.is_ascii_alphanumeric() || matches!(character, '.' | '-' | '_')
+        })
+        || Path::new(value).file_name().and_then(|name| name.to_str()) != Some(value)
+    {
+        return Err("笔记图片引用无效".into());
+    }
+    image_format(Path::new(value)).ok_or_else(|| "笔记图片格式无效".to_string())?;
+    Ok(value)
+}
+
+#[tauri::command]
+pub async fn pick_note_image(
+    app: AppHandle,
+    note_path: String,
+) -> Result<Option<NoteImageAsset>, String> {
+    tauri::async_runtime::spawn_blocking(move || {
+        let directory = note_assets_directory(&app, &note_path)?;
+        let Some(source) = rfd::FileDialog::new()
+            .set_title("选择要插入笔记的图片")
+            .add_filter("图片", &["png", "jpg", "jpeg", "gif", "webp", "bmp"])
+            .pick_file()
+        else {
+            return Ok(None);
+        };
+        let (extension, _) = image_format(&source)
+            .ok_or_else(|| "支持 PNG、JPEG、GIF、WebP 和 BMP 图片".to_string())?;
+        let metadata =
+            fs::metadata(&source).map_err(|error| format!("读取图片信息失败: {error}"))?;
+        if metadata.len() > MAX_IMAGE_BYTES {
+            return Err("图片不能超过 20 MB".into());
+        }
+        let display_name = source
+            .file_name()
+            .unwrap_or_default()
+            .to_string_lossy()
+            .into_owned();
+        let target = unique_asset_path(&directory, extension);
+        fs::copy(&source, &target).map_err(|error| format!("导入笔记图片失败: {error}"))?;
+        asset_document(&target, display_name).map(Some)
+    })
+    .await
+    .map_err(|error| format!("打开图片选择器失败: {error}"))?
+}
+
+#[tauri::command]
+pub async fn paste_note_image(app: AppHandle, note_path: String) -> Result<NoteImageAsset, String> {
+    tauri::async_runtime::spawn_blocking(move || {
+        let directory = note_assets_directory(&app, &note_path)?;
+        let mut clipboard =
+            arboard::Clipboard::new().map_err(|error| format!("无法访问剪贴板: {error}"))?;
+        let clipboard_image = clipboard
+            .get_image()
+            .map_err(|_| "剪贴板中没有可用图片".to_string())?;
+        let width =
+            u32::try_from(clipboard_image.width).map_err(|_| "剪贴板图片宽度无效".to_string())?;
+        let height =
+            u32::try_from(clipboard_image.height).map_err(|_| "剪贴板图片高度无效".to_string())?;
+        if width == 0 || height == 0 || u64::from(width) * u64::from(height) > 40_000_000 {
+            return Err("剪贴板图片尺寸过大或无效".into());
+        }
+        let target = unique_asset_path(&directory, "png");
+        image::save_buffer_with_format(
+            &target,
+            clipboard_image.bytes.as_ref(),
+            width,
+            height,
+            image::ColorType::Rgba8,
+            image::ImageFormat::Png,
+        )
+        .map_err(|error| format!("保存剪贴板图片失败: {error}"))?;
+        asset_document(&target, "剪贴板图片.png".into())
+    })
+    .await
+    .map_err(|error| format!("读取剪贴板图片任务失败: {error}"))?
+}
+
+#[tauri::command]
+pub async fn load_note_image_assets(
+    app: AppHandle,
+    note_path: String,
+    asset_ids: Vec<String>,
+) -> Result<Vec<NoteImageAsset>, String> {
+    tauri::async_runtime::spawn_blocking(move || {
+        let directory = note_assets_directory(&app, &note_path)?;
+        asset_ids
+            .into_iter()
+            .map(|id| {
+                let id = validate_asset_id(&id)?;
+                let path = directory.join(id);
+                if !path.is_file() {
+                    return Err(format!("笔记图片不存在: {id}"));
+                }
+                let canonical_directory = fs::canonicalize(&directory)
+                    .map_err(|error| format!("无法访问笔记图片目录: {error}"))?;
+                let canonical_path = fs::canonicalize(&path)
+                    .map_err(|error| format!("无法访问笔记图片: {error}"))?;
+                if !canonical_path.starts_with(canonical_directory) {
+                    return Err("笔记图片超出资源目录".into());
+                }
+                asset_document(&canonical_path, id.to_string())
+            })
+            .collect()
+    })
+    .await
+    .map_err(|error| format!("加载笔记图片任务失败: {error}"))?
 }
 
 fn notes_root(app: &AppHandle) -> Result<PathBuf, String> {
@@ -510,5 +699,13 @@ mod tests {
     #[test]
     fn generated_names_replace_windows_forbidden_characters() {
         assert_eq!(safe_generated_name("P1 A:B/C?"), "P1 A_B_C_");
+    }
+
+    #[test]
+    fn note_image_ids_cannot_escape_the_asset_directory() {
+        assert!(validate_asset_id("1720000000000.png").is_ok());
+        assert!(validate_asset_id("../secret.png").is_err());
+        assert!(validate_asset_id("image.svg").is_err());
+        assert!(validate_asset_id("folder/image.png").is_err());
     }
 }

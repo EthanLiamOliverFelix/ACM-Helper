@@ -155,7 +155,7 @@ onBeforeUnmount(() => {
             <div><strong>{{ notes.activeNote.name.replace(/\.md$/i, '') }}</strong><span :title="notes.activeNote.path">{{ notes.activeNote.path }}</span></div>
             <div class="mode-tabs"><button :class="{ active: mode === 'read' }" @click="notes.saveActive(); mode = 'read'">只读</button><button :class="{ active: mode === 'edit' }" @click="mode = 'edit'">编辑</button><button v-if="mode === 'edit'" class="save" :disabled="notes.saving || !notes.dirty" @click="notes.saveActive">{{ notes.saving ? '保存中…' : notes.dirty ? '保存' : '已保存' }}</button></div>
           </header>
-          <MarkdownNoteEditor :model-value="notes.activeNote.content" :mode="mode" @update:model-value="notes.updateContent" @save="notes.saveActive" />
+          <MarkdownNoteEditor :model-value="notes.activeNote.content" :mode="mode" :note-path="notes.activeNote.path" @update:model-value="notes.updateContent" @save="notes.saveActive" />
         </template>
         <div v-else class="welcome"><strong>选择一篇笔记</strong><p>左侧可以创建笔记和文件夹；题目标题栏创建的笔记会先放进“未归档”。</p><p>长按文件或文件夹，再拖到目标位置即可移动。</p></div>
       </main>

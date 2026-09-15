@@ -330,7 +330,7 @@ async function closeLocalStatement() {
           <nav><button :class="{ active: noteMode === 'read' }" @click="notes.saveActive(); noteMode = 'read'">只读</button><button :class="{ active: noteMode === 'edit' }" @click="noteMode = 'edit'">编辑</button><button v-if="noteMode === 'edit'" class="save" :disabled="notes.saving || !notes.dirty" @click="notes.saveActive">{{ notes.saving ? '保存中…' : notes.dirty ? '保存' : '已保存' }}</button><button class="close" aria-label="关闭" @click="closeProblemNote">×</button></nav>
         </header>
         <div v-if="notes.error" class="problem-note-modal__error">{{ notes.error }}</div>
-        <MarkdownNoteEditor :model-value="notes.activeNote.content" :mode="noteMode" @update:model-value="notes.updateContent" @save="notes.saveActive" />
+        <MarkdownNoteEditor :model-value="notes.activeNote.content" :mode="noteMode" :note-path="notes.activeNote.path" @update:model-value="notes.updateContent" @save="notes.saveActive" />
       </section>
     </div>
 

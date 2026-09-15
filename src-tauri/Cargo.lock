@@ -2529,6 +2529,7 @@ dependencies = [
  "arboard",
  "base64 0.22.1",
  "chrono",
+ "image",
  "pdf-extract",
  "regex",
  "reqwest 0.12.28",

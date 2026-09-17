@@ -5,11 +5,11 @@ import DOMPurify from 'dompurify'
 import { renderLuoguMarkdown } from '../utils/luoguMarkdown'
 import { normalizeAiMarkdown } from '../utils/aiMarkdown'
 import { applyMarkdownFormat, type MarkdownColor, type MarkdownFormat } from '../utils/markdownEditing'
-import { createNoteImageMarkdown, extractNoteImageLayouts, replaceNoteImageSources, updateNoteImageLayout } from '../utils/noteImages'
+import { createNoteImageMarkdown, extractNoteImageLayouts, replaceNoteImageSources, resizeNoteImageWidth, updateNoteImageLayout } from '../utils/noteImages'
 import type { NoteImageAsset } from '../types'
 import 'katex/dist/katex.min.css'
 
-const props = defineProps<{ modelValue: string; mode: 'read' | 'edit'; placeholder?: string; notePath?: string }>()
+const props = defineProps<{ modelValue: string; mode: 'read' | 'edit'; placeholder?: string; notePath?: string; readonly?: boolean }>()
 const emit = defineEmits<{ 'update:modelValue': [value: string]; save: [] }>()
 const editor = ref<HTMLTextAreaElement | null>(null)
 const preview = ref<HTMLElement | null>(null)
@@ -17,8 +17,11 @@ const assetSources = shallowRef<Record<string, string>>({})
 const imageError = ref('')
 const importingImage = ref(false)
 const arrangingImages = ref(false)
+const selectedImageId = ref('')
+const resizeHandle = ref({ x: 0, y: 0 })
+const measuredCanvasHeight = ref(240)
 const imageLayouts = computed(() => extractNoteImageLayouts(props.modelValue))
-const canvasMinHeight = computed(() => Math.max(240, ...imageLayouts.value.map((image) => image.y + 320)))
+const canvasMinHeight = computed(() => Math.max(measuredCanvasHeight.value, 240, ...imageLayouts.value.map((image) => image.y + 320)))
 const rendered = computed(() => {
   const html = renderLuoguMarkdown(normalizeAiMarkdown(props.modelValue || ''))
   return DOMPurify.sanitize(replaceNoteImageSources(html, assetSources.value), {
@@ -109,13 +112,36 @@ function paste(event: ClipboardEvent) {
   void importImage('paste_note_image')
 }
 
-let drag: null | { id: string; startClientX: number; startClientY: number; startX: number; startY: number; width: number; element: HTMLImageElement } = null
+let drag: null | { kind: 'move' | 'resize'; pointerId: number; id: string; startClientX: number; startClientY: number; startX: number; startY: number; width: number; element: HTMLImageElement } = null
+
+function updateImageBounds() {
+  const images = Array.from(preview.value?.querySelectorAll<HTMLImageElement>('img[data-note-image-id]') ?? [])
+  const selected = images.find((image) => image.dataset.noteImageId === selectedImageId.value)
+  if (selected) resizeHandle.value = { x: selected.offsetLeft + selected.clientWidth, y: selected.offsetTop + selected.clientHeight }
+  measuredCanvasHeight.value = Math.max(240, ...images.map((image) => image.offsetTop + image.clientHeight + 36))
+}
+
+watch([rendered, () => props.mode, arrangingImages], async () => { await nextTick(); updateImageBounds() })
+watch(() => props.notePath, () => { selectedImageId.value = ''; measuredCanvasHeight.value = 240 })
+
+function startImageResize(event: PointerEvent) {
+  const element = Array.from(preview.value?.querySelectorAll<HTMLImageElement>('img[data-note-image-id]') ?? [])
+    .find((image) => image.dataset.noteImageId === selectedImageId.value)
+  if (!element || props.readonly || !arrangingImages.value || event.button !== 0) return
+  drag = { kind: 'resize', pointerId: event.pointerId, id: selectedImageId.value, startClientX: event.clientX, startClientY: event.clientY,
+    startX: element.offsetLeft, startY: element.offsetTop, width: element.clientWidth, element }
+  ;(event.currentTarget as HTMLElement).setPointerCapture?.(event.pointerId)
+}
 
 function startImageDrag(event: PointerEvent) {
-  if (!arrangingImages.value) return
+  if (props.readonly || !arrangingImages.value || event.button !== 0) return
   const element = (event.target as Element | null)?.closest<HTMLImageElement>('img[data-note-image-id]')
   if (!element) return
+  selectedImageId.value = element.dataset.noteImageId ?? ''
+  updateImageBounds()
   drag = {
+    kind: 'move',
+    pointerId: event.pointerId,
     id: element.dataset.noteImageId ?? '',
     startClientX: event.clientX,
     startClientY: event.clientY,
@@ -129,17 +155,26 @@ function startImageDrag(event: PointerEvent) {
 }
 
 function moveImage(event: PointerEvent) {
-  if (!drag || !preview.value) return
-  const x = Math.max(0, Math.min(drag.startX + event.clientX - drag.startClientX, preview.value.clientWidth - 40))
+  if (!drag || !preview.value || event.pointerId !== drag.pointerId) return
+  if (drag.kind === 'resize') {
+    const width = resizeNoteImageWidth(drag.width, event.clientX - drag.startClientX, preview.value.clientWidth - drag.startX)
+    drag.element.style.width = `${width}px`
+    drag.element.style.height = 'auto'
+    drag.element.dataset.noteWidth = String(width)
+    updateImageBounds()
+    return
+  }
+  const x = Math.max(0, Math.min(drag.startX + event.clientX - drag.startClientX, preview.value.clientWidth - drag.element.clientWidth))
   const y = Math.max(0, drag.startY + event.clientY - drag.startClientY)
   drag.element.style.left = `${Math.round(x)}px`
   drag.element.style.top = `${Math.round(y)}px`
   drag.element.dataset.noteX = String(Math.round(x))
   drag.element.dataset.noteY = String(Math.round(y))
+  updateImageBounds()
 }
 
-function stopImageDrag() {
-  if (!drag) return
+function stopImageDrag(event?: PointerEvent) {
+  if (!drag || (event && event.pointerId !== drag.pointerId)) return
   const { id, width, element } = drag
   drag = null
   emit('update:modelValue', updateNoteImageLayout(
@@ -147,17 +182,19 @@ function stopImageDrag() {
     id,
     Number(element.dataset.noteX ?? 0),
     Number(element.dataset.noteY ?? 0),
-    width,
+    Number(element.dataset.noteWidth ?? width),
   ))
 }
 
 window.addEventListener('pointermove', moveImage)
 window.addEventListener('pointerup', stopImageDrag)
 window.addEventListener('pointercancel', stopImageDrag)
+window.addEventListener('resize', updateImageBounds)
 onBeforeUnmount(() => {
   window.removeEventListener('pointermove', moveImage)
   window.removeEventListener('pointerup', stopImageDrag)
   window.removeEventListener('pointercancel', stopImageDrag)
+  window.removeEventListener('resize', updateImageBounds)
 })
 </script>
 
@@ -199,14 +236,19 @@ onBeforeUnmount(() => {
       @paste="paste"
     />
     <div v-else-if="modelValue.trim()" class="markdown-note__preview-shell">
-      <div v-if="imageLayouts.length" class="markdown-note__layout-toolbar"><span>{{ imageLayouts.length }} 张本地图片</span><button :class="{ active: arrangingImages }" @click="arrangingImages = !arrangingImages">{{ arrangingImages ? '完成排版' : '移动图片' }}</button><em v-if="arrangingImages">拖动图片即可保存位置</em></div>
-      <article ref="preview" class="markdown-note__preview" :class="{ arranging: arrangingImages }" :style="{ minHeight: `${canvasMinHeight}px` }" @pointerdown="startImageDrag" v-html="rendered" />
+      <div v-if="imageLayouts.length && !readonly" class="markdown-note__layout-toolbar"><span>{{ imageLayouts.length }} 张本地图片</span><button :class="{ active: arrangingImages }" @click="arrangingImages = !arrangingImages">{{ arrangingImages ? '完成排版' : '调整图片' }}</button><em v-if="arrangingImages">拖动图片移动，选中后拖动右下角缩放</em></div>
+      <div class="markdown-note__canvas">
+        <article ref="preview" class="markdown-note__preview" :class="{ arranging: arrangingImages }" :style="{ minHeight: `${canvasMinHeight}px` }" @pointerdown="startImageDrag" @load.capture="updateImageBounds" v-html="rendered" />
+        <button v-if="arrangingImages && !readonly && selectedImageId" class="markdown-note__resize-handle" :style="{ left: `${resizeHandle.x}px`, top: `${resizeHandle.y}px` }" title="拖动缩放图片（保持比例）" aria-label="拖动缩放图片" @pointerdown.prevent.stop="startImageResize">↘</button>
+      </div>
     </div>
     <div v-else class="markdown-note__empty">这篇笔记还没有内容，切换到编辑模式开始记录。</div>
   </div>
 </template>
 
 <style scoped lang="scss">
+.markdown-note__canvas { position: relative; }
+.markdown-note__resize-handle { position: absolute; z-index: 5; width: 24px; height: 24px; padding: 0; transform: translate(-50%, -50%); border: 1px solid var(--color-border-control); border-radius: 4px; background: var(--color-accent); color: var(--color-text-primary); cursor: nwse-resize; touch-action: none; }
 .markdown-note { min-height: 0; height: 100%; display: flex; flex-direction: column; background: var(--color-bg-app); }
 .markdown-note__toolbar { display: flex; align-items: center; gap: 4px; flex-wrap: wrap; padding: 7px 9px; border-bottom: 1px solid var(--color-border); background: var(--color-bg-panel); button, select { min-width: 27px; height: 27px; padding: 0 7px; border: 1px solid var(--color-border-control); border-radius: 4px; background: var(--color-bg-control); color: var(--color-text-strong); font-size: 11px; cursor: pointer; &:hover { border-color: var(--color-accent); background: var(--color-accent-surface-hover); color: var(--color-text-on-accent); } } select { min-width: 74px; } > span { width: 1px; height: 19px; margin: 0 3px; background: var(--color-border-control); } em { margin-left: auto; color: var(--color-text-faint); font-size: 9px; font-style: normal; } }
 textarea { box-sizing: border-box; width: 100%; min-height: 0; flex: 1; resize: none; padding: 18px 20px; border: 0; outline: 0; background: var(--color-bg-app); color: var(--color-text-primary); font: 13px/1.7 'Cascadia Code', Consolas, monospace; tab-size: 2; }

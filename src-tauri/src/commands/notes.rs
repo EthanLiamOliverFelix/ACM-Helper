@@ -54,9 +54,10 @@ fn image_format(path: &Path) -> Option<(&'static str, &'static str)> {
 
 fn note_assets_directory(app: &AppHandle, note_path: &str) -> Result<PathBuf, String> {
     let root = notes_root(app)?;
-    let note = canonical_target(&root, Path::new(note_path))?;
-    if !is_markdown(&note) {
-        return Err("图片只能插入 Markdown 笔记".into());
+    ensure_root(&root)?;
+    match canonical_target(&root, Path::new(note_path)) {
+        Ok(note) if note.is_file() && is_markdown(&note) => {}
+        _ => super::workspace::validate_statement_image_owner(app, note_path)?,
     }
     let directory = canonical_root(&root)?.join(ASSET_FOLDER);
     fs::create_dir_all(&directory).map_err(|error| format!("创建笔记图片目录失败: {error}"))?;

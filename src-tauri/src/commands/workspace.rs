@@ -1394,6 +1394,21 @@ pub async fn save_local_statement(
     write_source_metadata(&target, &metadata)
 }
 
+/// Image ownership is limited to editable, unbound source files inside the workspace.
+pub(crate) fn validate_statement_image_owner(app: &AppHandle, path: &str) -> Result<(), String> {
+    let root = workspace_root(app)?;
+    validate_statement_image_path(&root, Path::new(path))
+}
+
+fn validate_statement_image_path(root: &Path, path: &Path) -> Result<(), String> {
+    let target = canonical_workspace_target(root, path)?;
+    if target.is_file() && draft_info_for_path(&target).is_some_and(|info| info.unbound) {
+        Ok(())
+    } else {
+        Err("图片只能插入未绑定 OJ 的本地代码文件题面".into())
+    }
+}
+
 #[tauri::command]
 pub async fn rename_workspace_entry(
     app: AppHandle,
@@ -2750,7 +2765,8 @@ mod debug_tests {
                 platform: "local".into(),
                 problem_id: "local_test".into(),
                 file_stem: "自定义题目".into(),
-                statement_markdown: "# 题目\n\n求 $a+b$。".into(),
+                statement_markdown:
+                    "# 题目\n\n求 $a+b$。\n![图](acm-note-image://123.png#x=24,y=24,w=360)".into(),
             },
         )
         .unwrap();
@@ -2758,7 +2774,15 @@ mod debug_tests {
         let draft = draft_info_for_path(&source).unwrap();
         assert!(draft.unbound);
         assert_eq!(draft.problem_id, "local_test");
-        assert_eq!(draft.statement_markdown, "# 题目\n\n求 $a+b$。");
+        assert_eq!(
+            draft.statement_markdown,
+            "# 题目\n\n求 $a+b$。\n![图](acm-note-image://123.png#x=24,y=24,w=360)"
+        );
+        assert!(validate_statement_image_path(&root, &source).is_ok());
+        assert!(validate_statement_image_path(&root, &root).is_err());
+        let unsupported = root.join("other.txt");
+        fs::write(&unsupported, "not a source file").unwrap();
+        assert!(validate_statement_image_path(&root, &unsupported).is_err());
         let _ = fs::remove_dir_all(root);
     }
 

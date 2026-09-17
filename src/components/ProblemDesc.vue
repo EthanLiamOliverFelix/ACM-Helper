@@ -299,7 +299,16 @@ async function closeLocalStatement() {
       <span class="problem-desc__title">未选择题目</span>
     </div>
     <div class="problem-desc__content">
-      <div v-html="renderedHtml" @click="openStatementLink" />
+      <MarkdownNoteEditor
+        v-if="store.currentProblem?.platform === 'local' && store.localStatement.trim() && store.draftPath"
+        class="local-statement-view"
+        :model-value="store.localStatement"
+        :note-path="store.draftPath"
+        mode="read"
+        readonly
+        @click="openStatementLink"
+      />
+      <div v-else v-html="renderedHtml" @click="openStatementLink" />
       <section v-if="store.currentProblem?.samples?.length" class="statement-samples">
         <article v-for="(sample, index) in store.currentProblem.samples" :key="index" class="statement-sample">
           <div class="statement-sample__heading">
@@ -341,13 +350,14 @@ async function closeLocalStatement() {
           <nav><button :class="{ active: statementMode === 'read' }" @click="saveLocalStatement().then(() => { statementMode = 'read' }).catch(() => undefined)">预览</button><button :class="{ active: statementMode === 'edit' }" @click="statementMode = 'edit'">编辑</button><button v-if="statementMode === 'edit'" class="save" :disabled="statementSaving || !statementDirty" @click="saveLocalStatement">{{ statementSaving ? '保存中…' : statementDirty ? '保存' : '已保存' }}</button><button class="close" aria-label="关闭" @click="closeLocalStatement">×</button></nav>
         </header>
         <div v-if="statementError" class="problem-note-modal__error">题面保存失败：{{ statementError }}</div>
-        <MarkdownNoteEditor v-model="statementDraft" :mode="statementMode" placeholder="粘贴或输入题面，支持 Markdown、LaTeX 公式、表格和代码块…" @save="saveLocalStatement" />
+        <MarkdownNoteEditor v-model="statementDraft" :mode="statementMode" :note-path="store.draftPath" placeholder="粘贴或输入题面，支持 Markdown、LaTeX 公式、图片、表格和代码块…" @save="saveLocalStatement" />
       </section>
     </div>
   </div>
 </template>
 
 <style scoped lang="scss">
+.local-statement-view { height: auto; }
 .problem-desc {
   height: 100%;
   display: flex;

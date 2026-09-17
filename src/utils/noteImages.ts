@@ -11,6 +11,10 @@ function clampInteger(value: number, minimum: number, maximum: number) {
   return Math.min(maximum, Math.max(minimum, Math.round(value)))
 }
 
+export function resizeNoteImageWidth(width: number, deltaX: number, availableWidth: number) {
+  return clampInteger(width + deltaX, 80, Math.max(80, Math.min(2_000, availableWidth)))
+}
+
 export function extractNoteImageLayouts(markdown: string): NoteImageLayout[] {
   const layouts: NoteImageLayout[] = []
   const seen = new Set<string>()

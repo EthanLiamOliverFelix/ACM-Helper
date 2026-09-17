@@ -5,6 +5,10 @@ use scraper::{Html, Selector};
 use serde::{Deserialize, Serialize};
 use std::io::{BufRead, BufReader, Read, Write};
 use std::net::TcpListener;
+use std::sync::{
+    atomic::{AtomicBool, AtomicU64, Ordering},
+    Arc,
+};
 use tauri::{AppHandle, Emitter, Manager, State, WebviewUrl, WebviewWindowBuilder};
 
 /// Copy the current source code and open the official Codeforces submit page.
@@ -419,7 +423,9 @@ fn start_signal_server() -> Result<(u16, std::sync::mpsc::Receiver<String>), Str
 }
 
 /// 接收浏览器回传的大段页面内容。POST 避免把完整题面塞进 URL。
-fn start_payload_server() -> Result<(u16, std::sync::mpsc::Receiver<String>), String> {
+fn start_payload_server(
+    stop: Arc<AtomicBool>,
+) -> Result<(u16, std::sync::mpsc::Receiver<String>), String> {
     let listener =
         TcpListener::bind("127.0.0.1:0").map_err(|e| format!("启动本地服务失败: {}", e))?;
     let port = listener
@@ -427,54 +433,81 @@ fn start_payload_server() -> Result<(u16, std::sync::mpsc::Receiver<String>), St
         .map_err(|e| format!("获取端口失败: {}", e))?
         .port();
     let (tx, rx) = std::sync::mpsc::channel::<String>();
+    listener
+        .set_nonblocking(true)
+        .map_err(|e| format!("设置题面回调失败: {e}"))?;
     std::thread::spawn(move || {
-        if let Ok((mut stream, _)) = listener.accept() {
-            let _ = stream.set_read_timeout(Some(std::time::Duration::from_secs(45)));
-            let mut reader = BufReader::new(stream.try_clone().unwrap());
-            let mut first_line = String::new();
-            let _ = reader.read_line(&mut first_line);
-            let mut content_length = 0usize;
-            loop {
-                let mut header = String::new();
-                if reader.read_line(&mut header).is_err() || header == "\r\n" || header.is_empty() {
-                    break;
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(60);
+        while !stop.load(Ordering::Relaxed) && std::time::Instant::now() < deadline {
+            if let Ok((mut stream, _)) = listener.accept() {
+                let _ = stream.set_read_timeout(Some(std::time::Duration::from_secs(3)));
+                let mut reader = BufReader::new(stream.try_clone().unwrap());
+                let mut first_line = String::new();
+                let _ = reader.read_line(&mut first_line);
+                let mut content_length = 0usize;
+                loop {
+                    let mut header = String::new();
+                    if reader.read_line(&mut header).is_err()
+                        || header == "\r\n"
+                        || header.is_empty()
+                    {
+                        break;
+                    }
+                    if let Some(value) = header.to_ascii_lowercase().strip_prefix("content-length:")
+                    {
+                        content_length = value.trim().parse().unwrap_or(0);
+                    }
                 }
-                if let Some(value) = header.to_ascii_lowercase().strip_prefix("content-length:") {
-                    content_length = value.trim().parse().unwrap_or(0);
+                let mut body = vec![0u8; content_length.min(4 * 1024 * 1024)];
+                if content_length > 0 && reader.read_exact(&mut body).is_ok() {
+                    let encoded = String::from_utf8_lossy(&body);
+                    let decoded = urlencoding::decode(&encoded)
+                        .unwrap_or_else(|_| std::borrow::Cow::Borrowed(""))
+                        .into_owned();
+                    if !decoded.is_empty() {
+                        let _ = tx.send(decoded);
+                    }
                 }
+                let response = "HTTP/1.1 200 OK\r\nContent-Length: 2\r\nAccess-Control-Allow-Origin: *\r\nConnection: close\r\n\r\nOK";
+                let _ = stream.write_all(response.as_bytes());
+                return;
             }
-            let mut body = vec![0u8; content_length.min(4 * 1024 * 1024)];
-            if content_length > 0 && reader.read_exact(&mut body).is_ok() {
-                let encoded = String::from_utf8_lossy(&body);
-                let decoded = urlencoding::decode(&encoded)
-                    .unwrap_or_else(|_| std::borrow::Cow::Borrowed(""))
-                    .into_owned();
-                if !decoded.is_empty() {
-                    let _ = tx.send(decoded);
-                }
-            }
-            let response = "HTTP/1.1 200 OK\r\nContent-Length: 2\r\nAccess-Control-Allow-Origin: *\r\nConnection: close\r\n\r\nOK";
-            let _ = stream.write_all(response.as_bytes());
+            std::thread::sleep(std::time::Duration::from_millis(100));
         }
     });
     Ok((port, rx))
 }
 
 fn fetch_cf_html_via_webview(app: &AppHandle, url: &str) -> Result<String, String> {
-    if let Some(existing) = app.get_webview_window("cf_statement") {
-        existing.destroy().ok();
-    }
-    let (port, result_rx) = start_payload_server()?;
+    static NEXT_STATEMENT: AtomicU64 = AtomicU64::new(1);
+    let label = format!(
+        "cf_statement_{}",
+        NEXT_STATEMENT.fetch_add(1, Ordering::Relaxed)
+    );
+    let stop = Arc::new(AtomicBool::new(false));
+    let (port, result_rx) = start_payload_server(stop.clone())?;
     let window = WebviewWindowBuilder::new(
         app,
-        "cf_statement",
+        &label,
         WebviewUrl::External(url.parse().map_err(|e| format!("题目链接无效: {}", e))?),
     )
-    .title("Codeforces Statement")
+    .title("Codeforces 题面加载 — 关闭窗口可取消")
     .inner_size(900.0, 700.0)
     .visible(false)
     .build()
-    .map_err(|e| format!("创建题面浏览器失败: {}", e))?;
+    .map_err(|e| {
+        stop.store(true, Ordering::Relaxed);
+        format!("创建题面浏览器失败: {}", e)
+    })?;
+    let closed = stop.clone();
+    window.on_window_event(move |event| {
+        if matches!(
+            event,
+            tauri::WindowEvent::Destroyed | tauri::WindowEvent::CloseRequested { .. }
+        ) {
+            closed.store(true, Ordering::Relaxed);
+        }
+    });
     let js = format!(
         r#"(function() {{
             if (window.__acmStatementSent) return;
@@ -489,16 +522,29 @@ fn fetch_cf_html_via_webview(app: &AppHandle, url: &str) -> Result<String, Strin
         }})();"#,
         port
     );
-    let injector = window.clone();
-    std::thread::spawn(move || {
-        for _ in 0..40 {
-            std::thread::sleep(std::time::Duration::from_millis(750));
-            let _ = injector.eval(&js);
+    let started = std::time::Instant::now();
+    let mut shown = false;
+    let result = loop {
+        if stop.load(Ordering::Relaxed) {
+            break Err("已取消 Codeforces 题面加载".to_string());
         }
-    });
-    let result = result_rx
-        .recv_timeout(std::time::Duration::from_secs(35))
-        .map_err(|_| "Codeforces 浏览器题面加载超时，请先在官方窗口完成人机验证".to_string());
+        if started.elapsed() >= std::time::Duration::from_secs(60) {
+            break Err("Codeforces 浏览器题面加载超时，请重试并在窗口中完成人机验证".to_string());
+        }
+        let _ = window.eval(&js);
+        match result_rx.recv_timeout(std::time::Duration::from_millis(750)) {
+            Ok(html) => break Ok(html),
+            Err(std::sync::mpsc::RecvTimeoutError::Disconnected) => {
+                break Err("Codeforces 题面回调已结束，请重试".to_string())
+            }
+            Err(std::sync::mpsc::RecvTimeoutError::Timeout) => {}
+        }
+        if !shown && started.elapsed() >= std::time::Duration::from_secs(5) {
+            let _ = window.show();
+            shown = true;
+        }
+    };
+    stop.store(true, Ordering::Relaxed);
     window.destroy().ok();
     result
 }
@@ -656,6 +702,12 @@ pub async fn fetch_problems_cf() -> Result<Vec<Problem>, String> {
 }
 
 /// 抓取 Codeforces 题面、输入输出说明与样例。
+fn is_cf_statement_html(html: &str) -> bool {
+    let document = Html::parse_document(html);
+    let selector = Selector::parse(".problem-statement .title").unwrap();
+    document.select(&selector).next().is_some()
+}
+
 #[tauri::command]
 pub async fn fetch_problem_detail_cf(
     app: AppHandle,
@@ -673,36 +725,44 @@ pub async fn fetch_problem_detail_cf(
     );
 
     let client = build_client()?;
-    let mut response = client
-        .get(&url)
-        .send()
-        .await
-        .map_err(|e| format!("抓取题面失败: {}", e))?;
-    // Codeforces 主站有时会对非浏览器请求返回 403；官方 m1 镜像提供相同题面。
-    if response.status() == reqwest::StatusCode::FORBIDDEN {
-        let mirror_url = format!(
-            "https://m1.codeforces.com/problemset/problem/{}/{}",
-            contest_id, index
-        );
-        response = client
-            .get(mirror_url)
+    let mirror_url = format!("https://m1.codeforces.com/problemset/problem/{contest_id}/{index}");
+    let mut loaded = None;
+    let mut failures = Vec::new();
+    for (site, target) in [("主站", &url), ("镜像", &mirror_url)] {
+        match client
+            .get(target)
+            .timeout(std::time::Duration::from_secs(15))
             .send()
             .await
-            .map_err(|e| format!("从 Codeforces 镜像抓取题面失败: {}", e))?;
+        {
+            Ok(response) if response.status().is_success() => match response.text().await {
+                Ok(body) if is_cf_statement_html(&body) => {
+                    loaded = Some(body);
+                    break;
+                }
+                Ok(_) => failures.push(format!("{site}返回验证页或无效题面")),
+                Err(error) => failures.push(format!("{site}读取失败: {error}")),
+            },
+            Ok(response) => failures.push(format!("{site} HTTP {}", response.status())),
+            Err(error) => failures.push(format!("{site}连接失败: {error}")),
+        }
     }
-    if !response.status().is_success() {
-        return Err(format!("抓取题面失败: HTTP {}", response.status()));
-    }
-    let mut html = response
-        .text()
+    // WebView 使用真实浏览器和已有会话，不导出 Cookie，也不绕过人机验证。
+    // 阻塞等待放入专用线程，避免占用异步执行器，影响其他网站调用。
+    let html = if let Some(body) = loaded {
+        body
+    } else {
+        let browser_app = app.clone();
+        let browser_url = url.clone();
+        tauri::async_runtime::spawn_blocking(move || {
+            fetch_cf_html_via_webview(&browser_app, &browser_url)
+        })
         .await
-        .map_err(|e| format!("读取题面失败: {}", e))?;
-    if html.contains("Just a moment")
-        || html.contains("_cf_chl_opt")
-        || html.contains("Your browser is being checked")
-        || !html.contains("problem-statement")
-    {
-        html = fetch_cf_html_via_webview(&app, &url)?;
+        .map_err(|e| format!("题面浏览器任务失败: {e}"))?
+        .map_err(|e| format!("{e}（{}）", failures.join("；")))?
+    };
+    if !is_cf_statement_html(&html) {
+        return Err("Codeforces 未返回有效题面，未覆盖原有内容".into());
     }
     let document = Html::parse_document(&html);
     let title_selector = Selector::parse(".problem-statement .title").unwrap();
@@ -1217,6 +1277,28 @@ pub async fn inspect_cf_account(app: AppHandle) -> Result<AccountStatus, String>
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn browser_fallback_rejects_challenge_pages_and_accepts_real_statements() {
+        assert!(!super::is_cf_statement_html(
+            "Just a moment<script>var selector='problem-statement';</script>"
+        ));
+        assert!(!super::is_cf_statement_html(
+            "<div class='problem-statement'>Loading</div>"
+        ));
+        assert!(super::is_cf_statement_html("<div class='problem-statement'><div class='header'><div class='title'>A. Test</div></div><p>Body</p></div>"));
+    }
+
+    #[test]
+    fn cancelled_statement_callback_releases_receiver() {
+        let stop = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
+        let (_, rx) = super::start_payload_server(stop.clone()).unwrap();
+        stop.store(true, std::sync::atomic::Ordering::Relaxed);
+        assert!(matches!(
+            rx.recv_timeout(std::time::Duration::from_secs(2)),
+            Err(std::sync::mpsc::RecvTimeoutError::Disconnected)
+        ));
+    }
+
     use super::*;
 
     #[test]

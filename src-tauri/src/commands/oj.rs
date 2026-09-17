@@ -614,13 +614,24 @@ async fn fetch_atcoder(url: &str) -> Result<Problem, String> {
     let html = fetch_text_with_system_fallback(normalized, "en-US,en;q=0.9")
         .await
         .map_err(|e| format!("抓取 AtCoder 题面失败: {}", e))?;
-    let document = Html::parse_document(&html);
+    parse_atcoder_page(normalized, &id, &html)
+}
+
+fn parse_atcoder_page(normalized: &str, id: &str, html: &str) -> Result<Problem, String> {
+    let document = Html::parse_document(html);
     let title_selector = Selector::parse("span.h2").unwrap();
     let raw_title = document
         .select(&title_selector)
         .next()
-        .map(clean_text)
-        .unwrap_or_else(|| id.clone());
+        .map(|element| {
+            element
+                .children()
+                .filter_map(|node| node.value().as_text().map(|text| text.to_string()))
+                .collect::<String>()
+                .trim()
+                .to_string()
+        })
+        .unwrap_or_else(|| id.to_string());
     let title = raw_title
         .split_once(" - ")
         .map(|(_, title)| title.to_string())
@@ -670,6 +681,10 @@ async fn fetch_atcoder(url: &str) -> Result<Problem, String> {
             );
         } else if lower.contains("problem statement") {
             description = Some(body);
+        } else if lower == "constraints" {
+            if let Some(description) = description.as_mut() {
+                description.push_str(&format!("<h3>Constraints</h3>{body}"));
+            }
         } else if lower == "input" || lower.contains("input format") {
             input = Some(body);
         } else if lower == "output" || lower.contains("output format") {
@@ -677,6 +692,12 @@ async fn fetch_atcoder(url: &str) -> Result<Problem, String> {
         } else if lower.contains("note") {
             note = Some(body);
         }
+    }
+    if description
+        .as_ref()
+        .is_none_or(|body| body.trim().is_empty())
+    {
+        return Err("AtCoder 页面中未找到有效正文，未覆盖原有题面".into());
     }
     let samples = sample_inputs
         .into_iter()
@@ -694,7 +715,7 @@ async fn fetch_atcoder(url: &str) -> Result<Problem, String> {
         .captures(&page_text)
         .and_then(|c| c[1].parse::<u64>().ok());
     Ok(Problem {
-        id,
+        id: id.to_string(),
         title,
         rating: None,
         tags: vec![],
@@ -1803,6 +1824,26 @@ mod tests {
             "https://qoj.ac/contest/1096"
         );
         assert!(normalized_qoj_archive_url(Some("https://example.com/category/107")).is_err());
+    }
+
+    #[test]
+    fn parses_atcoder_statement_without_editorial_title_and_keeps_constraints() {
+        let html = r#"<span class="h2">F - Xor Sum 3 <a>Editorial</a></span><div id="task-statement"><span class="lang-en"><section><h3>Problem Statement</h3><p>Paint the integers <var>A_i</var>.</p></section><section><h3>Constraints</h3><p>N is positive.</p></section><section><h3>Sample Input 1</h3><pre>3</pre></section><section><h3>Sample Output 1</h3><pre>12</pre></section></span></div>"#;
+        let problem = parse_atcoder_page(
+            "https://atcoder.jp/contests/abc141/tasks/abc141_f",
+            "abc141_f",
+            html,
+        )
+        .unwrap();
+        assert_eq!(problem.title, "Xor Sum 3");
+        assert!(problem.description.unwrap().contains("Constraints"));
+        assert_eq!(problem.samples.unwrap().len(), 1);
+        assert!(parse_atcoder_page(
+            "https://atcoder.jp/contests/abc141/tasks/abc141_f",
+            "abc141_f",
+            "<div id='task-statement'><section><h3>Input</h3></section></div>"
+        )
+        .is_err());
     }
 
     #[test]

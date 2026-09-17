@@ -7,6 +7,7 @@ import { useLearningStore } from './learningStore'
 import { parseChatProblemSetResponse, parseSkillPlanResponse } from '../utils/skillPlan'
 import { getDataCenterValue, saveDataCenterValue } from '../dataCenter'
 import { ojTranslationKey } from '../utils/ojTranslation'
+import { hasTranslationBody, normalizeAiMarkdown } from '../utils/aiMarkdown'
 
 export const useAiStore = defineStore('ai', () => {
   type ModelConfig = { endpoint?: string; model?: string; protocol?: 'responses' | 'chat_completions'; apiKey?: string; rememberApiKey?: boolean }
@@ -139,8 +140,11 @@ export const useAiStore = defineStore('ai', () => {
     if (pending) return pending
     const task = invoke<string | null>('load_oj_translation', { platform, problemId: normalizedId })
       .then((content) => {
-        if (content) translations.value[key] = content
-        return content
+        if (content && hasTranslationBody(content)) {
+          translations.value[key] = normalizeAiMarkdown(content)
+          return translations.value[key]
+        }
+        return null
       })
       .finally(() => translationLoads.delete(key))
     translationLoads.set(key, task)
@@ -162,12 +166,13 @@ export const useAiStore = defineStore('ai', () => {
     isTranslating.value = true
     error.value = null
     try {
+      if (!problem.description?.trim()) throw new Error('原题面为空，请先重新抓取题面后再翻译')
       const source = JSON.stringify({
         title: problem.title,
-        description: problem.description,
-        input: problem.input,
-        output: problem.output,
-        note: problem.note,
+        description: normalizeAiMarkdown(problem.description),
+        input: normalizeAiMarkdown(problem.input ?? ''),
+        output: normalizeAiMarkdown(problem.output ?? ''),
+        note: normalizeAiMarkdown(problem.note ?? ''),
       })
       const result = await invoke<AiChatResult>('ai_chat', {
         endpoint: translationEndpoint.value,
@@ -179,9 +184,11 @@ export const useAiStore = defineStore('ai', () => {
         context: '{}',
         previousResponseId: null,
       })
-      await invoke('save_oj_translation', { platform: problem.platform, problemId, content: result.text })
-      translations.value[key] = result.text
-      return result.text
+      const content = normalizeAiMarkdown(result.text)
+      if (!hasTranslationBody(content)) throw new Error('AI 返回的译文为空或只有标题，未覆盖原有题面，请重新翻译')
+      await invoke('save_oj_translation', { platform: problem.platform, problemId, content })
+      translations.value[key] = content
+      return content
     } finally {
       isTranslating.value = false
     }

@@ -1,8 +1,19 @@
 import { describe, expect, it } from 'vitest'
 import { renderLuoguMarkdown } from './luoguMarkdown'
-import { normalizeAiMarkdown } from './aiMarkdown'
+import { hasTranslationBody, normalizeAiMarkdown } from './aiMarkdown'
 
 describe('AI Markdown normalization', () => {
+  it('renders AtCoder var tags returned inside translated Markdown', () => {
+    const html = renderLuoguMarkdown(normalizeAiMarkdown('整数 <var>A_i &lt; 2^{60}</var>，<var>N</var> 个元素。'))
+    expect(html.match(/class="katex"/g)?.length).toBe(2)
+    expect(html).not.toContain('<var>')
+  })
+
+  it('preserves code examples and rejects heading-only translations', () => {
+    expect(normalizeAiMarkdown('```html\n<var>N</var>\n```')).toContain('<var>N</var>')
+    expect(hasTranslationBody('# Xor Sum 3\n## 题解\n## 输入\n## 输出')).toBe(false)
+    expect(hasTranslationBody('这是一段完整的题面正文。'.repeat(8))).toBe(true)
+  })
   it('unwraps a whole Markdown document fence before rendering', () => {
     const markdown = normalizeAiMarkdown('```markdown\n# 中文题面\n\n这是正文。\n```')
     expect(markdown).toBe('# 中文题面\n\n这是正文。')

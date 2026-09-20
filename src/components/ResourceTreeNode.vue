@@ -32,11 +32,11 @@ function reportToggle(event: Event) {
 </template>
 
 <style scoped lang="scss">
-.tree-folder { margin: 1px 0; summary { display: flex; align-items: center; gap: 5px; min-width: 0; padding: 4px 5px; border-radius: 3px; color: var(--color-text-secondary); font-size: 11px; cursor: pointer; list-style: none; &:hover, &.target { background: var(--color-bg-hover); color: var(--color-text-on-subtle-selection); } &.target { outline: 1px solid var(--color-accent); } &.moving { opacity: .45; } } &[open] > summary .tree-icon { transform: rotate(0); } &:not([open]) > summary .tree-icon { transform: rotate(-90deg); } }
-.tree-icon { width: 8px; color: var(--color-text-faint); transition: transform .1s; }
-.tree-folder__children { margin-left: 9px; padding-left: 7px; border-left: 1px solid var(--color-bg-subtle); }
-.tree-file { display: flex; align-items: center; gap: 6px; width: 100%; min-width: 0; padding: 5px 6px; border: 0; border-radius: 3px; background: transparent; color: var(--color-text-secondary); text-align: left; font-size: 11px; cursor: pointer; &:hover, &.target { background: var(--color-bg-hover); color: var(--color-text-on-subtle-selection); } &.active { background: var(--color-bg-selected); color: var(--color-text-on-subtle-selection); outline: 1px solid var(--color-tone-45627a); } &.target { outline: 1px solid var(--color-accent); } &.moving { opacity: .45; } }
-.tree-language { flex: 0 0 24px; color: var(--color-accent-text); font-size: 8px; font-weight: 700; }
+.tree-folder { margin: 2px 0; summary { display: flex; align-items: center; gap: 7px; min-width: 0; min-height: 30px; padding: 5px 7px; border-radius: 4px; color: var(--color-text-secondary); font-family: var(--font-ui); font-size: 13px; cursor: pointer; list-style: none; &:hover, &.target { background: var(--color-bg-hover); color: var(--color-text-on-subtle-selection); } &.target { outline: 1px solid var(--color-accent); } &.moving { opacity: .45; } } &[open] > summary .tree-icon { transform: rotate(0); } &:not([open]) > summary .tree-icon { transform: rotate(-90deg); } }
+.tree-icon { width: 10px; color: var(--color-text-faint); transition: transform .1s; }
+.tree-folder__children { margin-left: 12px; padding-left: 9px; border-left: 1px solid var(--color-bg-subtle); }
+.tree-file { display: flex; align-items: center; gap: 7px; width: 100%; min-width: 0; min-height: 30px; padding: 6px 8px; border: 0; border-radius: 4px; background: transparent; color: var(--color-text-secondary); text-align: left; font-family: var(--font-ui); font-size: 13px; cursor: pointer; &:hover, &.target { background: var(--color-bg-hover); color: var(--color-text-on-subtle-selection); } &.active { background: var(--color-bg-selected); color: var(--color-text-on-subtle-selection); outline: 1px solid var(--color-tone-45627a); } &.target { outline: 1px solid var(--color-accent); } &.moving { opacity: .45; } }
+.tree-language { flex: 0 0 29px; color: var(--color-accent-text); font-size: 10px; font-weight: 700; }
 .tree-name { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.tree-empty { padding: 4px 9px; color: var(--color-border-strong); font-size: 9px; font-style: italic; }
+.tree-empty { padding: 6px 11px; color: var(--color-border-strong); font-size: 11px; font-style: italic; }
 </style>

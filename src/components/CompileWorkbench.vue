@@ -1,9 +1,13 @@
 <script setup lang="ts">
 import { computed, ref } from 'vue'
 import { useProblemStore } from '../stores/problemStore'
+import { useWorkbenchStore } from '../stores/workbenchStore'
 import { getRunDiagnostic } from '../utils/runDiagnostics'
+import { usePointerResize } from '../composables/usePointerResize'
 
 const store = useProblemStore()
+const workbench = useWorkbenchStore()
+const { startPointerResize } = usePointerResize()
 const copied = ref(false)
 const diagnostic = computed(() => getRunDiagnostic(store.runResult, store.currentLanguage))
 const message = computed(() => diagnostic.value?.message ?? '')
@@ -21,10 +25,18 @@ async function copyMessage() {
 function close() {
   if (diagnostic.value) store.runResult = null
 }
+
+function startResize(event: PointerEvent) {
+  const startY = event.clientY
+  const startHeight = workbench.bottomPanelHeight
+  const available = (event.currentTarget as HTMLElement).parentElement?.clientHeight ?? window.innerHeight
+  startPointerResize(event, { axis: 'y', onMove: current => workbench.setBottomPanelHeight(Math.min(available - 140, startHeight - current.clientY + startY)) })
+}
 </script>
 
 <template>
-  <section v-if="message" class="compile-workbench">
+  <section v-if="message" class="compile-workbench" :style="{ flexBasis: `${workbench.bottomPanelHeight}px` }">
+    <div class="compile-workbench__divider" title="拖动调整底部面板高度" @pointerdown="startResize" />
     <header>
       <div><span class="compile-workbench__icon">×</span><strong>{{ diagnostic?.title }}</strong><small v-if="diagnosticDuration != null">{{ diagnosticDuration }} ms</small></div>
       <div><button type="button" @click="copyMessage">{{ copied ? '已复制' : '复制全部' }}</button><button type="button" class="close" title="关闭问题面板" @click="close">×</button></div>
@@ -35,6 +47,7 @@ function close() {
 
 <style scoped lang="scss">
 .compile-workbench {
+  position: relative;
   display: flex;
   flex: 0 0 190px;
   min-height: 110px;
@@ -47,5 +60,6 @@ function close() {
   header { display: flex; flex: 0 0 auto; align-items: center; justify-content: space-between; min-height: 32px; padding: 0 9px 0 11px; border-bottom: 1px solid var(--color-tone-353535); background: var(--color-bg-panel-alt); font-size: 11px; > div { display: flex; align-items: center; gap: 7px; } strong { color: var(--color-tone-f0b1a6); } small { color: var(--color-text-muted); } button { padding: 3px 7px; border: 1px solid var(--color-tone-484848); border-radius: 3px; background: var(--color-tone-2d2d2d); color: var(--color-tone-ccc); font-size: 10px; cursor: pointer; } button.close { border: 0; background: transparent; color: var(--color-text-soft); font-size: 17px; } }
   pre { flex: 1; min-height: 0; overflow: auto; margin: 0; padding: 10px 12px 14px; color: var(--color-danger); font: 11px/1.55 Consolas, "Cascadia Mono", monospace; white-space: pre-wrap; word-break: break-word; user-select: text; }
   &__icon { display: inline-flex; width: 15px; height: 15px; align-items: center; justify-content: center; border-radius: 50%; background: var(--color-tone-a33b3b); color: var(--color-text-on-accent); font-size: 12px; font-weight: 700; }
+  &__divider { position: absolute; z-index: 15; top: -3px; right: 0; left: 0; height: 6px; background: transparent; cursor: row-resize; touch-action: none; &:hover { background: var(--color-accent); } }
 }
 </style>

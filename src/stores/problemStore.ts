@@ -228,7 +228,7 @@ export const useProblemStore = defineStore('problem', () => {
 
   function loadTestCases(problem: Problem, preferFreshSamples = false) {
     const saved = readStoredTestCases()[testStorageKey(problem)]
-    const source = !preferFreshSamples && saved?.length
+    const source = !preferFreshSamples && Array.isArray(saved)
       ? saved
       : (problem.samples?.length
           ? problem.samples.map((sample) => newTestCase(sample.input, sample.output))
@@ -264,6 +264,14 @@ export const useProblemStore = defineStore('problem', () => {
       activeTestCaseId.value = next.id
       runInput.value = next.input
     }
+    allTestRunSummary.value = null
+    persistTestCases()
+  }
+
+  function clearTestCases() {
+    testCases.value = []
+    activeTestCaseId.value = ''
+    runInput.value = ''
     allTestRunSummary.value = null
     persistTestCases()
   }
@@ -1133,7 +1141,7 @@ export const useProblemStore = defineStore('problem', () => {
   async function refreshCurrentProblem() {
     if (!currentProblem.value || isLoadingDetail.value) return
     const key = testStorageKey(currentProblem.value)
-    const hasSavedTests = Boolean(readStoredTestCases()[key]?.length)
+    const hasSavedTests = Object.prototype.hasOwnProperty.call(readStoredTestCases(), key)
     await fetchProblemDetail(currentProblem.value, true)
     if (!hasSavedTests) loadTestCases(currentProblem.value, true)
   }
@@ -1592,6 +1600,7 @@ export const useProblemStore = defineStore('problem', () => {
     refreshCurrentProblem,
     addTestCase,
     removeTestCase,
+    clearTestCases,
     selectTestCase,
     updateTestCase,
     updateCode,

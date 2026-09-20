@@ -1,15 +1,20 @@
 <script setup lang="ts">
 import { useProblemStore } from '../stores/problemStore'
-import { defineAsyncComponent, ref } from 'vue'
+import { computed, defineAsyncComponent, ref } from 'vue'
 import { useProblemSetStore } from '../stores/problemSetStore'
 import { useLearningStore } from '../stores/learningStore'
+import { useWorkbenchStore } from '../stores/workbenchStore'
+
+const props = withDefaults(defineProps<{ lockedMode?: 'problems' | 'sets' | 'files'; showFiles?: boolean }>(), { showFiles: true })
 
 const store = useProblemStore()
 const learning = useLearningStore()
 const problemSets = useProblemSetStore()
+const workbench = useWorkbenchStore()
 const ResourceExplorer = defineAsyncComponent(() => import('./ResourceExplorer.vue'))
 const ProblemSets = defineAsyncComponent(() => import('./ProblemSets.vue'))
 const panelMode = ref<'problems' | 'sets' | 'files'>('problems')
+const activePanelMode = computed(() => props.lockedMode ?? panelMode.value)
 const sourceOptions = [
   { key: 'codeforces' as const, label: 'Codeforces' },
   { key: 'luogu' as const, label: '洛谷' },
@@ -60,25 +65,35 @@ function onSearchInput() {
   if (store.currentPlatform !== 'luogu') store.setPage(1)
 }
 
+async function openProblem(problem: typeof store.problems[number]) {
+  await store.selectProblem(problem)
+  workbench.openCurrentCode()
+}
+
+async function importProblem() {
+  await store.importProblem()
+  if (store.currentProblem) workbench.openCurrentCode()
+}
+
 </script>
 
 <template>
   <div class="problem-list">
-    <div class="problem-list__tabs">
+    <div v-if="!lockedMode" class="problem-list__tabs">
       <button :class="{ active: panelMode === 'problems' }" @click="panelMode = 'problems'">题库</button>
       <button :class="{ active: panelMode === 'sets' }" @click="panelMode = 'sets'">题单</button>
-      <button :class="{ active: panelMode === 'files' }" @click="panelMode = 'files'">资源管理器</button>
+      <button v-if="showFiles" :class="{ active: panelMode === 'files' }" @click="panelMode = 'files'">资源管理器</button>
     </div>
-    <ResourceExplorer v-if="panelMode === 'files'" />
-    <ProblemSets v-else-if="panelMode === 'sets'" />
+    <ResourceExplorer v-if="activePanelMode === 'files'" />
+    <ProblemSets v-else-if="activePanelMode === 'sets'" />
     <template v-else>
     <div class="problem-list__sources">
       <span>来源</span>
       <button v-for="source in sourceOptions" :key="source.key" :class="{ active: store.currentPlatform === source.key }" @click="store.setPlatform(source.key)">{{ source.label }}</button>
     </div>
     <div class="problem-import">
-      <input v-model="store.importUrl" placeholder="粘贴 CF / AtCoder / 洛谷题目链接" @keyup.enter="store.importProblem" />
-      <button :disabled="store.isImporting || !store.importUrl.trim()" @click="store.importProblem">{{ store.isImporting ? '抓取中…' : '导入' }}</button>
+      <input v-model="store.importUrl" placeholder="粘贴 CF / AtCoder / 洛谷题目链接" @keyup.enter="importProblem" />
+      <button :disabled="store.isImporting || !store.importUrl.trim()" @click="importProblem">{{ store.isImporting ? '抓取中…' : '导入' }}</button>
     </div>
     <div v-if="store.error && store.activeView === 'workspace'" class="problem-import__error">{{ store.error }}</div>
     <!-- 搜索框 -->
@@ -169,7 +184,7 @@ function onSearchInput() {
         :key="`${problem.platform}:${problem.id}`"
         class="problem-item"
         :class="{ 'problem-item--active': store.currentProblem?.id === problem.id && store.currentProblem?.platform === problem.platform }"
-        @click="store.selectProblem(problem)"
+        @click="openProblem(problem)"
       >
         <div class="problem-item__id">{{ problem.id }}</div>
         <div class="problem-item__body">
@@ -235,7 +250,7 @@ function onSearchInput() {
     flex-shrink: 0;
   }
 
-  &__tabs { display: flex; padding: 5px 9px; gap: 3px; border-bottom: 1px solid var(--color-bg-subtle); button { flex: 1; padding: 6px; border: 0; border-radius: 4px; background: transparent; color: var(--color-tone-888); cursor: pointer; font-size: 11px; } button.active { background: var(--color-bg-selected); color: var(--color-text-on-subtle-selection); } }
+  &__tabs { display: flex; padding: 6px 9px; gap: 3px; border-bottom: 1px solid var(--color-bg-subtle); button { flex: 1; padding: 7px; border: 0; border-radius: 4px; background: transparent; color: var(--color-tone-888); cursor: pointer; font-size: 13px; } button.active { background: var(--color-bg-selected); color: var(--color-text-on-subtle-selection); } }
 
   &__ratings {
     display: flex;
@@ -245,9 +260,9 @@ function onSearchInput() {
     flex-wrap: wrap;
   }
 
-  &__sources { display: flex; align-items: center; gap: 3px; padding: 7px 10px 2px; span { margin-right: 3px; color: var(--color-text-faint); font-size: 10px; } button { padding: 4px 7px; border: 0; border-radius: 4px; background: transparent; color: var(--color-text-soft); font-size: 10px; cursor: pointer; } button.active { background: var(--color-tone-1684c7); color: var(--color-text-on-accent); } }
+  &__sources { display: flex; align-items: center; gap: 3px; padding: 8px 10px 3px; span { margin-right: 3px; color: var(--color-text-faint); font-size: 12px; } button { padding: 5px 8px; border: 0; border-radius: 4px; background: transparent; color: var(--color-text-soft); font-size: 12px; cursor: pointer; } button.active { background: var(--color-tone-1684c7); color: var(--color-text-on-accent); } }
   &__filter-row { display: flex; gap: 5px; padding: 3px 10px 5px; }
-  &__selected { display: flex; flex-wrap: wrap; align-items: center; gap: 4px; padding: 4px 10px 7px; color: var(--color-text-faint); font-size: 10px; span { margin-right: 2px; } em { color: var(--color-text-disabled); font-style: normal; } button { padding: 2px 5px; border: 1px solid var(--color-tone-3b5b72); border-radius: 3px; background: var(--color-accent-surface); color: var(--color-accent-text); font-size: 9px; cursor: pointer; } }
+  &__selected { display: flex; flex-wrap: wrap; align-items: center; gap: 4px; padding: 5px 10px 8px; color: var(--color-text-faint); font-size: 12px; span { margin-right: 2px; } em { color: var(--color-text-disabled); font-style: normal; } button { padding: 3px 6px; border: 1px solid var(--color-tone-3b5b72); border-radius: 3px; background: var(--color-accent-surface); color: var(--color-accent-text); font-size: 11px; cursor: pointer; } }
 
   &__tags-filter {
     padding: 0 12px 6px;
@@ -295,8 +310,8 @@ function onSearchInput() {
 
 .problem-item { content-visibility: auto; contain-intrinsic-size: 76px; }
 .problem-item__solved { display: inline-flex; align-items: center; justify-content: center; width: 13px; height: 13px; margin-right: 6px; border: 1px solid var(--color-tone-36b36a); border-radius: 2px; color: var(--color-success-bright); font-size: 9px; font-weight: 700; vertical-align: 1px; }
-.filter-menu { position: relative; flex: 1; min-width: 0; summary { padding: 6px 7px; border: 1px solid var(--color-border-control); border-radius: 4px; color: var(--color-text-secondary); background: var(--color-bg-panel); font-size: 10px; cursor: pointer; list-style: none; } &__popup { position: absolute; z-index: 50; top: calc(100% + 3px); left: 0; display: flex; flex-wrap: wrap; gap: 4px; width: 210px; max-height: 240px; overflow: auto; padding: 8px; border: 1px solid var(--color-border-strong); border-radius: 5px; background: var(--color-bg-panel); box-shadow: 0 8px 22px var(--color-tone-0008); } &--wide .filter-menu__popup { left: auto; right: 0; width: 300px; } }
-.problem-import { display: flex; gap: 5px; padding: 8px 12px 2px; input { min-width: 0; flex: 1; padding: 6px 7px; border: 1px solid var(--color-border); border-radius: 4px; background: var(--color-bg-panel); color: var(--color-text-strong); font-size: 10px; outline: none; } input:focus { border-color: var(--color-accent); } button { padding: 0 9px; border: 0; border-radius: 4px; background: var(--color-accent-strong); color: var(--color-text-on-accent); font-size: 10px; cursor: pointer; } button:disabled { opacity: .4; } &__error { padding: 4px 12px; color: var(--color-danger); font-size: 10px; line-height: 1.4; } }
+.filter-menu { position: relative; flex: 1; min-width: 0; summary { padding: 7px 8px; border: 1px solid var(--color-border-control); border-radius: 4px; color: var(--color-text-secondary); background: var(--color-bg-panel); font-size: 12px; cursor: pointer; list-style: none; } &__popup { position: absolute; z-index: 50; top: calc(100% + 3px); left: 0; display: flex; flex-wrap: wrap; gap: 4px; width: 210px; max-height: 240px; overflow: auto; padding: 8px; border: 1px solid var(--color-border-strong); border-radius: 5px; background: var(--color-bg-panel); box-shadow: 0 8px 22px var(--color-tone-0008); } &--wide .filter-menu__popup { left: auto; right: 0; width: 300px; } }
+.problem-import { display: flex; gap: 5px; padding: 8px 12px 2px; input { min-width: 0; flex: 1; padding: 7px 8px; border: 1px solid var(--color-border); border-radius: 4px; background: var(--color-bg-panel); color: var(--color-text-strong); font-size: 12px; outline: none; } input:focus { border-color: var(--color-accent); } button { padding: 0 10px; border: 0; border-radius: 4px; background: var(--color-accent-strong); color: var(--color-text-on-accent); font-size: 12px; cursor: pointer; } button:disabled { opacity: .4; } &__error { padding: 4px 12px; color: var(--color-danger); font-size: 11px; line-height: 1.4; } }
 
 // ── 搜索输入 ──
 .search-input {

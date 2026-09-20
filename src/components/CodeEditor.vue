@@ -8,9 +8,11 @@ import { configureMonaco } from '../monaco'
 import { VueMonacoEditor } from '@guolao/vue-monaco-editor'
 import { formatCode } from '../utils/codeFormatter'
 import CodeVersionManager from './CodeVersionManager.vue'
+import { useWorkbenchStore } from '../stores/workbenchStore'
 
 const store = useProblemStore()
 const settings = useSettingsStore()
+const workbench = useWorkbenchStore()
 configureMonaco()
 
 const LANGUAGE_MAP: Record<Language, string> = {
@@ -114,7 +116,10 @@ function handleMount(editor: any) {
   })
   editor.addCommand(monaco.KeyMod.Shift | monaco.KeyMod.Alt | monaco.KeyCode.KeyF, () => formatDocument(editor))
   editor.addCommand(monaco.KeyMod.CtrlCmd | monaco.KeyCode.F5, () => store.runLocally())
-  editor.addCommand(monaco.KeyCode.F5, () => store.debugLocally())
+  editor.addCommand(monaco.KeyCode.F5, async () => {
+    await store.debugLocally()
+    workbench.openDebugger()
+  })
   editor.addCommand(monaco.KeyMod.Alt | monaco.KeyCode.F9, () => {
     const line = editor.getPosition()?.lineNumber
     if (line) store.toggleBreakpoint(line)
@@ -181,7 +186,7 @@ onBeforeUnmount(() => {
           class="lang-btn"
           :class="{ 'lang-btn--active': store.currentLanguage === opt.key }"
           :disabled="store.isSubmitting"
-          @click="store.setLanguage(opt.key)"
+          @click="workbench.setCurrentLanguage(opt.key)"
         >
           {{ opt.label }}
         </button>
@@ -192,9 +197,7 @@ onBeforeUnmount(() => {
       <button class="code-editor__format" :disabled="store.isFormatting || !store.currentCode.trim()" title="格式化文档 (Shift+Alt+F)" @click="formatDocument()">{{ store.isFormatting ? '格式化中…' : '格式化' }}</button>
       <button class="code-editor__reset" title="恢复为设置中的初始代码片段" @click="confirmResetCode">重置代码</button>
       <CodeVersionManager />
-      <span class="code-editor__shortcuts">Ctrl+F5 运行 · F5 调试 · Alt+F9 断点</span>
       <span v-if="store.formatError" class="code-editor__format-error" :title="store.formatError">{{ store.formatError }}</span>
-      <span class="code-editor__saved" :class="`code-editor__saved--${store.draftSaveStatus}`">{{ { template: '尚未创建本地文件', saved: '✓ 已保存', saving: '保存中…', error: '保存失败' }[store.draftSaveStatus] }}</span>
     </div>
 
     <!-- 编辑器主体 -->
@@ -244,11 +247,9 @@ onBeforeUnmount(() => {
     font-family: 'Consolas', 'Courier New', monospace;
   }
 
-  &__shortcuts { margin-left: auto; color: var(--color-text-disabled); font-size: 10px; }
   &__format { padding: 3px 8px; border: 1px solid var(--color-tone-464646); border-radius: 3px; background: var(--color-bg-raised); color: var(--color-text-secondary); font-size: 10px; cursor: pointer; &:hover:not(:disabled) { border-color: var(--color-accent); color: var(--color-text-on-accent); } &:disabled { opacity: .4; cursor: not-allowed; } }
   &__format-error { max-width: 210px; overflow: hidden; color: var(--color-danger); font-size: 9px; text-overflow: ellipsis; white-space: nowrap; }
   &__reset { padding: 4px 7px; border: 1px solid var(--color-tone-6f4b4b); border-radius: 4px; background: var(--color-tone-342424); color: var(--color-tone-e8aaaa); font-size: 10px; cursor: pointer; &:hover { border-color: var(--color-tone-b35d5d); color: var(--color-tone-ffd0d0); } }
-  &__saved { color: var(--color-success); font-size: 11px; &--template { color: var(--color-text-faint); } &--saving { color: var(--color-warning); } &--error { color: var(--color-danger); } }
 
   &__editor {
     flex: 1;

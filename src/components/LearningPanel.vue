@@ -5,21 +5,23 @@ import { useLearningStore } from '../stores/learningStore'
 import { useAiStore } from '../stores/aiStore'
 import { useProblemStore } from '../stores/problemStore'
 import { useProblemSetStore } from '../stores/problemSetStore'
+import { useWorkbenchStore } from '../stores/workbenchStore'
 import type { SkillNode, SkillPlanProblem } from '../types'
-import NoteManager from './NoteManager.vue'
 import PracticeStatistics from './PracticeStatistics.vue'
+import AlgorithmOverview from './AlgorithmOverview.vue'
 
 const learning = useLearningStore()
 const ai = useAiStore()
 const problemStore = useProblemStore()
 const problemSets = useProblemSetStore()
+const workbench = useWorkbenchStore()
 const levels = computed(() => [...new Set(SKILL_TREE.map((skill) => skill.level))].sort((a, b) => a - b))
 const generatingSkillId = ref<string | null>(null)
 const planError = ref('')
 const planImportNotice = ref('')
 const selectedPageIndex = ref(0)
-const notesOpen = ref(false)
 const statisticsOpen = ref(false)
+const overviewOpen = ref(false)
 const updatingSkippedSkillId = ref<string | null>(null)
 const selectedSkill = computed(() => learning.selectedSkillId ? SKILL_BY_ID.get(learning.selectedSkillId) ?? null : null)
 const selectedPlans = computed(() => learning.selectedSkillId ? learning.plansFor(learning.selectedSkillId) : [])
@@ -91,7 +93,10 @@ async function toggleSkipped(skill: SkillNode) {
 
 async function openPlanProblem(problem: SkillPlanProblem) {
   planError.value = ''
-  try { await problemStore.openRecommendedProblem(problem) }
+  try {
+    await problemStore.openRecommendedProblem(problem)
+    workbench.openCurrentCode()
+  }
   catch (error) { planError.value = String(error) }
 }
 
@@ -102,14 +107,22 @@ function importSelectedPlan() {
   window.setTimeout(() => { planImportNotice.value = '' }, 2200)
 }
 
+async function openSkillFromOverview(skill: SkillNode) {
+  overviewOpen.value = false
+  await handleSkill(skill)
+}
+
 onMounted(() => learning.init())
 </script>
 
 <template>
   <div class="learning-view">
     <header class="learning-header">
-      <div><h1>算法技能树</h1><p>点击可学习的知识点，由 AI 生成约 10 道递进题单；也可跳过当前知识点解锁后续，跳过不计入掌握进度。</p></div>
-      <div class="learning-header__actions"><button class="header-entry statistics-entry" @click="statisticsOpen = true"><span>▥</span><div><strong>做题统计</strong><small>题量、通过率与练习趋势</small></div></button><button class="header-entry notebook-entry" @click="notesOpen = true"><span>📝</span><div><strong>算法笔记本</strong><small>查看和整理全部题目笔记</small></div></button><div class="progress-ring"><strong>{{ learning.progress }}%</strong><span>{{ learning.profile.masteredSkills.length }}/{{ SKILL_TREE.length }}</span></div></div>
+      <div class="learning-header__title"><h1>算法技能树</h1><div class="progress-ring"><strong>{{ learning.progress }}%</strong><span>{{ learning.profile.masteredSkills.length }}/{{ SKILL_TREE.length }}</span></div></div>
+      <div class="learning-header__actions">
+        <button class="header-entry overview-entry" @click="overviewOpen = true"><span>◫</span><div><strong>算法总览</strong><small>知识覆盖、强项与待巩固项</small></div></button>
+        <button class="header-entry statistics-entry" @click="statisticsOpen = true"><span>▥</span><div><strong>做题统计</strong><small>题量、通过率与练习趋势</small></div></button>
+      </div>
     </header>
 
     <section class="vp-card">
@@ -153,8 +166,8 @@ onMounted(() => learning.init())
       </section>
     </main>
 
-    <div v-if="notesOpen" class="notes-modal"><NoteManager @close="notesOpen = false" /></div>
     <div v-if="statisticsOpen" class="statistics-modal"><PracticeStatistics @close="statisticsOpen = false" /></div>
+    <div v-if="overviewOpen" class="overview-modal"><AlgorithmOverview @close="overviewOpen = false" @select-skill="openSkillFromOverview" /></div>
 
     <div v-if="selectedSkill" class="plan-modal" @click.self="learning.closeSkillPlan">
       <section class="plan-card">
@@ -187,9 +200,10 @@ onMounted(() => learning.init())
 
 <style scoped lang="scss">
 .learning-view { height: 100%; overflow-y: auto; background: var(--color-bg-deep); color: var(--color-text-primary); padding: 28px 34px 60px; }
-.learning-header { display: flex; justify-content: space-between; align-items: center; max-width: 1200px; margin: auto; h1 { margin: 0 0 6px; font-size: 26px; } p { color: var(--color-text-muted); } }
-.learning-header__actions { display: flex; align-items: center; gap: 10px; }.header-entry { display: flex; align-items: center; gap: 9px; min-width: 185px; padding: 10px 13px; border: 1px solid var(--color-accent-border); border-radius: 8px; background: var(--color-accent-surface); color: var(--color-tone-d7efff); text-align: left; cursor: pointer; > span { font-size: 21px; } > div { display: flex; flex-direction: column; } strong { font-size: 13px; } small { margin-top: 2px; color: var(--color-tone-82a9c2); font-size: 9px; } &:hover { border-color: var(--color-tone-6ba5d1); background: var(--color-tone-26445a); } }.statistics-entry { border-color: var(--color-tone-4d725f); background: var(--color-tone-20362a); color: var(--color-tone-d9f4e4); > div small { color: var(--color-tone-83aa92); } &:hover { border-color: var(--color-tone-69a982); background: var(--color-tone-274635); } }
-.progress-ring { width: 86px; height: 86px; border: 7px solid var(--color-selection); border-radius: 50%; display: flex; flex-direction: column; align-items: center; justify-content: center; strong { color: var(--color-success); font-size: 19px; } span { color: var(--color-text-muted); font-size: 11px; } }
+.learning-header { max-width: 1200px; margin: auto; h1 { margin: 0; font-size: 26px; white-space: nowrap; } }
+.learning-header__title { display: flex; align-items: center; justify-content: space-between; gap: 18px; }
+.learning-header__actions { display: flex; align-items: center; gap: 10px; margin-top: 14px; }.header-entry { display: flex; align-items: center; gap: 9px; min-width: 185px; padding: 10px 13px; border: 1px solid var(--color-accent-border); border-radius: 8px; background: var(--color-accent-surface); color: var(--color-tone-d7efff); text-align: left; cursor: pointer; > span { font-size: 21px; } > div { display: flex; flex-direction: column; } strong { font-size: 13px; } small { margin-top: 2px; color: var(--color-tone-82a9c2); font-size: 9px; } &:hover { border-color: var(--color-tone-6ba5d1); background: var(--color-tone-26445a); } }.statistics-entry { border-color: var(--color-tone-4d725f); background: var(--color-tone-20362a); color: var(--color-tone-d9f4e4); > div small { color: var(--color-tone-83aa92); } &:hover { border-color: var(--color-tone-69a982); background: var(--color-tone-274635); } }
+.progress-ring { width: 72px; height: 72px; flex: 0 0 72px; border: 6px solid var(--color-selection); border-radius: 50%; display: flex; flex-direction: column; align-items: center; justify-content: center; strong { color: var(--color-success); font-size: 17px; } span { color: var(--color-text-muted); font-size: 10px; } }
 .vp-card { max-width: 1200px; margin: 24px auto 30px; padding: 20px; border: 1px solid var(--color-border); border-radius: 10px; background: var(--color-bg-panel); h2 { margin: 0 0 4px; font-size: 17px; } p { color: var(--color-text-muted); font-size: 13px; } }
 .vp-form { display: flex; gap: 8px; margin-top: 14px; input { flex: 1; padding: 10px 12px; background: var(--color-bg-deep); border: 1px solid var(--color-border); border-radius: 5px; color: var(--color-text-strong); outline: none; } input:focus { border-color: var(--color-accent); } button { padding: 0 18px; border: 0; border-radius: 5px; background: var(--color-accent-strong); color: var(--color-text-on-accent); cursor: pointer; } button:disabled { opacity: .45; } }
 .vp-error { margin-top: 10px; color: var(--color-danger); font-size: 12px; }
@@ -205,8 +219,9 @@ onMounted(() => learning.init())
 .skill-node-skip { position: absolute; right: 9px; bottom: 9px; z-index: 2; padding: 4px 8px; border: 1px solid var(--color-border-strong); border-radius: 4px; background: var(--color-bg-control); color: var(--color-text-secondary); font-size: 9px; cursor: pointer; &:hover { border-color: var(--color-warning-strong); color: var(--color-warning); } &.active { border-color: var(--color-warning-strong); background: var(--color-tone-44351e); color: var(--color-warning); } &:disabled { opacity: .5; cursor: wait; } }
 .plan-error { max-width: 1200px; margin: -18px auto 24px; padding: 10px 12px; border: 1px solid var(--color-tone-a84848); border-radius: 6px; background: var(--color-tone-3b2020); color: var(--color-tone-f5a3a3); font-size: 12px; }
 .plan-modal { position: fixed; inset: 36px 0 0; z-index: 1500; display: flex; align-items: center; justify-content: center; padding: 25px; background: var(--color-overlay); }
-.notes-modal { position: fixed; inset: 36px 0 0; z-index: 1550; background: var(--color-bg-deep); }
 .statistics-modal { position: fixed; inset: 36px 0 0; z-index: 1550; background: var(--color-bg-deep); }
+.overview-modal { position: fixed; inset: 36px 0 0; z-index: 1550; background: var(--color-bg-deep); }
+.overview-entry { border-color: var(--color-tone-3b6e90); background: var(--color-accent-surface-hover); color: var(--color-tone-d7efff); > div small { color: var(--color-tone-82a9c2); } }
 .plan-card { width: min(820px, 92vw); max-height: 86vh; overflow: auto; padding: 20px; border: 1px solid var(--color-tone-4b4b4b); border-radius: 10px; background: var(--color-bg-panel); box-shadow: 0 18px 60px var(--color-tone-0009); > header { display: flex; justify-content: space-between; align-items: flex-start; h2 { margin: 3px 0 0; } small { color: var(--color-text-muted); } } > p { color: var(--color-tone-9e9e9e); font-size: 12px; } }
 .plan-card__actions { display: flex; align-items: center; gap: 8px; }.plan-import, .plan-generate { padding: 7px 10px; border: 1px solid var(--color-tone-3b6e90); border-radius: 4px; background: var(--color-accent-surface-hover); color: var(--color-accent-text); cursor: pointer; &:disabled { opacity: .5; cursor: wait; } }.plan-generate { border-color: var(--color-tone-4c7d4d); background: var(--color-tone-203b27); color: var(--color-tone-9fdaa7); }.plan-close { border: 0; background: transparent; color: var(--color-text-soft); font-size: 24px; cursor: pointer; }
 .plan-pager { display: flex; align-items: center; justify-content: center; gap: 12px; margin: 14px 0 4px; button { padding: 5px 9px; border: 1px solid var(--color-border-control); border-radius: 4px; background: var(--color-bg-subtle); color: var(--color-tone-ccc); cursor: pointer; &:disabled { opacity: .35; cursor: default; } } span { min-width: 86px; color: var(--color-text-secondary); font-size: 11px; text-align: center; } }

@@ -1,6 +1,7 @@
 use crate::commands::callback::callback_server;
 use crate::commands::oj::luogu_pid_regex;
 use serde::{Deserialize, Serialize};
+use std::path::PathBuf;
 use std::time::Duration;
 use tauri::{AppHandle, Emitter, Manager, WebviewUrl, WebviewWindowBuilder};
 
@@ -15,6 +16,122 @@ pub struct ActionResult {
 pub struct LuoguAccountStatus {
     logged_in: bool,
     username: Option<String>,
+}
+
+#[derive(Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct LuoguSolutionAuthor {
+    uid: u64,
+    name: String,
+    color: Option<String>,
+}
+
+#[derive(Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct LuoguSolutionPage {
+    total: u64,
+    index: u64,
+    lid: String,
+    content: String,
+    admin_note: Option<String>,
+    created_at: u64,
+    upvotes: i64,
+    author: LuoguSolutionAuthor,
+}
+
+fn luogu_session_dir(app: &AppHandle) -> Result<PathBuf, String> {
+    let directory = app
+        .path()
+        .app_data_dir()
+        .map_err(|error| format!("无法定位洛谷会话目录: {error}"))?
+        .join("webview-sessions")
+        .join("luogu");
+    std::fs::create_dir_all(&directory)
+        .map_err(|error| format!("无法创建洛谷会话目录: {error}"))?;
+    Ok(directory)
+}
+
+fn solution_text(value: Option<&serde_json::Value>) -> String {
+    match value {
+        Some(serde_json::Value::String(value)) => value.clone(),
+        Some(serde_json::Value::Number(value)) => value.to_string(),
+        _ => String::new(),
+    }
+}
+
+fn solution_number(object: &serde_json::Map<String, serde_json::Value>, keys: &[&str]) -> u64 {
+    keys.iter()
+        .find_map(|key| object.get(*key))
+        .and_then(|value| value.as_u64().or_else(|| value.as_str()?.parse().ok()))
+        .unwrap_or(0)
+}
+
+fn parse_luogu_solution(value: serde_json::Value) -> Result<LuoguSolutionPage, String> {
+    if let Some(error) = value.get("error").and_then(serde_json::Value::as_str) {
+        return Err(error.to_string());
+    }
+    let total = value
+        .get("total")
+        .and_then(serde_json::Value::as_u64)
+        .unwrap_or(0);
+    let index = value
+        .get("index")
+        .and_then(serde_json::Value::as_u64)
+        .unwrap_or(0);
+    let article = value
+        .get("article")
+        .and_then(serde_json::Value::as_object)
+        .ok_or_else(|| "洛谷题解数据缺少正文".to_string())?;
+    let author = article
+        .get("author")
+        .or_else(|| article.get("user"))
+        .and_then(serde_json::Value::as_object);
+    let created_at = solution_number(article, &["createdAt", "createTime", "postTime", "time"]);
+    let created_at = if created_at > 10_000_000_000 {
+        created_at
+    } else {
+        created_at.saturating_mul(1000)
+    };
+    let upvotes = ["upvotes", "upvote", "thumbUp"]
+        .iter()
+        .find_map(|key| article.get(*key))
+        .and_then(|value| value.as_i64().or_else(|| value.as_str()?.parse().ok()))
+        .unwrap_or(0);
+    let content = solution_text(article.get("content"));
+    if content.trim().is_empty() {
+        return Err("洛谷题解正文为空或响应格式已变化".into());
+    }
+    Ok(LuoguSolutionPage {
+        total,
+        index,
+        lid: solution_text(article.get("lid").or_else(|| article.get("id"))),
+        content,
+        admin_note: article
+            .get("adminNote")
+            .filter(|value| !value.is_null())
+            .map(|value| solution_text(Some(value))),
+        created_at,
+        upvotes,
+        author: LuoguSolutionAuthor {
+            uid: author
+                .map(|value| solution_number(value, &["uid", "id"]))
+                .unwrap_or(0),
+            name: author
+                .map(|value| {
+                    let name = solution_text(value.get("name").or_else(|| value.get("username")));
+                    if name.is_empty() {
+                        "洛谷用户".into()
+                    } else {
+                        name
+                    }
+                })
+                .unwrap_or_else(|| "洛谷用户".into()),
+            color: author
+                .and_then(|value| value.get("color"))
+                .filter(|value| !value.is_null())
+                .map(|value| solution_text(Some(value))),
+        },
+    })
 }
 
 fn validate_account_status(mut status: LuoguAccountStatus) -> LuoguAccountStatus {
@@ -111,6 +228,7 @@ pub async fn inspect_luogu_account(app: AppHandle) -> Result<LuoguAccountStatus,
     .title("检测洛谷账号")
     .inner_size(1.0, 1.0)
     .visible(false)
+    .data_directory(luogu_session_dir(&app)?)
     .initialization_script(&script)
     .build()
     .map_err(|e| format!("无法检测洛谷账号: {e}"))?;
@@ -227,6 +345,7 @@ pub async fn login_luogu_browser(
     .inner_size(980.0, 760.0)
     .center()
     .resizable(true)
+    .data_directory(luogu_session_dir(&app)?)
     .initialization_script(&script)
     .build()
     .map_err(|e| format!("打开洛谷登录窗口失败: {}", e))?;
@@ -246,6 +365,145 @@ pub async fn login_luogu_browser(
         success: true,
         message: "洛谷官方登录页已打开".into(),
     })
+}
+
+/// Read one accepted Luogu solution through the same persistent WebView session
+/// used for login and submission. Luogu currently protects the solution feed
+/// behind an authenticated request, so a standalone reqwest client cannot reuse
+/// the user's official-site cookies.
+#[tauri::command]
+pub async fn fetch_luogu_solution(
+    app: AppHandle,
+    problem_id: String,
+    index: u64,
+) -> Result<LuoguSolutionPage, String> {
+    let id_re = luogu_pid_regex(true);
+    if !id_re.is_match(problem_id.trim()) {
+        return Err("无效的洛谷题号".into());
+    }
+    let pid = problem_id.trim().to_uppercase();
+    if let Some(window) = app.get_webview_window("luogu_solution_reader") {
+        let _ = window.destroy();
+    }
+    let (port, rx) = callback_server()?;
+    let pid_json = serde_json::to_string(&pid).map_err(|e| e.to_string())?;
+    let script = format!(
+        r#"(function(){{
+          if(window.__acmSolutionReader)return;window.__acmSolutionReader=true;
+          var pid={pid_json},wanted={index},port={port},attempts=0;
+          function values(value){{return Array.isArray(value)?value:Object.values(value||{{}});}}
+          function text(value){{return value==null?'':String(value);}}
+          function dataOf(root){{return root&&(root.currentData||(root.data&&root.data.currentData)||root.data||root);}}
+          function holderOf(root){{
+            var data=dataOf(root)||{{}};
+            return data.solutions||data.solutionList||data.articles||(data.data&&(data.data.solutions||data.data.solutionList||data.data.articles));
+          }}
+          function report(value){{
+            if(window.__acmSolutionReported)return;window.__acmSolutionReported=true;
+            fetch('http://127.0.0.1:'+port+'/result',{{method:'POST',mode:'no-cors',headers:{{'Content-Type':'text/plain'}},body:JSON.stringify(value)}}).catch(function(){{}});
+          }}
+          async function contentRequest(path){{
+            var headers={{'Accept':'application/json','X-Requested-With':'XMLHttpRequest','x-lentille-request':'content-only'}};
+            return fetch(path,{{credentials:'include',cache:'no-store',headers:headers}});
+          }}
+          async function fetchSolutionPage(page){{
+            var base='/problem/solution/'+encodeURIComponent(pid)+'?page='+page+'&_t='+Date.now();
+            var response=await contentRequest(base);
+            if(response.status===401||response.status===403||(response.redirected&&/\/auth\//.test(response.url))){{
+              return {{loginRequired:true,response:response,root:null}};
+            }}
+            var root=await response.json().catch(function(){{return null;}});
+            return {{response:response,root:root}};
+          }}
+          async function completeArticle(article){{
+            var lid=text(article&&(article.lid||article.id));
+            if(!lid||article.content&&article.contentFull!==false)return article;
+            var candidates=[['/article/'+encodeURIComponent(lid)+'?_t='+Date.now(),false],['/article/'+encodeURIComponent(lid)+'?_contentOnly=1&_t='+Date.now(),true]];
+            for(var i=0;i<candidates.length;i++){{
+              try{{
+                var response=await contentRequest(candidates[i][0]);
+                var root=await response.json().catch(function(){{return null;}}),data=dataOf(root)||{{}};
+                var full=data.article||(data.data&&data.data.article);
+                if(response.ok&&full)return Object.assign({{}},article,full);
+              }}catch(_){{}}
+            }}
+            return article;
+          }}
+          async function read(){{
+            attempts++;
+            try{{
+              // The authenticated solution document already contains the full
+              // Lentille payload. Prefer it over issuing another request: this
+              // avoids a WebView-only 404 seen when fetching the protected route
+              // immediately after opening an unrelated problem document.
+              var root=null;
+              try{{
+                var context=document.querySelector('script#lentille-context');
+                root=context&&JSON.parse(context.textContent||'null');
+              }}catch(_){{}}
+              var holder=holderOf(root),response=null;
+              var currentPage=Number(new URLSearchParams(location.search).get('page'))||1;
+              var perPage=Number(holder&&(holder.perPage||holder.per_page))||10;
+              var page=Math.floor(wanted/perPage)+1;
+              var result=null;
+              if(!holder||page!==currentPage){{result=await fetchSolutionPage(page);}}
+              if(result&&result.loginRequired){{report({{error:'查看洛谷题解需要先登录，请在设置中登录洛谷账号'}});return;}}
+              if(result){{response=result.response;root=result.root;holder=holderOf(root);}}
+              if(!root||!holder||(response&&!response.ok)){{
+                if(attempts<3&&response&&response.status>=500){{setTimeout(read,700);return;}}
+                var contextStatus=Number(root&&root.status)||0;
+                if(contextStatus===401||contextStatus===403||/\/auth\//.test(location.pathname)){{report({{error:'查看洛谷题解需要先登录，请在设置中登录洛谷账号'}});return;}}
+                var status=response?response.status:(contextStatus||'页面无题解数据');
+                var message=root&&(root.errorMessage||root.message||(root.data&&root.data.errorMessage));
+                report({{error:message?text(message):'洛谷题解接口返回异常（HTTP '+status+'）'}});return;
+              }}
+              perPage=Number(holder.perPage||holder.per_page)||perPage;
+              var total=Number(holder.count||holder.total)||0,list=values(holder.result||holder.items||holder.articles),offset=wanted-(page-1)*perPage,article=list[offset];
+              if(!total&&list.length)total=(page-1)*perPage+list.length;
+              if(!total){{report({{error:'该题暂无可查看的题解'}});return;}}
+              if(!article){{report({{error:'没有找到第 '+(wanted+1)+' 篇题解'}});return;}}
+              article=await completeArticle(article);
+              report({{total:total,index:wanted,article:article}});
+            }}catch(error){{report({{error:'读取洛谷题解失败：'+error.message}});}}
+          }}
+          if(document.readyState==='loading')document.addEventListener('DOMContentLoaded',read);else read();
+        }})();"#,
+        pid_json = pid_json,
+        index = index,
+        port = port
+    );
+    WebviewWindowBuilder::new(
+        &app,
+        "luogu_solution_reader",
+        WebviewUrl::External(
+            format!(
+                "https://www.luogu.com.cn/problem/solution/{}?page={}",
+                pid,
+                index / 10 + 1
+            )
+            .parse()
+            .map_err(|e| format!("题解链接无效: {e}"))?,
+        ),
+    )
+    .title(format!("读取 {} 题解", pid))
+    .inner_size(1.0, 1.0)
+    .visible(false)
+    .data_directory(luogu_session_dir(&app)?)
+    .initialization_script(&script)
+    .build()
+    .map_err(|e| format!("创建洛谷题解读取窗口失败: {e}"))?;
+    let payload =
+        tauri::async_runtime::spawn_blocking(move || rx.recv_timeout(Duration::from_secs(50)))
+            .await
+            .map_err(|e| format!("等待洛谷题解失败: {e}"))?
+            .map_err(|_| "读取洛谷题解超时，请确认登录状态后重试".to_string());
+    if let Some(window) = app.get_webview_window("luogu_solution_reader") {
+        let _ = window.destroy();
+    }
+    let payload = payload?;
+    let value: serde_json::Value =
+        serde_json::from_str(&payload).map_err(|e| format!("解析洛谷题解失败: {e}"))?;
+    parse_luogu_solution(value)
 }
 
 #[tauri::command]
@@ -373,6 +631,7 @@ pub async fn submit_luogu(
     .title(format!("洛谷提交 {}", pid))
     .inner_size(1.0, 1.0)
     .visible(false)
+    .data_directory(luogu_session_dir(&app)?)
     .initialization_script(&script)
     .build()
     .map_err(|e| format!("创建洛谷提交窗口失败: {}", e))?;
@@ -479,6 +738,7 @@ pub async fn fetch_luogu_record_detail(app: AppHandle, rid: u64) -> Result<Strin
     .title(format!("读取洛谷记录 R{}", rid))
     .inner_size(1.0, 1.0)
     .visible(false)
+    .data_directory(luogu_session_dir(&app)?)
     .initialization_script(&script)
     .build()
     .map_err(|e| format!("创建洛谷记录窗口失败: {}", e))?;
@@ -547,6 +807,7 @@ pub async fn find_luogu_record_id(
     .title("查找洛谷历史记录")
     .inner_size(1.0, 1.0)
     .visible(false)
+    .data_directory(luogu_session_dir(&app)?)
     .initialization_script(&script)
     .build()
     .map_err(|e| format!("创建洛谷记录查找窗口失败: {}", e))?;
@@ -604,5 +865,54 @@ mod tests {
         });
         assert!(valid.logged_in);
         assert_eq!(valid.username.as_deref(), Some("example_user"));
+    }
+
+    #[test]
+    fn parses_current_luogu_solution_field_names() {
+        let parsed = parse_luogu_solution(serde_json::json!({
+            "total": 12,
+            "index": 2,
+            "article": {
+                "lid": "74flaf34",
+                "content": "# 题解\n正文",
+                "adminNote": "审核通过",
+                "postTime": 1_747_000_000_u64,
+                "thumbUp": 37,
+                "author": {
+                    "uid": 123,
+                    "name": "solver",
+                    "color": "Blue"
+                }
+            }
+        }))
+        .expect("parse solution");
+
+        assert_eq!(parsed.total, 12);
+        assert_eq!(parsed.index, 2);
+        assert_eq!(parsed.lid, "74flaf34");
+        assert_eq!(parsed.created_at, 1_747_000_000_000);
+        assert_eq!(parsed.upvotes, 37);
+        assert_eq!(parsed.author.uid, 123);
+        assert_eq!(parsed.author.name, "solver");
+    }
+
+    #[test]
+    fn keeps_millisecond_solution_timestamps() {
+        let parsed = parse_luogu_solution(serde_json::json!({
+            "total": 1,
+            "index": 0,
+            "article": {
+                "id": 42,
+                "content": "正文",
+                "createdAt": 1_747_000_000_123_u64,
+                "upvotes": "5",
+                "user": { "id": 7, "username": "user" }
+            }
+        }))
+        .expect("parse solution");
+
+        assert_eq!(parsed.created_at, 1_747_000_000_123);
+        assert_eq!(parsed.upvotes, 5);
+        assert_eq!(parsed.lid, "42");
     }
 }

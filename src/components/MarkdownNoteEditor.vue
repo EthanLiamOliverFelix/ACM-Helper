@@ -228,6 +228,7 @@ onBeforeUnmount(() => {
     <textarea
       v-if="mode === 'edit'"
       ref="editor"
+      data-sidebar-shortcut-ignore
       :value="modelValue"
       :placeholder="placeholder || '使用 Markdown 记录思路、易错点和技巧…'"
       spellcheck="false"

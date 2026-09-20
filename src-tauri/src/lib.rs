@@ -115,6 +115,7 @@ pub fn run() {
             oj::save_imported_problems,
             luogu::login_luogu_browser,
             luogu::inspect_luogu_account,
+            luogu::fetch_luogu_solution,
             luogu::submit_luogu,
             luogu::fetch_luogu_record_detail,
             luogu::find_luogu_record_id,

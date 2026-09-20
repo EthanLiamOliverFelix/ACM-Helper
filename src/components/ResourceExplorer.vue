@@ -6,9 +6,11 @@ import { useProblemStore } from '../stores/problemStore'
 import type { DraftFileInfo, Language, WorkspaceEntry } from '../types'
 import ResourceTreeNode from './ResourceTreeNode.vue'
 import { useLongPressMove } from '../composables/useLongPressMove'
+import { useWorkbenchStore } from '../stores/workbenchStore'
 import { getDataCenterValue, saveDataCenterValue } from '../dataCenter'
 
 const store = useProblemStore()
+const workbench = useWorkbenchStore()
 const entries = ref<WorkspaceEntry[]>([])
 const rootPath = ref('')
 const loading = ref(false)
@@ -91,7 +93,7 @@ function parentOf(entry: WorkspaceEntry | null) {
 }
 
 function openContext(entry: WorkspaceEntry | null, event: MouseEvent) {
-  contextMenu.value = { x: Math.min(event.clientX, window.innerWidth - 190), y: Math.max(4, Math.min(event.clientY, window.innerHeight - 390)), entry }
+  contextMenu.value = { x: Math.min(event.clientX, window.innerWidth - 230), y: Math.max(4, Math.min(event.clientY, window.innerHeight - 430)), entry }
 }
 
 function openDialog(mode: typeof dialog.mode, entry: WorkspaceEntry | null = contextMenu.value?.entry ?? null) {
@@ -138,7 +140,7 @@ async function submitDialog() {
 
 async function openEntry(entry: WorkspaceEntry) {
   if (holdMove.shouldSuppressClick()) return
-  if (entry.draft) await store.openDraftFile(entry.draft).catch((cause) => { error.value = String(cause) })
+  if (entry.draft) await store.openDraftFile(entry.draft).then(() => workbench.openCurrentCode()).catch((cause) => { error.value = String(cause) })
 }
 
 async function moveEntry(source: WorkspaceEntry, targetPath: string | null) {
@@ -256,12 +258,12 @@ onBeforeUnmount(() => {
 
 <style scoped lang="scss">
 .explorer { position: relative; height: 100%; display: flex; flex-direction: column; min-height: 0; color: var(--color-tone-ccc); }
-.explorer__toolbar { display: flex; align-items: center; gap: 3px; padding: 7px 8px; border-bottom: 1px solid var(--color-bg-subtle); strong { flex: 1; font-size: 11px; } button { padding: 3px 5px; border: 0; border-radius: 3px; background: transparent; color: var(--color-text-soft); font-size: 10px; cursor: pointer; &:hover { background: var(--color-bg-selected); color: var(--color-text-on-subtle-selection); } } }
+.explorer__toolbar { display: flex; align-items: center; gap: 4px; padding: 8px 9px; border-bottom: 1px solid var(--color-bg-subtle); strong { flex: 1; font-size: 13px; } button { padding: 4px 6px; border: 0; border-radius: 3px; background: transparent; color: var(--color-text-soft); font-size: 12px; cursor: pointer; &:hover { background: var(--color-bg-selected); color: var(--color-text-on-subtle-selection); } } }
 .explorer__root { overflow: hidden; padding: 5px 9px; border-bottom: 1px solid var(--color-bg-raised); color: var(--color-text-disabled); font: 8px Consolas, monospace; text-overflow: ellipsis; white-space: nowrap; }
-.explorer__tree { flex: 1; overflow: auto; padding: 6px 7px 16px; }
+.explorer__tree { flex: 1; overflow: auto; padding: 8px 8px 18px; }
 .explorer__move-hint { position: absolute; right: 7px; bottom: 7px; left: 7px; z-index: 5; padding: 6px; border: 1px solid var(--color-accent); border-radius: 4px; background: var(--color-accent-surface-hover); color: var(--color-accent-text); text-align: center; font-size: 9px; }
 .explorer__error, .explorer__notice { padding: 6px 9px; font-size: 10px; line-height: 1.4; }.explorer__error { color: var(--color-danger); background: var(--color-danger-surface); }.explorer__notice { color: var(--color-tone-76c99b); background: var(--color-tone-1d3025); }
-.explorer__empty { padding: 30px 12px; text-align: center; color: var(--color-text-disabled); font-size: 10px; }
-.context-menu { position: fixed; z-index: 1900; width: 185px; padding: 4px; border: 1px solid var(--color-border-strong); border-radius: 5px; background: var(--color-bg-panel); box-shadow: 0 8px 24px var(--color-overlay); button { display: block; width: 100%; padding: 6px 9px; border: 0; border-radius: 3px; background: transparent; color: var(--color-text-strong); text-align: left; font-size: 10px; cursor: pointer; span { display: block; overflow: hidden; color: var(--color-text-faint); font-size: 8px; text-overflow: ellipsis; white-space: nowrap; } &:hover:not(:disabled) { background: var(--color-tone-094771); color: var(--color-text-on-accent); } &:disabled { color: var(--color-text-disabled); cursor: default; } &.danger { color: var(--color-danger); &:hover { background: var(--color-tone-6b2525); color: var(--color-text-on-accent); } } } &__line { height: 1px; margin: 3px 5px; background: var(--color-border-control); } }
+.explorer__empty { padding: 30px 12px; text-align: center; color: var(--color-text-disabled); font-size: 12px; }
+.context-menu { position: fixed; z-index: 1900; width: 220px; padding: 6px; border: 1px solid var(--color-border-strong); border-radius: 6px; background: var(--color-bg-panel); box-shadow: 0 8px 24px var(--color-overlay); font-family: var(--font-ui); button { display: block; width: 100%; min-height: 32px; padding: 7px 11px; border: 0; border-radius: 4px; background: transparent; color: var(--color-text-strong); text-align: left; font-size: 13px; cursor: pointer; span { display: block; overflow: hidden; color: var(--color-text-faint); font-size: 11px; text-overflow: ellipsis; white-space: nowrap; } &:hover:not(:disabled) { background: var(--color-tone-094771); color: var(--color-text-on-accent); } &:disabled { color: var(--color-text-disabled); cursor: default; } &.danger { color: var(--color-danger); &:hover { background: var(--color-tone-6b2525); color: var(--color-text-on-accent); } } } &__line { height: 1px; margin: 4px 6px; background: var(--color-border-control); } }
 .entry-dialog { position: fixed; inset: 0; z-index: 1950; display: flex; align-items: center; justify-content: center; background: var(--color-tone-0008); form { width: min(360px, 86vw); padding: 16px; border: 1px solid var(--color-border-strong); border-radius: 7px; background: var(--color-bg-panel); box-shadow: 0 15px 40px var(--color-overlay); } h3 { margin: 0 0 13px; font-size: 14px; } label { display: block; margin-bottom: 9px; color: var(--color-text-soft); font-size: 10px; } input, select { box-sizing: border-box; width: 100%; margin-top: 4px; padding: 7px; border: 1px solid var(--color-border-input); border-radius: 4px; outline: none; background: var(--color-bg-deep); color: var(--color-text-strong); &:focus { border-color: var(--color-accent); } } p { overflow-wrap: anywhere; color: var(--color-text-faint); font-size: 9px; line-height: 1.5; } &__actions { display: flex; justify-content: space-between; gap: 7px; margin-top: 14px; button { padding: 6px 13px; border: 0; border-radius: 4px; background: var(--color-border-control); color: var(--color-text-on-accent); cursor: pointer; &[type='submit'] { background: var(--color-accent-strong); } &.danger { background: var(--color-tone-9a3535); } &:disabled { opacity: .4; } } } .delete-warning { color: var(--color-tone-e6b1a8); font-size: 11px; } }
 </style>

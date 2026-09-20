@@ -4,6 +4,7 @@ import type { Language } from '../types'
 import { normalizeOutputLineLimit } from '../utils/outputLimit'
 import { getDataCenterValue, saveDataCenterValue } from '../dataCenter'
 import { applyResolvedTheme, normalizeThemeMode, resolveThemeMode, type ThemeMode } from '../theme'
+import { normalizeAppZoom } from '../appZoom'
 
 export interface ToolchainPaths {
   cppCompiler: string
@@ -33,6 +34,7 @@ export const useSettingsStore = defineStore('settings', () => {
     luoguEnableO2?: boolean
     toolchainPaths?: Partial<ToolchainPaths>
     theme?: ThemeMode
+    zoomLevel?: number
   }>('settings', {})
 
   const codeTemplates = reactive<Record<Language, string>>({
@@ -43,6 +45,7 @@ export const useSettingsStore = defineStore('settings', () => {
   const outputLineLimit = ref(normalizeOutputLineLimit(saved.outputLineLimit))
   const formatOnSave = ref(saved.formatOnSave ?? false)
   const theme = ref<ThemeMode>(normalizeThemeMode(saved.theme))
+  const zoomLevel = ref(normalizeAppZoom(saved.zoomLevel))
   const systemPrefersDark = ref(typeof window === 'undefined' || !window.matchMedia
     ? true
     : window.matchMedia('(prefers-color-scheme: dark)').matches)
@@ -84,6 +87,7 @@ export const useSettingsStore = defineStore('settings', () => {
       luoguEnableO2: luoguEnableO2.value,
       toolchainPaths,
       theme: theme.value,
+      zoomLevel: zoomLevel.value,
     })
   }
 
@@ -97,6 +101,7 @@ export const useSettingsStore = defineStore('settings', () => {
     outputLineLimit,
     formatOnSave,
     theme,
+    zoomLevel,
     resolvedTheme,
     cppStandard,
     luoguCppLanguageId,

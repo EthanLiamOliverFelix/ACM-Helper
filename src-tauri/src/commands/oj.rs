@@ -381,7 +381,7 @@ fn parse_luogu_problem_page(
                         .unwrap_or(&LUOGU_DIFFICULTIES[0])
                         .to_string(),
                 ),
-                source: item.get("type").and_then(Value::as_str).map(str::to_string),
+                source: Some("洛谷".into()),
                 content_format: None,
                 description: None,
                 url: Some(format!("https://www.luogu.com.cn/problem/{}", id)),
@@ -1606,10 +1606,7 @@ pub(crate) async fn fetch_luogu(url: &str) -> Result<Problem, String> {
                 .unwrap_or(&"暂无评定")
                 .to_string(),
         ),
-        source: problem
-            .get("type")
-            .and_then(Value::as_str)
-            .map(str::to_string),
+        source: Some("洛谷".into()),
         content_format: Some("markdown".into()),
         description: value_str(content.get("description")),
         url: Some(normalized),

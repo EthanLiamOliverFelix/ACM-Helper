@@ -4,11 +4,15 @@ import { revealItemInDir } from '@tauri-apps/plugin-opener'
 import type { NoteEntry } from '../types'
 import { useNoteStore } from '../stores/noteStore'
 import { useLongPressMove } from '../composables/useLongPressMove'
+import { usePointerResize } from '../composables/usePointerResize'
+import { useWorkbenchStore } from '../stores/workbenchStore'
 import NoteTreeNode from './NoteTreeNode.vue'
 import MarkdownNoteEditor from './MarkdownNoteEditor.vue'
 
-const emit = defineEmits<{ close: [] }>()
 const notes = useNoteStore()
+const workbench = useWorkbenchStore()
+const noteBody = ref<HTMLElement | null>(null)
+const { startPointerResize } = usePointerResize()
 const mode = ref<'read' | 'edit'>('read')
 const notice = ref('')
 const contextMenu = ref<{ x: number; y: number; entry: NoteEntry | null } | null>(null)
@@ -114,12 +118,16 @@ async function copyFileUrl(path: string) {
   contextMenu.value = null
 }
 
-async function closeManager() {
-  await notes.saveActive().catch(() => undefined)
-  emit('close')
-}
-
 function dismissMenu() { contextMenu.value = null }
+function startSidebarResize(event: PointerEvent) {
+  const startX = event.clientX
+  const startWidth = workbench.noteSidebarWidth
+  const available = noteBody.value?.clientWidth ?? window.innerWidth
+  startPointerResize(event, {
+    axis: 'x',
+    onMove: current => workbench.setNoteSidebarWidth(Math.min(available - 240, startWidth + current.clientX - startX)),
+  })
+}
 onMounted(() => {
   notes.refresh()
   window.addEventListener('click', dismissMenu)
@@ -133,12 +141,8 @@ onBeforeUnmount(() => {
 
 <template>
   <section class="note-manager">
-    <header class="note-manager__header">
-      <div><h2>算法笔记本</h2><span>所有笔记保存在本地 Markdown 文件中</span></div>
-      <button class="close" @click="closeManager">×</button>
-    </header>
-    <div class="note-manager__body">
-      <aside class="note-sidebar" @contextmenu.prevent="openContext(null, $event)">
+    <div ref="noteBody" class="note-manager__body">
+      <aside class="note-sidebar" :style="{ width: `${workbench.noteSidebarWidth}px` }" @contextmenu.prevent="openContext(null, $event)">
         <div class="note-sidebar__toolbar"><strong>笔记目录</strong><button title="新建笔记" @click.stop="openDialog('file', null)">📄＋</button><button title="新建文件夹" @click.stop="openDialog('folder', null)">📁＋</button><button title="刷新" @click.stop="notes.refresh">↻</button></div>
         <div class="note-sidebar__root" :title="notes.rootPath">{{ notes.rootPath || 'notes' }}</div>
         <div v-if="notice" class="notice">{{ notice }}</div><div v-if="notes.error" class="error">{{ notes.error }}</div>
@@ -149,6 +153,7 @@ onBeforeUnmount(() => {
         </div>
         <div v-if="holdMove.movingPath.value" class="move-hint">移动到目标文件夹后松开</div>
       </aside>
+      <div class="note-sidebar-divider" title="拖动调整笔记目录宽度" @pointerdown="startSidebarResize" />
       <main class="note-workspace">
         <template v-if="notes.activeNote">
           <header class="note-workspace__header">
@@ -180,9 +185,9 @@ onBeforeUnmount(() => {
 </template>
 
 <style scoped lang="scss">
-.note-manager { height: 100%; display: flex; flex-direction: column; overflow: hidden; background: var(--color-bg-deep); color: var(--color-text-primary); &__header { display: flex; align-items: center; padding: 12px 18px; border-bottom: 1px solid var(--color-border); background: var(--color-bg-app); > div { min-width: 0; flex: 1; } h2 { margin: 0; font-size: 18px; } span { color: var(--color-text-faint); font-size: 10px; } .close { border: 0; background: transparent; color: var(--color-text-soft); font-size: 25px; cursor: pointer; } } &__body { min-height: 0; flex: 1; display: grid; grid-template-columns: minmax(220px, 290px) 1fr; } }
+.note-manager { height: 100%; display: flex; flex-direction: column; overflow: hidden; background: var(--color-bg-deep); color: var(--color-text-primary); &__body { min-width: 0; min-height: 0; flex: 1; display: flex; overflow: hidden; } }
 .note-sidebar { position: relative; min-width: 0; display: flex; flex-direction: column; border-right: 1px solid var(--color-border); background: var(--color-bg-app); &__toolbar { display: flex; align-items: center; gap: 3px; padding: 7px 8px; border-bottom: 1px solid var(--color-bg-subtle); strong { flex: 1; font-size: 11px; } button { padding: 3px 5px; border: 0; border-radius: 3px; background: transparent; color: var(--color-text-soft); cursor: pointer; &:hover { background: var(--color-bg-selected); color: var(--color-text-on-subtle-selection); } } } &__root { overflow: hidden; padding: 5px 9px; border-bottom: 1px solid var(--color-bg-raised); color: var(--color-text-disabled); font: 8px Consolas, monospace; text-overflow: ellipsis; white-space: nowrap; } }.note-tree { min-height: 0; flex: 1; overflow: auto; padding: 6px 7px 20px; }.move-hint { position: absolute; right: 8px; bottom: 8px; left: 8px; padding: 6px; border: 1px solid var(--color-accent); border-radius: 4px; background: var(--color-accent-surface-hover); color: var(--color-accent-text); text-align: center; font-size: 9px; }
-.note-workspace { min-width: 0; min-height: 0; display: flex; flex-direction: column; &__header { display: flex; align-items: center; gap: 12px; padding: 8px 12px; border-bottom: 1px solid var(--color-border); background: var(--color-bg-panel); > div:first-child { min-width: 0; flex: 1; display: flex; flex-direction: column; } strong { font-size: 13px; } span { overflow: hidden; color: var(--color-text-faint); font: 8px Consolas, monospace; text-overflow: ellipsis; white-space: nowrap; } } }.mode-tabs { display: flex; flex-direction: row !important; gap: 3px; button { padding: 5px 9px; border: 1px solid var(--color-border-control); border-radius: 4px; background: var(--color-bg-control-alt); color: var(--color-text-soft); font-size: 10px; cursor: pointer; &.active { border-color: var(--color-accent-border); background: var(--color-accent-surface-hover); color: var(--color-accent-text); } &.save { border-color: var(--color-tone-39704f); background: var(--color-tone-20372a); color: var(--color-tone-8ad0a1); } &:disabled { opacity: .55; } } }.welcome { display: grid; place-content: center; height: 100%; padding: 30px; color: var(--color-text-faint); text-align: center; strong { color: var(--color-text-secondary); font-size: 17px; } p { max-width: 470px; margin: 8px 0 0; font-size: 11px; } }
+.note-sidebar-divider { position: relative; z-index: 12; flex: 0 0 5px; margin: 0 -2px; background: transparent; cursor: col-resize; touch-action: none; &:hover { background: var(--color-accent); } }.note-workspace { min-width: 0; min-height: 0; flex: 1; display: flex; flex-direction: column; &__header { display: flex; align-items: center; gap: 12px; padding: 8px 12px; border-bottom: 1px solid var(--color-border); background: var(--color-bg-panel); > div:first-child { min-width: 0; flex: 1; display: flex; flex-direction: column; } strong { font-size: 13px; } span { overflow: hidden; color: var(--color-text-faint); font: 8px Consolas, monospace; text-overflow: ellipsis; white-space: nowrap; } } }.mode-tabs { display: flex; flex-direction: row !important; gap: 3px; button { padding: 5px 9px; border: 1px solid var(--color-border-control); border-radius: 4px; background: var(--color-bg-control-alt); color: var(--color-text-soft); font-size: 10px; cursor: pointer; &.active { border-color: var(--color-accent-border); background: var(--color-accent-surface-hover); color: var(--color-accent-text); } &.save { border-color: var(--color-tone-39704f); background: var(--color-tone-20372a); color: var(--color-tone-8ad0a1); } &:disabled { opacity: .55; } } }.welcome { display: grid; place-content: center; height: 100%; padding: 30px; color: var(--color-text-faint); text-align: center; strong { color: var(--color-text-secondary); font-size: 17px; } p { max-width: 470px; margin: 8px 0 0; font-size: 11px; } }
 .notice, .error { padding: 6px 9px; font-size: 9px; }.notice { color: var(--color-tone-76c99b); background: var(--color-tone-1d3025); }.error { color: var(--color-danger); background: var(--color-danger-surface); overflow-wrap: anywhere; }.empty { padding: 25px 12px; color: var(--color-text-disabled); text-align: center; font-size: 10px; }
 .context-menu { position: fixed; z-index: 1900; width: 185px; padding: 4px; border: 1px solid var(--color-border-strong); border-radius: 5px; background: var(--color-bg-panel); box-shadow: 0 8px 24px var(--color-overlay); button { display: block; width: 100%; padding: 6px 9px; border: 0; border-radius: 3px; background: transparent; color: var(--color-text-strong); text-align: left; font-size: 10px; cursor: pointer; &:hover:not(:disabled) { background: var(--color-tone-094771); color: var(--color-text-on-accent); } &:disabled { color: var(--color-text-disabled); } &.danger { color: var(--color-danger); } } .line { height: 1px; margin: 3px 5px; background: var(--color-border-control); } }
 .note-dialog { position: fixed; inset: 0; z-index: 1950; display: grid; place-items: center; background: var(--color-tone-0008); form { width: min(370px, 86vw); padding: 16px; border: 1px solid var(--color-border-strong); border-radius: 7px; background: var(--color-bg-panel); box-shadow: 0 15px 40px var(--color-overlay); } h3 { margin: 0 0 13px; font-size: 14px; } label { color: var(--color-text-soft); font-size: 10px; } input { box-sizing: border-box; width: 100%; margin-top: 5px; padding: 7px; border: 1px solid var(--color-border-input); border-radius: 4px; outline: none; background: var(--color-bg-deep); color: var(--color-text-strong); &:focus { border-color: var(--color-accent); } } p { color: var(--color-text-faint); font-size: 9px; overflow-wrap: anywhere; } .warning { color: var(--color-tone-e6b1a8); font-size: 11px; } .actions { display: flex; justify-content: space-between; margin-top: 14px; button { padding: 6px 13px; border: 0; border-radius: 4px; background: var(--color-border-control); color: var(--color-text-on-accent); cursor: pointer; &[type='submit'] { background: var(--color-accent-strong); } &.danger { background: var(--color-tone-9a3535); } &:disabled { opacity: .4; } } } }

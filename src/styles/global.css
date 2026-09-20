@@ -3,6 +3,13 @@
 :root {
   color-scheme: dark;
 
+  /* Typography — match the native Windows / VS Code visual rhythm. */
+  --font-ui: 'Segoe UI Variable Text', 'Segoe UI Variable', 'Segoe UI', 'Microsoft YaHei UI', 'PingFang SC', sans-serif;
+  --font-mono: 'Cascadia Code', 'Cascadia Mono', Consolas, 'Courier New', monospace;
+  --font-size-ui: 14px;
+  --font-size-small: 12px;
+  --font-size-caption: 11px;
+
   /* Surfaces */
   --color-bg-app: var(--color-tone-1e1e1e);
   --color-bg-deep: var(--color-tone-181818);
@@ -691,9 +698,16 @@ html, body, #app {
   overflow: hidden;
   background: var(--color-bg-app);
   color: var(--color-text-primary);
-  font-family: 'Segoe UI', 'PingFang SC', 'Microsoft YaHei', -apple-system, sans-serif;
+  font-family: var(--font-ui);
+  font-size: var(--font-size-ui);
+  font-weight: 400;
+  text-rendering: optimizeLegibility;
   -webkit-font-smoothing: antialiased;
   -moz-osx-font-smoothing: grayscale;
+}
+
+button, input, select, textarea {
+  font-family: inherit;
 }
 
 /* 滚动条风格 */
@@ -730,3 +744,7 @@ a {
 a:hover {
   text-decoration: underline;
 }
+body.is-resizing-x,
+body.is-resizing-x * { cursor: col-resize !important; user-select: none !important; }
+body.is-resizing-y,
+body.is-resizing-y * { cursor: row-resize !important; user-select: none !important; }

@@ -1,7 +1,7 @@
 {
   "name": "my-acm-helper",
   "private": true,
-  "version": "0.1.0",
+  "version": "14.0.0",
   "type": "module",
   "scripts": {
     "dev": "vite",
@@ -14,6 +14,7 @@
     "@guolao/vue-monaco-editor": "^1.6.0",
     "@tauri-apps/api": "^2.11.1",
     "@tauri-apps/plugin-opener": "^2",
+    "@vscode/codicons": "^0.0.36",
     "@wasm-fmt/clang-format": "^22.1.8",
     "@wasm-fmt/ruff_fmt": "^0.15.20",
     "dompurify": "^3.4.14",

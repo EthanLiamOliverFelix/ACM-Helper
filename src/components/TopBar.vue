@@ -8,6 +8,7 @@ import { useNoteStore } from '../stores/noteStore'
 import type { ToolchainPaths } from '../stores/settingsStore'
 import type { Language } from '../types'
 import { openUrl } from '@tauri-apps/plugin-opener'
+import { getCurrentWindow } from '@tauri-apps/api/window'
 import { clearOjDiagnostics, exportOjDiagnostics, getOjDiagnostics, type OjDiagnosticEntry } from '../diagnostics'
 import {
   currentDataCenterInfo,
@@ -25,13 +26,11 @@ import {
   type DataCenterInfo,
 } from '../dataCenter'
 
-defineProps<{ layout: Record<'showSidebar' | 'showStatement' | 'showEditor' | 'showRunner', boolean> }>()
-const emit = defineEmits<{ toggleView: [key: 'showSidebar' | 'showStatement' | 'showEditor' | 'showRunner'] }>()
 const ai = useAiStore()
 const settings = useSettingsStore()
 const problems = useProblemStore()
 const notes = useNoteStore()
-const viewOpen = ref(false)
+const appWindow = getCurrentWindow()
 const settingsOpen = ref(false)
 const settingsPage = ref<'main' | 'translation' | 'solution'>('main')
 const language = ref<Language>('cpp')
@@ -61,12 +60,9 @@ const toolchainWebsites = [
   { label: 'Python', url: 'https://www.python.org/downloads/windows/' },
   { label: 'Java JDK（Eclipse Temurin）', url: 'https://adoptium.net/temurin/releases/' },
 ]
-const views = [
-  { key: 'showSidebar' as const, label: '题库、题单与资源管理器' },
-  { key: 'showStatement' as const, label: '题面' },
-  { key: 'showEditor' as const, label: '代码编辑器' },
-  { key: 'showRunner' as const, label: '运行与提交' },
-]
+async function minimizeWindow() { await appWindow.minimize() }
+async function toggleWindowSize() { await appWindow.toggleMaximize() }
+async function closeWindow() { await appWindow.close() }
 
 async function saveSettings() {
   await Promise.all([settings.save(), ai.saveConfig()])
@@ -109,7 +105,6 @@ function modelIsUnavailable(kind: AiModelKind) {
 async function openSettings() {
   settingsPage.value = 'main'
   settingsOpen.value = true
-  viewOpen.value = false
   void problems.refreshAccounts()
   try {
     dataCenterInfo.value = await refreshDataCenterInfo()
@@ -224,17 +219,17 @@ async function moveDataCenter() {
 </script>
 
 <template>
-  <header class="topbar">
-    <div class="topbar__brand">ACM Helper</div>
+  <header class="topbar" data-tauri-drag-region @dblclick.self="toggleWindowSize">
+    <div class="topbar__brand" data-tauri-drag-region>ACM Helper</div>
     <div class="topbar__menu">
-      <button :class="{ active: viewOpen }" @click="viewOpen = !viewOpen">视图</button>
-      <div v-if="viewOpen" class="view-menu">
-        <label v-for="item in views" :key="item.key"><input type="checkbox" :checked="layout[item.key]" @change="emit('toggleView', item.key)" />{{ item.label }}</label>
-        <small>显示状态和面板尺寸会自动保存在本机。</small>
-      </div>
       <button @click="openSettings">设置</button>
     </div>
     <div class="topbar__hint">{{ savedNotice }}</div>
+    <div class="window-controls">
+      <button title="最小化" aria-label="最小化" @click="minimizeWindow">—</button>
+      <button title="最大化或还原" aria-label="最大化或还原" @click="toggleWindowSize">□</button>
+      <button class="close" title="关闭" aria-label="关闭" @click="closeWindow">×</button>
+    </div>
   </header>
 
   <div v-if="settingsOpen" class="settings-modal" @click.self="settingsOpen = false">
@@ -327,8 +322,8 @@ async function moveDataCenter() {
 </template>
 
 <style scoped lang="scss">
-.topbar { height: 36px; flex: 0 0 36px; display: flex; align-items: center; padding: 0 10px; border-bottom: 1px solid var(--color-border-soft); background: var(--color-bg-deep); color: var(--color-tone-ccc); user-select: none; &__brand { margin-right: 15px; color: var(--color-tone-75bfff); font-size: 12px; font-weight: 700; } &__menu { position: relative; display: flex; height: 100%; align-items: center; > button { height: 27px; padding: 0 10px; border: 0; border-radius: 4px; background: transparent; color: var(--color-text-secondary); cursor: pointer; } > button:hover, > button.active { background: var(--color-tone-353535); color: var(--color-text-on-accent); } } &__hint { margin-left: auto; color: var(--color-tone-68c58e); font-size: 10px; } }
-.view-menu { position: absolute; top: 32px; left: 0; z-index: 1300; width: 210px; padding: 7px; border: 1px solid var(--color-tone-484848); border-radius: 6px; background: var(--color-bg-panel); box-shadow: 0 8px 28px var(--color-tone-0008); label { display: flex; gap: 8px; align-items: center; padding: 7px; border-radius: 4px; color: var(--color-text-strong); font-size: 11px; cursor: pointer; &:hover { background: var(--color-bg-selected); } } small { display: block; padding: 7px; border-top: 1px solid var(--color-tone-3b3b3b); color: var(--color-text-faint); line-height: 1.4; } }
+.topbar { height: 39px; flex: 0 0 39px; display: flex; align-items: center; padding: 0 11px; border-bottom: 1px solid var(--color-border-soft); background: var(--color-bg-deep); color: var(--color-tone-ccc); user-select: none; &__brand { margin-right: 17px; color: var(--color-tone-75bfff); font-size: 14px; font-weight: 700; } &__menu { position: relative; display: flex; height: 100%; align-items: center; > button { height: 29px; padding: 0 11px; border: 0; border-radius: 4px; background: transparent; color: var(--color-text-secondary); font-size: 14px; cursor: pointer; } > button:hover, > button.active { background: var(--color-tone-353535); color: var(--color-text-on-accent); } } &__hint { margin-left: auto; color: var(--color-tone-68c58e); font-size: 12px; } }
+.window-controls { height: 39px; display: flex; align-self: stretch; margin: 0 -11px 0 12px; button { width: 46px; height: 100%; display: grid; place-items: center; border: 0; border-radius: 0; background: transparent; color: var(--color-text-secondary); font-size: 17px; line-height: 1; cursor: pointer; &:hover { background: var(--color-bg-hover); color: var(--color-text-on-accent); } &.close:hover { background: var(--color-danger-strong); color: white; } } }
 .settings-modal { position: fixed; inset: 0; z-index: 1800; display: flex; align-items: center; justify-content: center; padding: 24px; background: var(--color-overlay); }
 .settings-card { width: min(1080px, 96vw); max-height: 92vh; overflow: auto; border: 1px solid var(--color-border-input); border-radius: 10px; background: var(--color-bg-panel); color: var(--color-text-strong); box-shadow: 0 20px 70px var(--color-overlay-strong); > header { display: flex; align-items: center; gap: 10px; padding: 17px 20px; border-bottom: 1px solid var(--color-tone-3b3b3b); > div { min-width: 0; flex: 1; } h2 { margin: 0; font-size: 19px; } p { margin: 4px 0 0; color: var(--color-text-muted); font-size: 11px; } button { border: 0; background: transparent; color: var(--color-text-soft); font-size: 24px; cursor: pointer; } .settings-back { width: 30px; padding: 0; color: var(--color-accent-text); font-size: 29px; }.settings-close { margin-left: auto; } } > footer { display: flex; justify-content: flex-end; align-items: center; gap: 15px; padding: 13px 20px; border-top: 1px solid var(--color-tone-3b3b3b); span { color: var(--color-tone-68c58e); font-size: 11px; } } }
 .settings-grid { display: grid; grid-template-columns: 1.2fr 1fr; gap: 24px; padding: 20px; section { min-width: 0; } h3 { margin: 0 0 12px; font-size: 13px; } label { display: block; margin-bottom: 10px; color: var(--color-tone-999); font-size: 10px; } input, select, textarea { box-sizing: border-box; width: 100%; margin-top: 4px; padding: 8px; border: 1px solid var(--color-border-control); border-radius: 4px; outline: none; background: var(--color-bg-deep); color: var(--color-text-strong); } textarea { height: 330px; resize: vertical; font: 11px/1.5 Consolas, monospace; } input:focus, select:focus, textarea:focus { border-color: var(--color-accent); } }

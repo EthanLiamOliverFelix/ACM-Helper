@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
-import type { LocalTestCase, RunResult } from '../types'
-import { getRunDiagnostic, selectWorkbenchResult, shouldShowTestStderrInline } from './runDiagnostics'
+import type { RunResult } from '../types'
+import { getRunDiagnostic, selectWorkbenchResult } from './runDiagnostics'
 
 function result(overrides: Partial<RunResult> = {}): RunResult {
   return {
@@ -26,10 +26,10 @@ describe('run diagnostics workbench', () => {
     expect(getRunDiagnostic(result({ timedOut: true, stderr: '运行超时' }), 'python')?.title).toBe('运行超时')
   })
 
-  it('keeps successful stderr inline but moves failed diagnostics out', () => {
-    const test = { stderr: 'warning', status: 'completed', compileFailed: false } as LocalTestCase
-    expect(shouldShowTestStderrInline(test)).toBe(true)
-    expect(shouldShowTestStderrInline({ ...test, status: 'error' })).toBe(false)
+  it('shows stderr from successful runs in the bottom workbench', () => {
+    const warning = result({ success: true, stderr: 'warning', exitCode: 0 })
+    expect(getRunDiagnostic(warning, 'cpp')).toEqual({ title: '标准错误输出', message: 'warning' })
+    expect(selectWorkbenchResult([warning, result({ success: true, stderr: '', exitCode: 0 })])).toBe(warning)
   })
 
   it('does not lose an earlier error when a later test succeeds', () => {

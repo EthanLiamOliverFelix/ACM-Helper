@@ -3,7 +3,6 @@ import { useProblemStore } from '../stores/problemStore'
 import { computed, ref, watch } from 'vue'
 import { useLearningStore } from '../stores/learningStore'
 import { useAiStore } from '../stores/aiStore'
-import { useNoteStore } from '../stores/noteStore'
 import MarkdownNoteEditor from './MarkdownNoteEditor.vue'
 import DOMPurify from 'dompurify'
 import { renderLuoguMarkdown } from '../utils/luoguMarkdown'
@@ -13,11 +12,12 @@ import { splitCodeforcesMathText } from '../utils/codeforcesMath'
 import { openUrl } from '@tauri-apps/plugin-opener'
 import { ojTranslationKey } from '../utils/ojTranslation'
 import 'katex/dist/katex.min.css'
+import { useWorkbenchStore } from '../stores/workbenchStore'
 
 const store = useProblemStore()
 const learning = useLearningStore()
 const ai = useAiStore()
-const notes = useNoteStore()
+const workbench = useWorkbenchStore()
 const problemKey = computed(() => store.currentProblem ? `${store.currentProblem.platform}:${store.currentProblem.id}` : '')
 const translationKey = computed(() => store.currentProblem ? ojTranslationKey(store.currentProblem.platform, store.currentProblem.id) : '')
 const translationSupported = computed(() => {
@@ -35,8 +35,6 @@ const refreshError = ref('')
 const linkError = ref('')
 const refreshNotice = ref('')
 const copiedSample = ref('')
-const noteOpen = ref(false)
-const noteMode = ref<'read' | 'edit'>('edit')
 const noteLoading = ref(false)
 const noteError = ref('')
 const statementOpen = ref(false)
@@ -45,6 +43,20 @@ const statementDraft = ref('')
 const statementSaving = ref(false)
 const statementError = ref('')
 const statementDirty = computed(() => statementDraft.value !== store.localStatement)
+const problemSource = computed(() => {
+  const problem = store.currentProblem
+  if (!problem) return ''
+  // Luogu's `type` field contains a one-letter problem kind (for example "P"),
+  // not a user-facing source name. Normalize older cached entries here too.
+  if (problem.platform === 'luogu' && (!problem.source || /^[A-Z]$/.test(problem.source))) return '洛谷'
+  return problem.source || (problem.platform === 'codeforces'
+    ? 'Codeforces'
+    : problem.platform === 'atcoder'
+      ? 'AtCoder'
+      : problem.platform === 'qoj'
+        ? 'QOJ'
+        : '本地题目')
+})
 const difficultyColors: Record<string, string> = {
   '暂无评定': 'var(--color-tone-bfbfbf)', '入门': 'var(--color-tone-fe4c61)', '普及-': 'var(--color-tone-f39c11)', '普及': 'var(--color-tone-ffc116)',
   '普及+/提高-': 'var(--color-tone-52c41a)', '提高': 'var(--color-tone-13c2c2)', '提高+/省选-': 'var(--color-tone-3498db)',
@@ -208,16 +220,9 @@ async function openProblemNote() {
   noteLoading.value = true
   noteError.value = ''
   try {
-    await notes.openProblemNote(store.currentProblem)
-    noteMode.value = 'edit'
-    noteOpen.value = true
+    await workbench.openProblemNote()
   } catch (cause) { noteError.value = String(cause) }
   finally { noteLoading.value = false }
-}
-
-async function closeProblemNote() {
-  await notes.saveActive().catch((cause) => { noteError.value = String(cause) })
-  noteOpen.value = false
 }
 
 function openLocalStatement() {
@@ -247,53 +252,33 @@ async function closeLocalStatement() {
 <template>
   <div class="problem-desc">
     <div v-if="store.currentProblem" class="problem-desc__header">
-      <span class="problem-desc__id">{{ store.currentProblem.id }}</span>
-      <span class="problem-desc__title">{{ store.currentProblem.title }}</span>
-      <span
-        v-if="store.currentProblem.platform === 'luogu' && store.currentProblem.difficulty"
-        class="problem-desc__difficulty"
-        :class="`difficulty--${store.currentProblem.difficulty!.toLowerCase()}`"
-        :style="{ color: difficultyColors[store.currentProblem.difficulty] }"
-      >
-        {{ store.currentProblem.difficulty }}
-      </span>
-      <span
-        v-if="store.currentProblem.rating"
-        class="problem-desc__rating"
-      >
-        ★ {{ store.currentProblem.rating }}
-      </span>
-      <span v-if="store.currentProblem.timeLimitMs" class="problem-desc__limit">{{ store.currentProblem.timeLimitMs }} ms</span>
-      <span v-if="store.currentProblem.memoryLimitMb" class="problem-desc__limit">{{ store.currentProblem.memoryLimitMb }} MB</span>
-      <button class="note-btn" :disabled="noteLoading" title="打开这道题的本地 Markdown 笔记" @click="openProblemNote">{{ noteLoading ? '打开中…' : '📝 题目笔记' }}</button>
-      <button
-        v-if="store.currentProblem.platform === 'local' && store.draftPath"
-        class="statement-edit-btn"
-        title="用 Markdown 记录这份本地代码对应的题面"
-        @click="openLocalStatement"
-      >📄 编辑题面</button>
-      <button
-        v-if="store.currentProblem.platform !== 'local'"
-        class="refresh-btn"
-        :disabled="store.isLoadingDetail"
-        title="忽略已有题面，重新从原 OJ 抓取；不会影响本地代码"
-        @click="refreshStatement"
-      >{{ store.isLoadingDetail ? '抓取中…' : '重新抓取' }}</button>
-      <button
-        v-if="translationSupported && !ai.translations[translationKey]"
-        class="translate-btn"
-        :disabled="ai.isTranslating || !ai.translationConfigured"
-        :title="ai.translationConfigured ? '使用已配置的翻译模型翻译完整题面' : '请先在顶部设置中配置翻译模型'"
-        @click="translate"
-      >{{ ai.isTranslating ? '翻译中…' : 'AI 翻译' }}</button>
-      <button
-        v-if="translationSupported && ai.translations[translationKey]"
-        class="retranslate-btn"
-        :disabled="ai.isTranslating || !ai.translationConfigured"
-        :title="ai.translationConfigured ? '重新调用翻译模型并覆盖本地译文' : '请先在顶部设置中配置翻译模型'"
-        @click="retranslate"
-      >{{ ai.isTranslating ? '重新翻译中…' : '重新翻译' }}</button>
-      <span v-if="learning.profile.solvedProblems.includes(problemKey)" class="solved-btn solved-btn--active">✓ 已完成</span>
+      <div class="problem-desc__overview">
+        <div class="problem-desc__heading">
+          <h1><span class="problem-desc__id">{{ store.currentProblem.id }}</span> {{ store.currentProblem.title }}</h1>
+          <small>{{ problemSource }}</small>
+        </div>
+        <div class="problem-desc__facts">
+          <div><span>时间限制</span><strong>{{ store.currentProblem.timeLimitMs ? `${store.currentProblem.timeLimitMs} ms` : '—' }}</strong></div>
+          <div><span>内存限制</span><strong>{{ store.currentProblem.memoryLimitMb ? `${store.currentProblem.memoryLimitMb} MB` : '—' }}</strong></div>
+          <div><span>题目难度</span><strong :style="{ color: store.currentProblem.difficulty ? difficultyColors[store.currentProblem.difficulty] : undefined }">{{ store.currentProblem.difficulty || (store.currentProblem.rating ? `★ ${store.currentProblem.rating}` : '暂无评定') }}</strong></div>
+          <div class="problem-desc__tags" tabindex="0">
+            <span>题目标签</span>
+            <strong class="problem-desc__tags-arrow" aria-hidden="true">⌄</strong>
+            <div class="problem-desc__tags-popup" role="tooltip">
+              <span v-for="tag in store.currentProblem.tags" :key="tag">{{ tag }}</span>
+              <em v-if="!store.currentProblem.tags.length">暂无标签</em>
+            </div>
+          </div>
+        </div>
+      </div>
+      <div class="problem-desc__actions">
+        <button class="note-btn" :disabled="noteLoading" title="在编辑区打开这道题的本地 Markdown 笔记" @click="openProblemNote">{{ noteLoading ? '打开中…' : '▧ 题目笔记' }}</button>
+        <button v-if="store.currentProblem.platform === 'local' && store.draftPath" class="statement-edit-btn" title="用 Markdown 记录这份本地代码对应的题面" @click="openLocalStatement">▤ 编辑题面</button>
+        <button v-if="store.currentProblem.platform !== 'local'" class="refresh-btn" :disabled="store.isLoadingDetail" title="忽略已有题面，重新从原 OJ 抓取；不会影响本地代码" @click="refreshStatement">{{ store.isLoadingDetail ? '抓取中…' : '↻ 重新抓取' }}</button>
+        <button v-if="translationSupported && !ai.translations[translationKey]" class="translate-btn" :disabled="ai.isTranslating || !ai.translationConfigured" :title="ai.translationConfigured ? '使用已配置的翻译模型翻译完整题面' : '请先在顶部设置中配置翻译模型'" @click="translate">{{ ai.isTranslating ? '翻译中…' : '译 AI 翻译' }}</button>
+        <button v-if="translationSupported && ai.translations[translationKey]" class="retranslate-btn" :disabled="ai.isTranslating || !ai.translationConfigured" :title="ai.translationConfigured ? '重新调用翻译模型并覆盖本地译文' : '请先在顶部设置中配置翻译模型'" @click="retranslate">{{ ai.isTranslating ? '重新翻译中…' : '译 重新翻译' }}</button>
+        <span v-if="learning.profile.solvedProblems.includes(problemKey)" class="solved-btn solved-btn--active">✓ 已完成</span>
+      </div>
     </div>
     <div v-else class="problem-desc__header problem-desc__header--empty">
       <span class="problem-desc__title">未选择题目</span>
@@ -330,18 +315,7 @@ async function closeLocalStatement() {
     <div v-if="refreshError" class="problem-desc__error">重新抓取失败：{{ refreshError }}（已保留原题面）</div>
     <div v-if="translationError" class="problem-desc__error">{{ translationError }}</div>
     <div v-if="linkError" class="problem-desc__error">链接打开失败：{{ linkError }}</div>
-    <div v-if="noteError && !noteOpen" class="problem-desc__error">笔记打开失败：{{ noteError }}</div>
-
-    <div v-if="noteOpen && notes.activeNote" class="problem-note-modal" @click.self="closeProblemNote">
-      <section>
-        <header>
-          <div><strong>{{ store.currentProblem?.id }} · 题目笔记</strong><span :title="notes.activeNote.path">{{ notes.activeNote.path }}</span></div>
-          <nav><button :class="{ active: noteMode === 'read' }" @click="notes.saveActive(); noteMode = 'read'">只读</button><button :class="{ active: noteMode === 'edit' }" @click="noteMode = 'edit'">编辑</button><button v-if="noteMode === 'edit'" class="save" :disabled="notes.saving || !notes.dirty" @click="notes.saveActive">{{ notes.saving ? '保存中…' : notes.dirty ? '保存' : '已保存' }}</button><button class="close" aria-label="关闭" @click="closeProblemNote">×</button></nav>
-        </header>
-        <div v-if="notes.error" class="problem-note-modal__error">{{ notes.error }}</div>
-        <MarkdownNoteEditor :model-value="notes.activeNote.content" :mode="noteMode" :note-path="notes.activeNote.path" @update:model-value="notes.updateContent" @save="notes.saveActive" />
-      </section>
-    </div>
+    <div v-if="noteError" class="problem-desc__error">笔记打开失败：{{ noteError }}</div>
 
     <div v-if="statementOpen" class="problem-note-modal" @click.self="closeLocalStatement">
       <section>
@@ -363,13 +337,17 @@ async function closeLocalStatement() {
   display: flex;
   flex-direction: column;
   background: var(--color-bg-app);
-  overflow: hidden;
+  // The title/header is part of the document's total height. Keeping a second,
+  // header-excluding scroller made a very long title consume the viewport and
+  // left the statement below it unreachable.
+  overflow-x: hidden;
+  overflow-y: auto;
 
   &__header {
     display: flex;
-    align-items: center;
-    gap: 12px;
-    padding: 14px 20px;
+    flex-direction: column;
+    gap: 9px;
+    padding: 13px 20px 10px;
     border-bottom: 1px solid var(--color-border);
     flex-shrink: 0;
 
@@ -379,20 +357,21 @@ async function closeLocalStatement() {
   }
 
   &__id {
-    font-family: 'Consolas', 'Courier New', monospace;
-    font-size: 12px;
-    color: var(--color-text-muted);
-    background: var(--color-bg-control);
-    padding: 2px 8px;
-    border-radius: 4px;
+    color: var(--color-accent-text);
+    font: inherit;
   }
 
-  &__title {
-    font-size: 16px;
-    font-weight: 600;
-    color: var(--color-text-primary);
-    flex: 1;
-  }
+  &__title { font-size: 16px; font-weight: 600; color: var(--color-text-primary); }
+
+  &__overview { width: 100%; display: grid; grid-template-columns: minmax(220px, .8fr) minmax(300px, 1.2fr); align-items: start; gap: clamp(14px, 3vw, 40px); }
+  &__heading { min-width: 0; h1 { margin: 0; color: var(--color-text-strong); font-size: clamp(19px, 2vw, 27px); line-height: 1.25; overflow-wrap: anywhere; word-break: normal; } small { display: block; margin-top: 6px; color: var(--color-text-faint); font-size: 10px; text-transform: uppercase; letter-spacing: .08em; } }
+  &__facts { min-width: 0; display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); > div { min-width: 0; min-height: 42px; display: flex; flex-direction: column; align-items: center; justify-content: center; padding: 4px 10px; border-left: 1px solid var(--color-border-control); text-align: center; } > div:nth-child(n + 3) { border-top: 1px solid var(--color-border-control); } span, strong { display: block; max-width: 100%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; } span { color: var(--color-text-soft); font-size: 12px; font-weight: 600; } strong { margin-top: 3px; color: var(--color-text-primary); font-size: 13px; font-weight: 600; } }
+  &__tags { position: relative; cursor: default; outline: none; }
+  &__tags-arrow { margin-top: 1px !important; overflow: visible !important; color: var(--color-text-soft) !important; font-size: 20px !important; line-height: 12px; transition: transform .15s ease; }
+  &__tags:hover &__tags-arrow, &__tags:focus-within &__tags-arrow { transform: rotate(180deg); }
+  &__tags-popup { position: absolute; z-index: 40; top: calc(100% + 8px); right: 0; width: max-content; min-width: 210px; max-width: min(360px, 70vw); display: flex; flex-wrap: wrap; align-items: center; gap: 7px; padding: 14px 16px; border: 1px solid var(--color-border-strong); border-radius: 10px; background: var(--color-bg-panel); box-shadow: 0 10px 28px var(--color-shadow); opacity: 0; visibility: hidden; pointer-events: none; transform: translateY(-5px); transition: opacity .14s ease, transform .14s ease, visibility .14s; span { display: inline-block; max-width: none; padding: 3px 9px; border-radius: 4px; background: var(--color-accent-strong); color: var(--color-text-on-accent); font-size: 12px; line-height: 1.35; white-space: normal; } em { color: var(--color-text-muted); font-size: 12px; font-style: normal; } }
+  &__tags:hover &__tags-popup, &__tags:focus-within &__tags-popup { opacity: 1; visibility: visible; pointer-events: auto; transform: translateY(0); }
+  &__actions { width: 100%; display: flex; align-items: center; gap: 7px; flex-wrap: wrap; }
 
   &__difficulty {
     font-size: 12px;
@@ -414,8 +393,8 @@ async function closeLocalStatement() {
   &__limit { font-size: 11px; color: var(--color-text-muted); white-space: nowrap; }
 
   &__content {
-    flex: 1;
-    overflow-y: auto;
+    flex: 0 0 auto;
+    overflow: visible;
     padding: 20px;
     font-size: 14px;
     line-height: 1.75;
@@ -538,4 +517,6 @@ async function closeLocalStatement() {
 .problem-desc__notice { padding: 6px 20px; border-top: 1px solid var(--color-tone-315b4c); color: var(--color-success); background: var(--color-tone-192b25); font-size: 11px; }
 .solved-btn { padding: 4px 8px; border: 1px solid var(--color-border-strong); border-radius: 4px; background: transparent; color: var(--color-text-soft); font-size: 11px; cursor: pointer; &--active { border-color: var(--color-success); color: var(--color-success); background: var(--color-tone-1b3029); } }
 .problem-note-modal { position: fixed; inset: 36px 0 0; z-index: 1600; display: grid; place-items: center; padding: 24px; background: var(--color-overlay); > section { width: min(980px, 94vw); height: min(760px, 88vh); display: flex; flex-direction: column; overflow: hidden; border: 1px solid var(--color-tone-505050); border-radius: 9px; background: var(--color-bg-app); box-shadow: 0 18px 60px var(--color-overlay-strong); > header { display: flex; align-items: center; gap: 12px; padding: 10px 13px; border-bottom: 1px solid var(--color-border); background: var(--color-bg-panel); > div { min-width: 0; flex: 1; display: flex; flex-direction: column; } strong { font-size: 14px; } span { overflow: hidden; color: var(--color-text-faint); font: 8px Consolas, monospace; text-overflow: ellipsis; white-space: nowrap; } nav { display: flex; align-items: center; gap: 4px; } button { padding: 5px 9px; border: 1px solid var(--color-border-control); border-radius: 4px; background: var(--color-bg-control-alt); color: var(--color-text-soft); font-size: 10px; cursor: pointer; &.active { border-color: var(--color-accent-border); background: var(--color-accent-surface-hover); color: var(--color-accent-text); } &.save { border-color: var(--color-tone-39704f); background: var(--color-tone-20372a); color: var(--color-tone-8ad0a1); } &.close { padding: 0 7px; border: 0; background: transparent; font-size: 22px; } &:disabled { opacity: .5; } } } } &__error { padding: 6px 10px; color: var(--color-danger); background: var(--color-danger-surface); font-size: 10px; } }
+@media (max-width: 760px) { .problem-desc__overview { grid-template-columns: 1fr; gap: 12px; } .problem-desc__facts { width: 100%; } }
+@media (max-width: 460px) { .problem-desc__facts { grid-template-columns: repeat(2, 1fr); row-gap: 10px; } }
 </style>

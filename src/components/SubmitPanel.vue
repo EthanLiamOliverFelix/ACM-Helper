@@ -1,13 +1,15 @@
 <script setup lang="ts">
 import { useProblemStore } from '../stores/problemStore'
 import { openUrl } from '@tauri-apps/plugin-opener'
-import { onBeforeUnmount, ref } from 'vue'
+import { ref } from 'vue'
 import DebugPanel from './DebugPanel.vue'
 import type { LuoguRecordDetail, Submission } from '../types'
 import { getDataCenterValue, saveDataCenterValue } from '../dataCenter'
-import { shouldShowTestStderrInline } from '../utils/runDiagnostics'
+import { usePointerResize } from '../composables/usePointerResize'
 
 const store = useProblemStore()
+const { startPointerResize } = usePointerResize()
+withDefaults(defineProps<{ submissionOnly?: boolean }>(), { submissionOnly: false })
 const copiedBox = ref('')
 const savedPaneSizes = getDataCenterValue<{ runner?: number; actions?: number }>('submit-pane-sizes', {})
 const runnerHeight = ref(Number(savedPaneSizes.runner) || 420)
@@ -16,31 +18,20 @@ const recordDetail = ref<LuoguRecordDetail | null>(null)
 const recordDetailLoading = ref(false)
 const recordDetailError = ref('')
 const selectedSubmission = ref<Submission | null>(null)
-let paneResize: null | { kind: 'runner' | 'actions'; startY: number; startHeight: number; panelHeight: number } = null
-
 function startPaneResize(kind: 'runner' | 'actions', event: PointerEvent) {
   const panel = (event.currentTarget as HTMLElement).closest('.submit-panel') as HTMLElement | null
-  paneResize = { kind, startY: event.clientY, startHeight: kind === 'runner' ? runnerHeight.value : actionsHeight.value, panelHeight: panel?.clientHeight ?? window.innerHeight }
-  document.body.classList.add('is-pane-resizing')
-  window.addEventListener('pointermove', resizePane)
-  window.addEventListener('pointerup', stopPaneResize)
-  event.preventDefault()
-}
-
-function resizePane(event: PointerEvent) {
-  if (!paneResize) return
-  const next = paneResize.startHeight + event.clientY - paneResize.startY
-  if (paneResize.kind === 'runner') runnerHeight.value = Math.max(150, Math.min(next, paneResize.panelHeight - actionsHeight.value - 130))
-  else actionsHeight.value = Math.max(125, Math.min(next, paneResize.panelHeight - runnerHeight.value - 130))
-}
-
-function stopPaneResize() {
-  if (!paneResize) return
-  paneResize = null
-  document.body.classList.remove('is-pane-resizing')
-  window.removeEventListener('pointermove', resizePane)
-  window.removeEventListener('pointerup', stopPaneResize)
-  void saveDataCenterValue('submit-pane-sizes', { runner: runnerHeight.value, actions: actionsHeight.value })
+  const startY = event.clientY
+  const startHeight = kind === 'runner' ? runnerHeight.value : actionsHeight.value
+  const panelHeight = panel?.clientHeight ?? window.innerHeight
+  startPointerResize(event, {
+    axis: 'y',
+    onMove: current => {
+      const next = startHeight + current.clientY - startY
+      if (kind === 'runner') runnerHeight.value = Math.max(150, Math.min(next, panelHeight - actionsHeight.value - 130))
+      else actionsHeight.value = Math.max(125, Math.min(next, panelHeight - runnerHeight.value - 130))
+    },
+    onEnd: () => { void saveDataCenterValue('submit-pane-sizes', { runner: runnerHeight.value, actions: actionsHeight.value }) },
+  })
 }
 
 async function openRecordDetail(submission: Submission) {
@@ -55,8 +46,6 @@ async function openRecordDetail(submission: Submission) {
 }
 
 function closeRecordDetail() { selectedSubmission.value = null; recordDetail.value = null; recordDetailError.value = '' }
-onBeforeUnmount(() => { window.removeEventListener('pointermove', resizePane); window.removeEventListener('pointerup', stopPaneResize); document.body.classList.remove('is-pane-resizing') })
-
 async function handleSubmit() {
   if (!store.currentProblem) return
   if (!store.currentCode.trim()) {
@@ -120,9 +109,10 @@ function formatMem(bytes?: number): string {
 
 <template>
   <div class="submit-panel">
-    <DebugPanel v-if="store.runnerMode === 'debug'" />
+    <header v-if="submissionOnly" class="submit-panel__compact-header"><div><strong>提交与记录</strong><span>{{ store.currentProblem ? `${store.currentProblem.id} · ${store.currentLanguage}` : '请选择代码标签' }}</span></div></header>
+    <DebugPanel v-if="!submissionOnly && store.runnerMode === 'debug'" />
     <template v-else>
-    <section class="submit-pane submit-pane--runner" :style="{ height: `${runnerHeight}px` }"><div class="runner">
+    <section v-if="!submissionOnly" class="submit-pane submit-pane--runner" :style="{ height: `${runnerHeight}px` }"><div class="runner">
       <div class="runner__heading">
         <div class="runner__heading-title">
           <span>本地测试 · {{ store.testCases.length }} 组</span>
@@ -167,7 +157,6 @@ function formatMem(bytes?: number): string {
           <div class="io-box" :class="{ 'io-box--passed': test.status === 'passed', 'io-box--failed': test.status === 'failed' || test.status === 'error' }">
             <div class="io-box__heading"><span>实际输出</span><button @click.stop="copyBox(test.actualOutput, `${test.id}:actual`)">{{ copiedBox === `${test.id}:actual` ? '已复制' : '复制' }}</button></div>
             <textarea :value="test.actualOutput" readonly spellcheck="false" placeholder="运行后显示程序输出" />
-            <pre v-if="shouldShowTestStderrInline(test)" class="io-box__stderr">{{ test.stderr }}</pre>
           </div>
         </section>
       </div>
@@ -183,10 +172,10 @@ function formatMem(bytes?: number): string {
       </div>
     </div></section>
 
-    <div class="submit-panel__divider" title="拖动调整本地测试区域大小" @pointerdown="startPaneResize('runner', $event)" />
+    <div v-if="!submissionOnly" class="submit-panel__divider" title="拖动调整本地测试区域大小" @pointerdown="startPaneResize('runner', $event)" />
 
     <!-- 操作区 -->
-    <section class="submit-pane submit-pane--actions" :style="{ height: `${actionsHeight}px` }"><div class="submit-panel__actions">
+    <section class="submit-pane submit-pane--actions" :style="{ height: submissionOnly ? 'auto' : `${actionsHeight}px` }"><div class="submit-panel__actions">
       <h3 class="submit-panel__heading">提交</h3>
       <button
         v-if="store.currentProblem?.platform === 'codeforces'"
@@ -235,7 +224,7 @@ function formatMem(bytes?: number): string {
       </div>
     </div></section>
 
-    <div class="submit-panel__divider" title="拖动调整提交按钮区域大小" @pointerdown="startPaneResize('actions', $event)" />
+    <div v-if="!submissionOnly" class="submit-panel__divider" title="拖动调整提交按钮区域大小" @pointerdown="startPaneResize('actions', $event)" />
 
     <!-- 提交记录 -->
     <div class="submit-panel__records">
@@ -318,6 +307,15 @@ function formatMem(bytes?: number): string {
     overflow-y: auto;
   }
 
+  &__compact-header {
+    flex: 0 0 auto;
+    padding: 10px 12px;
+    border-bottom: 1px solid var(--color-border);
+    div { display: flex; flex-direction: column; gap: 2px; }
+    strong { color: var(--color-text-strong); font-size: 12px; }
+    span { overflow: hidden; color: var(--color-text-faint); font-size: 8px; text-overflow: ellipsis; white-space: nowrap; }
+  }
+
   &__error {
     padding: 8px 10px;
     background: var(--color-tone-3a1b1b);
@@ -373,7 +371,6 @@ function formatMem(bytes?: number): string {
   }
 }
 .submit-pane { flex: 0 0 auto; min-height: 0; overflow: hidden; &--runner { min-height: 150px; } &--actions { min-height: 125px; } }
-:global(body.is-pane-resizing) { cursor: row-resize; user-select: none; }
 .cf-confirm { display: flex; flex-direction: column; gap: 7px; padding: 10px; border: 1px solid var(--color-tone-3d7e58); border-radius: 6px; background: var(--color-tone-183023); color: var(--color-tone-d5ebdc); font-size: 12px; span { color: var(--color-tone-9ab3a2); font-size: 10px; } div { display: flex; gap: 7px; } button { flex: 1; padding: 7px; border: 0; border-radius: 4px; color: var(--color-text-on-accent); cursor: pointer; } &__yes { background: var(--color-tone-27834b); } &__no { background: var(--color-border-strong); } }
 
 .runner {

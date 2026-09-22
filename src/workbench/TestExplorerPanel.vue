@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import { computed, ref } from 'vue'
 import { useProblemStore } from '../stores/problemStore'
+import { diffOutput, type OutputDiffSegment } from '../utils/outputDiff'
 import '@vscode/codicons/dist/codicon.css'
 
 const store = useProblemStore()
@@ -26,6 +27,46 @@ function clearAll() {
   if (!store.testCases.length || !window.confirm('确定删除全部测试用例吗？此操作会清空已经填写的输入和输出。')) return
   store.clearTestCases()
 }
+
+function syncCollapsedResults() {
+  const next = new Set(collapsed.value)
+  for (const test of store.testCases) {
+    if (test.status === 'passed') next.add(test.id)
+    else if (test.status === 'failed' || test.status === 'error') next.delete(test.id)
+  }
+  collapsed.value = next
+}
+
+async function runTestCase(testId: string) {
+  await store.runTestCase(testId)
+  syncCollapsedResults()
+}
+
+async function runAllTestCases() {
+  await store.runAllTestCases()
+  syncCollapsedResults()
+}
+
+function outputSegments(expected: string, actual: string): OutputDiffSegment[] {
+  return expected.trim()
+    ? diffOutput(expected, actual)
+    : actual ? [{ text: actual, kind: 'match' }] : []
+}
+
+function visibleDiffText(segment: OutputDiffSegment) {
+  if (segment.kind === 'match') return segment.text
+  return segment.text
+    .replace(/ /g, '·')
+    .replace(/\t/g, '→')
+    .replace(/\n/g, '↵\n')
+}
+
+function diffTitle(segment: OutputDiffSegment) {
+  if (segment.kind === 'changed') return `应为：${segment.expected || '空内容'}`
+  if (segment.kind === 'extra') return '实际输出中多余的内容'
+  if (segment.kind === 'missing') return '实际输出缺少这部分内容'
+  return ''
+}
 </script>
 
 <template>
@@ -38,7 +79,7 @@ function clearAll() {
     <div v-if="!store.currentProblem" class="empty">打开一个题目或本地代码标签后显示测试点。</div>
     <template v-else>
       <div class="batch-actions">
-        <button class="run-all" :disabled="store.isRunning || !store.currentCode.trim() || !store.testCases.length" @click="store.runAllTestCases"><i class="codicon codicon-run-all" />{{ store.isRunning ? '运行中…' : '运行全部' }}</button>
+        <button class="run-all" :disabled="store.isRunning || !store.currentCode.trim() || !store.testCases.length" @click="runAllTestCases"><i class="codicon codicon-run-all" />{{ store.isRunning ? '运行中…' : '运行全部' }}</button>
         <button class="delete-all" title="删除全部测试用例" :disabled="!store.testCases.length" @click="clearAll"><i class="codicon codicon-trash" /></button>
       </div>
 
@@ -48,14 +89,14 @@ function clearAll() {
             <button class="collapse" :title="collapsed.has(test.id) ? '展开' : '收起'" @click.stop="toggle(test.id)"><i class="codicon" :class="collapsed.has(test.id) ? 'codicon-chevron-right' : 'codicon-chevron-down'" /></button>
             <strong>TC {{ index + 1 }}</strong>
             <span :class="test.status">{{ statuses[test.status] }}</span>
-            <button class="case-run" title="运行当前测试点" :disabled="store.isRunning || !store.currentCode.trim()" @click.stop="store.runTestCase(test.id)"><i class="codicon codicon-play" /></button>
+            <button class="case-run" title="运行当前测试点" :disabled="store.isRunning || !store.currentCode.trim()" @click.stop="runTestCase(test.id)"><i class="codicon codicon-play" /></button>
             <button class="case-delete" title="删除测试点" @click.stop="store.removeTestCase(test.id)"><i class="codicon codicon-trash" /></button>
           </div>
 
           <div v-if="!collapsed.has(test.id)" class="case-body">
             <label><span>输入:</span><button @click.stop="copy(test.input, `${test.id}:input`)">{{ copied === `${test.id}:input` ? '已复制' : '复制' }}</button><textarea v-model="test.input" spellcheck="false" @input="store.updateTestCase(test.id)" /></label>
             <label><span>预期输出:</span><button @click.stop="copy(test.expectedOutput, `${test.id}:expected`)">{{ copied === `${test.id}:expected` ? '已复制' : '复制' }}</button><textarea v-model="test.expectedOutput" spellcheck="false" @input="store.updateTestCase(test.id)" /></label>
-            <label v-if="test.status !== 'idle' && test.status !== 'running'" class="actual"><span>实际输出:</span><button @click.stop="copy(test.actualOutput, `${test.id}:actual`)">{{ copied === `${test.id}:actual` ? '已复制' : '复制' }}</button><textarea :value="test.actualOutput" readonly /></label>
+            <label v-if="test.status !== 'idle' && test.status !== 'running'" class="actual"><span>实际输出:</span><button @click.stop="copy(test.actualOutput, `${test.id}:actual`)">{{ copied === `${test.id}:actual` ? '已复制' : '复制' }}</button><div class="output-diff" role="textbox" aria-readonly="true" tabindex="0"><template v-if="test.actualOutput || test.expectedOutput.trim()"><span v-for="(segment, segmentIndex) in outputSegments(test.expectedOutput, test.actualOutput)" :key="segmentIndex" :class="`diff-${segment.kind}`" :title="diffTitle(segment)">{{ visibleDiffText(segment) }}</span></template><span v-else class="output-empty">程序没有输出</span></div></label>
           </div>
         </article>
 
@@ -73,8 +114,10 @@ function clearAll() {
 .cases article { margin-bottom: 10px; overflow: hidden; border: 1px solid var(--color-border-control); border-radius: 5px; background: var(--color-bg-panel); &.active { border-color: var(--color-accent); } }
 .case-title { height: 48px; display: flex; align-items: center; gap: 7px; padding: 0 10px; strong { flex: 1; color: var(--color-accent-text); font-size: 15px; } > span { color: var(--color-text-faint); font-size: 12px; &.passed { color: var(--color-success); } &.failed, &.error { color: var(--color-danger); } &.running { color: var(--color-accent-text); } } button { display: grid; place-items: center; border: 0; cursor: pointer; &:disabled { opacity: .4; cursor: not-allowed; } } .collapse { width: 22px; padding: 0; background: transparent; color: var(--color-accent-text); font-size: 17px; } .case-run, .case-delete { width: 36px; height: 36px; border-radius: 6px; color: white; font-size: 20px; } .case-run { background: var(--color-tone-2e7d32); &:hover:not(:disabled) { background: var(--color-tone-388e3c); } } .case-delete { background: var(--color-danger-strong); } }
 .case-body { padding: 0 10px 10px; border-top: 1px solid var(--color-border-soft); }
-label { display: grid; grid-template-columns: 1fr auto; align-items: center; margin-top: 9px; color: var(--color-text-soft); font-size: 13px; > button { padding: 2px 3px; border: 0; background: transparent; color: var(--color-text-faint); font-size: 10px; cursor: pointer; &:hover { color: var(--color-accent-text); } } &.actual textarea { color: var(--color-code); } }
-textarea { grid-column: 1 / -1; box-sizing: border-box; width: 100%; min-height: 58px; margin-top: 4px; resize: vertical; padding: 7px 9px; border: 1px solid var(--color-border); border-radius: 2px; outline: none; background: var(--color-bg-deep); color: var(--color-text-strong); font: 13px/1.45 Consolas, monospace; &:focus { border-color: var(--color-accent); } }
+label { display: grid; grid-template-columns: 1fr auto; align-items: center; margin-top: 9px; color: var(--color-text-soft); font-size: 13px; > button { padding: 2px 3px; border: 0; background: transparent; color: var(--color-text-faint); font-size: 10px; cursor: pointer; &:hover { color: var(--color-accent-text); } } }
+textarea { grid-column: 1 / -1; box-sizing: border-box; width: 100%; min-height: 140px; margin-top: 4px; resize: vertical; padding: 7px 9px; border: 1px solid var(--color-border); border-radius: 2px; outline: none; background: var(--color-bg-deep); color: var(--color-text-strong); font: 13px/1.45 Consolas, monospace; &:focus { border-color: var(--color-accent); } }
+.output-diff { grid-column: 1 / -1; box-sizing: border-box; width: 100%; min-height: 140px; margin-top: 4px; overflow: auto; resize: vertical; padding: 7px 9px; border: 1px solid var(--color-border); border-radius: 2px; outline: none; background: var(--color-bg-deep); color: #fff; font: 13px/1.45 Consolas, monospace; white-space: pre-wrap; overflow-wrap: anywhere; &:focus { border-color: var(--color-accent); } .diff-changed, .diff-extra, .diff-missing { border-radius: 2px; background: rgba(208, 48, 48, .68); } .diff-extra { text-decoration: line-through; text-decoration-thickness: 2px; } .diff-missing { border-bottom: 1px dashed currentColor; opacity: .72; } .output-empty { color: var(--color-text-faint); font-family: var(--font-ui); font-style: italic; } }
+:global(html[data-theme='light']) .output-diff { color: #000; .diff-changed, .diff-extra, .diff-missing { background: rgba(255, 92, 92, .48); } }
 .add-case { width: 100%; display: flex; align-items: center; justify-content: center; gap: 8px; padding: 11px; border: 0; border-radius: 6px; background: var(--color-tone-2e7d32); color: var(--color-text-on-accent); font-size: 14px; font-weight: 700; cursor: pointer; &:hover { background: var(--color-tone-388e3c); } .codicon { font-size: 18px; } }
 .empty { padding: 32px 18px; color: var(--color-text-faint); text-align: center; font-size: 12px; line-height: 1.6; }
 </style>

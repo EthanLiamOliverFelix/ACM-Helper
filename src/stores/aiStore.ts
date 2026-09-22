@@ -1,6 +1,6 @@
 import { computed, ref } from 'vue'
 import { defineStore } from 'pinia'
-import { invoke } from '@tauri-apps/api/core'
+import { Channel, invoke } from '@tauri-apps/api/core'
 import type { AiChatResult, AiMessage, AssistanceLevel, LuoguProblemPage, Platform, SkillNode, SkillPlanProblem } from '../types'
 import { useProblemStore } from './problemStore'
 import { useLearningStore } from './learningStore'
@@ -8,6 +8,11 @@ import { parseChatProblemSetResponse, parseSkillPlanResponse } from '../utils/sk
 import { getDataCenterValue, saveDataCenterValue } from '../dataCenter'
 import { ojTranslationKey } from '../utils/ojTranslation'
 import { hasTranslationBody, normalizeAiMarkdown } from '../utils/aiMarkdown'
+
+export function appendAiStreamingMessage(messages: AiMessage[], timestamp = Date.now()) {
+  messages.push({ role: 'assistant', content: '', timestamp })
+  return messages[messages.length - 1]!
+}
 
 export const useAiStore = defineStore('ai', () => {
   type ModelConfig = { endpoint?: string; model?: string; protocol?: 'responses' | 'chat_completions'; apiKey?: string; rememberApiKey?: boolean }
@@ -108,23 +113,29 @@ export const useAiStore = defineStore('ai', () => {
         learning.contestUrl = contestUrl
         await learning.analyzeContest()
       }
-      const result = await invoke<AiChatResult>('ai_chat', {
+      const requestMessages = messages.value.map(({ role, content }) => ({ role, content }))
+      // Mutate the proxy stored by Vue so every streamed delta repaints the chat.
+      const assistantMessage = appendAiStreamingMessage(messages.value)
+      const onEvent = new Channel<{ delta: string }>()
+      onEvent.onmessage = ({ delta }) => { assistantMessage.content += delta }
+      const result = await invoke<AiChatResult>('ai_chat_stream', {
         endpoint: endpoint.value,
         apiKey: apiKey.value,
         model: model.value,
         protocol: protocol.value,
         assistanceLevel: assistanceLevel.value,
-        messages: messages.value.map(({ role, content }) => ({ role, content })),
+        messages: requestMessages,
         context: buildContext(),
         previousResponseId: null,
+        onEvent,
       })
-      messages.value.push({
-        role: 'assistant',
-        content: result.text,
-        timestamp: Date.now(),
-        problemSet: parseChatProblemSetResponse(result.text) ?? undefined,
-      })
+      // Gateways that ignore streaming still return the full response. Avoid
+      // duplicating it when channel chunks have already populated the message.
+      if (!assistantMessage.content) assistantMessage.content = result.text
+      assistantMessage.problemSet = parseChatProblemSetResponse(result.text) ?? undefined
     } catch (e) {
+      const lastMessage = messages.value[messages.value.length - 1]
+      if (lastMessage?.role === 'assistant' && !lastMessage.content) messages.value.pop()
       error.value = String(e)
     } finally {
       isSending.value = false

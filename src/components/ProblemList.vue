@@ -66,8 +66,7 @@ function onSearchInput() {
 }
 
 async function openProblem(problem: typeof store.problems[number]) {
-  await store.selectProblem(problem)
-  workbench.openCurrentCode()
+  await workbench.openProblem(problem)
 }
 
 async function importProblem() {

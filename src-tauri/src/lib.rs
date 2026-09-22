@@ -99,6 +99,7 @@ pub fn run() {
             workspace::detect_toolchains,
             ai::list_ai_models,
             ai::ai_chat,
+            ai::ai_chat_stream,
             oj::import_problem_url,
             oj::fetch_problems_luogu,
             oj::fetch_problems_atcoder,

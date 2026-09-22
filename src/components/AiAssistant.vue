@@ -14,7 +14,10 @@ const problemSets = useProblemSetStore()
 const problems = useProblemStore()
 const messagesEl = ref<HTMLElement | null>(null)
 const importedMessages = ref(new Set<number>())
-watch(() => ai.messages.length, async () => { await nextTick(); messagesEl.value?.scrollTo({ top: messagesEl.value.scrollHeight, behavior: 'smooth' }) })
+watch(
+  () => [ai.messages.length, ai.messages[ai.messages.length - 1]?.content.length],
+  async () => { await nextTick(); messagesEl.value?.scrollTo({ top: messagesEl.value.scrollHeight, behavior: 'smooth' }) },
+)
 function quickAsk(text: string) { ai.draft = text; ai.send() }
 function renderMessage(content: string) {
   const html = renderLuoguMarkdown(normalizeAiMarkdown(stripChatProblemSetBlock(content)))
@@ -46,14 +49,14 @@ function importProblemSet(index: number) {
           <article v-for="(message, index) in ai.messages" :key="index" class="message" :class="`message--${message.role}`">
             <span>{{ message.role === 'user' ? '你' : 'AI' }}</span>
             <div class="message__body">
-              <div class="message__content" v-html="renderMessage(message.content)" />
+              <div v-if="message.content" class="message__content" v-html="renderMessage(message.content)" />
+              <div v-else class="message__content message__content--thinking">正在思考…</div>
               <div v-if="message.problemSet" class="generated-set">
                 <div><strong>{{ message.problemSet.name }}</strong><span>{{ message.problemSet.problems.length }} 道题 · 可导入左侧题单</span></div>
                 <button :disabled="importedMessages.has(index)" @click="importProblemSet(index)">{{ importedMessages.has(index) ? '✓ 已导入' : '导入题单' }}</button>
               </div>
             </div>
           </article>
-          <article v-if="ai.isSending" class="message message--assistant"><span>AI</span><pre>正在思考…</pre></article>
         </div>
         <div v-if="ai.error" class="chat-error">{{ ai.error }}</div>
         <div class="composer">

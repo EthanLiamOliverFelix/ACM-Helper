@@ -1,6 +1,6 @@
 import { computed, reactive, ref, watch } from 'vue'
 import { defineStore } from 'pinia'
-import type { Language, Platform, Problem } from '../types'
+import type { DraftFileInfo, Language, Platform, Problem } from '../types'
 import { getDataCenterValue, saveDataCenterValue } from '../dataCenter'
 import { useProblemStore } from './problemStore'
 import { useNoteStore } from './noteStore'
@@ -26,6 +26,9 @@ export interface WorkbenchTab {
   title: string
   context?: WorkbenchContextRef
   preview?: boolean
+  /** Transient UI state. It is deliberately cleared when a saved workspace is restored. */
+  loading?: boolean
+  loadError?: string
 }
 
 export interface EditorGroupState {
@@ -33,6 +36,18 @@ export interface EditorGroupState {
   tabs: WorkbenchTab[]
   activeTabId: string | null
 }
+
+/** Return the object as stored by Vue so later loading updates stay reactive. */
+export function upsertWorkbenchTab(group: EditorGroupState, tab: WorkbenchTab) {
+  const existing = group.tabs.find(item => item.id === tab.id)
+  if (existing) {
+    Object.assign(existing, tab)
+    return existing
+  }
+  group.tabs.push(tab)
+  return group.tabs[group.tabs.length - 1]
+}
+
 export type WorkbenchLayoutNode =
   | { type: 'group'; groupId: string }
   | { type: 'split'; direction: 'horizontal' | 'vertical'; ratio: number; first: WorkbenchLayoutNode; second: WorkbenchLayoutNode }
@@ -102,9 +117,11 @@ export function normalizeWorkbenchState(value: unknown): PersistedWorkbenchState
   const saved = value as Partial<PersistedWorkbenchState> | null
   if (!saved || saved.version !== 1 || !Array.isArray(saved.groups)) return clone(DEFAULT_STATE)
   const validTabKinds: WorkbenchTabKind[] = ['code', 'statement', 'problem-note', 'ai', 'learning', 'notes']
-  const groups = saved.groups.slice(0, 12).filter(group => group && Array.isArray(group.tabs)).map((group, index) => ({
+  const groups: EditorGroupState[] = saved.groups.slice(0, 12).filter(group => group && Array.isArray(group.tabs)).map((group, index) => ({
     id: typeof group.id === 'string' ? group.id : `group-${index + 1}`,
-    tabs: group.tabs.filter(tab => tab && typeof tab.id === 'string' && validTabKinds.includes(tab.kind as WorkbenchTabKind)),
+    tabs: group.tabs
+      .filter(tab => tab && typeof tab.id === 'string' && validTabKinds.includes(tab.kind as WorkbenchTabKind))
+      .map(tab => ({ ...tab, loading: false, loadError: undefined })),
     activeTabId: null as string | null,
   })).filter((group, index) => index === 0 || group.tabs.length > 0)
   for (const group of groups) group.activeTabId = group.tabs.some(tab => tab.id === saved.groups?.find(item => item.id === group.id)?.activeTabId)
@@ -179,6 +196,18 @@ export const useWorkbenchStore = defineStore('workbench', () => {
     }
   }
 
+  function contextFromProblem(problem: Problem): WorkbenchContextRef {
+    return {
+      kind: 'problem',
+      contextId: `problem:${problem.platform}:${problem.id.toUpperCase()}`,
+      platform: problem.platform,
+      problemId: problem.id,
+      title: problem.title,
+      url: problem.url,
+      language: useProblemStore().currentLanguage,
+    }
+  }
+
   function replaceLayoutGroup(node: WorkbenchLayoutNode, groupId: string, replacement: WorkbenchLayoutNode): WorkbenchLayoutNode {
     if (node.type === 'group') return node.groupId === groupId ? replacement : node
     return { ...node, first: replaceLayoutGroup(node.first, groupId, replacement), second: replaceLayoutGroup(node.second, groupId, replacement) }
@@ -221,11 +250,10 @@ export const useWorkbenchStore = defineStore('workbench', () => {
   }
 
   function addTab(group: EditorGroupState, tab: WorkbenchTab) {
-    const existing = group.tabs.find(item => item.id === tab.id)
-    if (!existing) group.tabs.push(tab)
-    else Object.assign(existing, tab)
+    const mountedTab = upsertWorkbenchTab(group, tab)
     group.activeTabId = tab.id
     activeGroupId.value = group.id
+    return mountedTab
   }
 
   function openCurrentCode() {
@@ -234,6 +262,98 @@ export const useWorkbenchStore = defineStore('workbench', () => {
     const group = groups[0]
     addTab(group, { id: `code:${context.contextId}:${context.language}`, kind: 'code', title: `${context.title}.${context.language === 'cpp' ? 'cpp' : context.language === 'python' ? 'py' : 'java'}`, context })
     void syncFollowingTabs(context)
+  }
+
+  /**
+   * Makes navigation feel immediate: mount and activate the destination tab first,
+   * then hydrate its editor/statement content in the background.
+   */
+  async function openProblem(problem: Problem) {
+    const requestSequence = ++activationSequence
+    const context = contextFromProblem(problem)
+    const codeTab: WorkbenchTab = {
+      id: `code:${context.contextId}:${context.language}`,
+      kind: 'code',
+      title: `${context.title}.${context.language === 'cpp' ? 'cpp' : context.language === 'python' ? 'py' : 'java'}`,
+      context,
+      loading: true,
+    }
+    const mountedCodeTab = addTab(groups[0], codeTab)
+    const followerTabs = groups.slice(1).flatMap(group => group.tabs).filter(tab => tab.id.startsWith('following:'))
+    for (const follower of followerTabs) {
+      follower.context = { ...context }
+      follower.title = `${context.problemId} · ${follower.kind === 'statement' ? '题面' : follower.kind === 'problem-note' ? '笔记' : 'AI'}`
+      follower.loading = follower.kind === 'statement' || follower.kind === 'problem-note'
+      follower.loadError = undefined
+    }
+    try {
+      // Code/draft hydration is fast and belongs to navigation. The remote
+      // statement continues in the background so it cannot block another tab.
+      await useProblemStore().selectProblem(problem, { waitForDetail: false })
+      mountedCodeTab.loading = false
+      if (requestSequence === activationSequence) {
+        for (const follower of followerTabs) {
+          if (follower.context?.contextId === context.contextId) follower.loading = false
+        }
+        await syncFollowingTabs(context)
+      }
+    } catch (cause) {
+      const message = cause instanceof Error ? cause.message : String(cause)
+      mountedCodeTab.loading = false
+      mountedCodeTab.loadError = message
+      for (const follower of followerTabs) {
+        if (follower.context?.contextId !== context.contextId) continue
+        follower.loading = false
+        follower.loadError = message
+      }
+      throw cause
+    }
+  }
+
+  async function openDraftFile(file: DraftFileInfo) {
+    const requestSequence = ++activationSequence
+    const context: WorkbenchContextRef = {
+      kind: 'local-file',
+      contextId: `file:${file.path.toLowerCase()}`,
+      platform: file.platform,
+      problemId: file.problemId,
+      title: file.title || file.problemId,
+      path: file.path,
+      language: file.language,
+    }
+    const mountedTab = addTab(groups[0], {
+      id: `code:${context.contextId}:${context.language}`,
+      kind: 'code',
+      title: file.path.split(/[\\/]/).pop() || `${context.title}.${context.language}`,
+      context,
+      loading: true,
+    })
+    const followerTabs = groups.slice(1).flatMap(group => group.tabs).filter(tab => tab.id.startsWith('following:'))
+    for (const follower of followerTabs) {
+      follower.context = { ...context }
+      follower.title = `${context.problemId} · ${follower.kind === 'statement' ? '题面' : follower.kind === 'problem-note' ? '笔记' : 'AI'}`
+      follower.loading = follower.kind === 'statement' || follower.kind === 'problem-note'
+      follower.loadError = undefined
+    }
+    try {
+      await useProblemStore().openDraftFile(file)
+      mountedTab.loading = false
+      if (requestSequence === activationSequence) {
+        for (const follower of followerTabs) {
+          if (follower.context?.contextId === context.contextId) follower.loading = false
+        }
+        await syncFollowingTabs(context)
+      }
+    } catch (cause) {
+      mountedTab.loading = false
+      mountedTab.loadError = cause instanceof Error ? cause.message : String(cause)
+      for (const follower of followerTabs) {
+        if (follower.context?.contextId !== context.contextId) continue
+        follower.loading = false
+        follower.loadError = mountedTab.loadError
+      }
+      throw cause
+    }
   }
 
   async function setCurrentLanguage(language: Language) {
@@ -287,12 +407,12 @@ export const useWorkbenchStore = defineStore('workbench', () => {
   }
 
   async function activateContext(context?: WorkbenchContextRef) {
-    if (!context) return
+    if (!context) return true
     const sequence = ++activationSequence
     const store = useProblemStore()
     const sameProblem = store.currentProblem?.platform === context.platform && store.currentProblem?.id === context.problemId
     const samePath = !context.path || store.draftPath.toLowerCase() === context.path.toLowerCase()
-    if (sameProblem && samePath && store.currentLanguage === context.language) return
+    if (sameProblem && samePath && store.currentLanguage === context.language) return true
     if (context.kind === 'local-file' && context.path) {
       if (!store.draftFiles.length) await store.loadDraftFiles()
       const file = store.draftFiles.find(item => item.path.toLowerCase() === context.path!.toLowerCase())
@@ -300,10 +420,10 @@ export const useWorkbenchStore = defineStore('workbench', () => {
     } else {
       const known = [...store.problems, ...store.importedProblems].find(item => item.platform === context.platform && item.id === context.problemId)
       const fallback: Problem = known ?? { id: context.problemId, title: context.title, platform: context.platform, tags: [], url: context.url }
-      await store.selectProblem(fallback)
+      await store.selectProblem(fallback, { waitForDetail: false })
       if (store.currentLanguage !== context.language) await store.setLanguage(context.language)
     }
-    if (sequence !== activationSequence) return
+    return sequence === activationSequence
   }
 
   async function activateTab(groupId: string, tabId: string) {
@@ -312,12 +432,26 @@ export const useWorkbenchStore = defineStore('workbench', () => {
     if (!group || !tab) return
     group.activeTabId = tabId
     activeGroupId.value = groupId
-    await activateContext(tab.context)
-    if (tab.kind === 'code' && tab.context) await syncFollowingTabs(tab.context)
-    if (tab.kind === 'problem-note' && useProblemStore().currentProblem) await useNoteStore().openProblemNote(useProblemStore().currentProblem!)
+    const store = useProblemStore()
+    const needsHydration = Boolean(tab.context && (
+      store.currentProblem?.platform !== tab.context.platform
+      || store.currentProblem?.id !== tab.context.problemId
+      || (tab.kind === 'code' && store.currentLanguage !== tab.context.language)
+    ))
+    if (needsHydration) { tab.loading = true; tab.loadError = undefined }
+    try {
+      const isCurrent = await activateContext(tab.context)
+      if (!isCurrent) return
+      if (tab.kind === 'code' && tab.context) await syncFollowingTabs(tab.context)
+      if (tab.kind === 'problem-note' && store.currentProblem) await useNoteStore().openProblemNote(store.currentProblem)
+    } catch (cause) {
+      tab.loadError = cause instanceof Error ? cause.message : String(cause)
+    } finally {
+      tab.loading = false
+    }
   }
 
-  async function closeTab(groupId: string, tabId: string) {
+  function closeTab(groupId: string, tabId: string) {
     const group = groups.find(item => item.id === groupId)
     if (!group) return
     const index = group.tabs.findIndex(tab => tab.id === tabId)
@@ -332,19 +466,27 @@ export const useWorkbenchStore = defineStore('workbench', () => {
     }
     if (!groups.some(item => item.id === activeGroupId.value)) activeGroupId.value = groups[0].id
     const nextGroup = groups.find(item => item.id === groupId) ?? groups[0]
-    if (wasActive && nextGroup.activeTabId) await activateTab(nextGroup.id, nextGroup.activeTabId)
+    // The tab and its pane have already disappeared at this point. Restoring the
+    // newly revealed context is intentionally fire-and-forget.
+    if (wasActive && nextGroup.activeTabId) void activateTab(nextGroup.id, nextGroup.activeTabId)
   }
 
-  function moveTab(groupId: string, tabId: string, targetGroupId: string, edge: 'center' | 'left' | 'right' | 'top' | 'bottom') {
+  function moveTab(groupId: string, tabId: string, targetGroupId: string, edge: 'center' | 'left' | 'right' | 'top' | 'bottom', targetIndex?: number) {
     const source = groups.find(item => item.id === groupId)
     const tab = source?.tabs.find(item => item.id === tabId)
     const existingTarget = groups.find(item => item.id === targetGroupId)
-    if (!source || !tab || !existingTarget || (source.id === existingTarget.id && edge === 'center')) return
+    if (!source || !tab || !existingTarget) return
     const target = edge === 'center' ? existingTarget : createGroupBeside(targetGroupId, edge)
     const sourceIndex = source.tabs.indexOf(tab)
     source.tabs.splice(sourceIndex, 1)
     if (source.activeTabId === tabId) source.activeTabId = source.tabs[Math.min(sourceIndex, source.tabs.length - 1)]?.id ?? null
-    addTab(target, tab)
+    if (edge === 'center' && targetIndex != null) {
+      let insertionIndex = Math.max(0, Math.min(target.tabs.length, targetIndex))
+      if (source === target && sourceIndex < targetIndex) insertionIndex--
+      target.tabs.splice(Math.max(0, insertionIndex), 0, tab)
+      target.activeTabId = tab.id
+      activeGroupId.value = target.id
+    } else addTab(target, tab)
     if (!source.tabs.length && groups.length > 1) {
       groups.splice(groups.indexOf(source), 1)
       layoutTree.value = removeLayoutGroup(layoutTree.value, source.id) ?? { type: 'group', groupId: target.id }
@@ -375,6 +517,6 @@ export const useWorkbenchStore = defineStore('workbench', () => {
   }
 
   return { activity, runnerTool, sidebarVisible, sidebarWidth, noteSidebarWidth, bottomPanelHeight, splitRatio, activeGroupId, groups, activeGroup, activeTab, activeContext, layoutTree,
-    setActivity, toggleSidebar, setSidebarWidth, setNoteSidebarWidth, setBottomPanelHeight, setSplitRatio, openCurrentCode, setCurrentLanguage, openStatement, openProblemNote, openAi, openRunner, openTests, openSubmission, openDebugger, openLearning, openNotes,
+    setActivity, toggleSidebar, setSidebarWidth, setNoteSidebarWidth, setBottomPanelHeight, setSplitRatio, openProblem, openDraftFile, openCurrentCode, setCurrentLanguage, openStatement, openProblemNote, openAi, openRunner, openTests, openSubmission, openDebugger, openLearning, openNotes,
     activateTab, closeTab, moveTab, restore, snapshot }
 })

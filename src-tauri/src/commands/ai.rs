@@ -1,5 +1,6 @@
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
+use tauri::ipc::Channel;
 
 use super::network_client;
 
@@ -15,6 +16,12 @@ pub struct AiMessage {
 pub struct AiChatResult {
     text: String,
     response_id: Option<String>,
+}
+
+#[derive(Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct AiStreamEvent {
+    delta: String,
 }
 
 fn endpoint_url(base: &str, protocol: &str) -> String {
@@ -99,6 +106,124 @@ fn extract_api_error(body: &Value) -> Option<&str> {
         .or_else(|| body.get("error").and_then(Value::as_str))
 }
 
+fn request_body(
+    model: &str,
+    protocol: &str,
+    assistance_level: &str,
+    messages: &[AiMessage],
+    context: &str,
+    previous_response_id: Option<String>,
+    stream: bool,
+) -> Value {
+    let instruction = format!(
+        "你是 ACM/ICPC 训练助手。回答必须基于题目和用户学习档案，不虚构评测结果。{}\n\n当前上下文：\n{}",
+        assistance_instruction(assistance_level), context
+    );
+    if protocol == "chat_completions" {
+        let mut chat_messages = vec![json!({"role":"system", "content": instruction})];
+        chat_messages.extend(
+            messages
+                .iter()
+                .map(|m| json!({"role": m.role, "content": m.content})),
+        );
+        json!({"model": model, "messages": chat_messages, "stream": stream})
+    } else {
+        let mut body = json!({
+            "model": model,
+            "instructions": instruction,
+            "input": messages.iter().map(|m| json!({"role":m.role, "content":m.content})).collect::<Vec<_>>(),
+            "store": false,
+            "stream": stream
+        });
+        if let Some(id) = previous_response_id.filter(|id| !id.is_empty()) {
+            body["previous_response_id"] = Value::String(id);
+        }
+        body
+    }
+}
+
+fn response_text(body: &Value, protocol: &str) -> String {
+    if protocol == "chat_completions" {
+        body.pointer("/choices/0/message/content")
+            .and_then(Value::as_str)
+            .unwrap_or("")
+            .to_string()
+    } else {
+        extract_responses_text(body)
+    }
+}
+
+fn stream_delta(body: &Value, protocol: &str) -> Option<String> {
+    if protocol == "chat_completions" {
+        body.pointer("/choices/0/delta/content")
+            .and_then(Value::as_str)
+            .map(str::to_string)
+    } else if body.get("type").and_then(Value::as_str) == Some("response.output_text.delta") {
+        body.get("delta")
+            .and_then(Value::as_str)
+            .map(str::to_string)
+    } else {
+        None
+    }
+}
+
+fn sse_data(event: &str) -> String {
+    event
+        .lines()
+        .filter_map(|line| line.strip_prefix("data:").map(str::trim_start))
+        .collect::<Vec<_>>()
+        .join("\n")
+}
+
+fn take_sse_event(buffer: &mut Vec<u8>) -> Option<Vec<u8>> {
+    let (index, delimiter_length) = buffer
+        .windows(4)
+        .position(|window| window == b"\r\n\r\n")
+        .map(|index| (index, 4))
+        .or_else(|| {
+            buffer
+                .windows(2)
+                .position(|window| window == b"\n\n")
+                .map(|index| (index, 2))
+        })?;
+    let event = buffer[..index].to_vec();
+    buffer.drain(..index + delimiter_length);
+    Some(event)
+}
+
+fn consume_stream_event(
+    event: &[u8],
+    protocol: &str,
+    on_event: &Channel<AiStreamEvent>,
+    text: &mut String,
+    response_id: &mut Option<String>,
+) -> Result<(), String> {
+    let event = String::from_utf8_lossy(event);
+    let data = sse_data(&event);
+    if data.is_empty() || data == "[DONE]" {
+        return Ok(());
+    }
+    let body: Value =
+        serde_json::from_str(&data).map_err(|e| format!("AI 流式响应包含无效 JSON: {e}"))?;
+    if let Some(message) = extract_api_error(&body) {
+        return Err(format!("AI API: {message}"));
+    }
+    if response_id.is_none() {
+        *response_id = body
+            .pointer("/response/id")
+            .or_else(|| body.get("id"))
+            .and_then(Value::as_str)
+            .map(str::to_string);
+    }
+    if let Some(delta) = stream_delta(&body, protocol).filter(|delta| !delta.is_empty()) {
+        text.push_str(&delta);
+        on_event
+            .send(AiStreamEvent { delta })
+            .map_err(|e| format!("刷新助手页面失败: {e}"))?;
+    }
+    Ok(())
+}
+
 #[tauri::command]
 pub async fn list_ai_models(endpoint: String, api_key: String) -> Result<Vec<String>, String> {
     if endpoint.trim().is_empty() {
@@ -160,30 +285,15 @@ pub async fn ai_chat(
         return Err("请输入 API Key（仅保留在本次运行内存中）".into());
     }
     let url = endpoint_url(&endpoint, &protocol);
-    let instruction = format!(
-        "你是 ACM/ICPC 训练助手。回答必须基于题目和用户学习档案，不虚构评测结果。{}\n\n当前上下文：\n{}",
-        assistance_instruction(&assistance_level), context
+    let request_body = request_body(
+        &model,
+        &protocol,
+        &assistance_level,
+        &messages,
+        &context,
+        previous_response_id,
+        false,
     );
-    let request_body = if protocol == "chat_completions" {
-        let mut chat_messages = vec![json!({"role":"system", "content": instruction})];
-        chat_messages.extend(
-            messages
-                .iter()
-                .map(|m| json!({"role": m.role, "content": m.content})),
-        );
-        json!({"model": model, "messages": chat_messages})
-    } else {
-        let mut body = json!({
-            "model": model,
-            "instructions": instruction,
-            "input": messages.iter().map(|m| json!({"role":m.role, "content":m.content})).collect::<Vec<_>>(),
-            "store": false
-        });
-        if let Some(id) = previous_response_id.filter(|id| !id.is_empty()) {
-            body["previous_response_id"] = Value::String(id);
-        }
-        body
-    };
     let (client_builder, proxy_configured) = network_client::builder();
     let response = client_builder
         .timeout(std::time::Duration::from_secs(120))
@@ -211,14 +321,7 @@ pub async fn ai_chat(
         let message = extract_api_error(&body).unwrap_or("未知 API 错误");
         return Err(format!("AI API {}: {}", status, message));
     }
-    let text = if protocol == "chat_completions" {
-        body.pointer("/choices/0/message/content")
-            .and_then(Value::as_str)
-            .unwrap_or("")
-            .to_string()
-    } else {
-        extract_responses_text(&body)
-    };
+    let text = response_text(&body, &protocol);
     if text.trim().is_empty() {
         return Err("模型没有返回文本内容".into());
     }
@@ -226,6 +329,110 @@ pub async fn ai_chat(
         text,
         response_id: body.get("id").and_then(Value::as_str).map(str::to_string),
     })
+}
+
+#[tauri::command]
+pub async fn ai_chat_stream(
+    endpoint: String,
+    api_key: String,
+    model: String,
+    protocol: String,
+    assistance_level: String,
+    messages: Vec<AiMessage>,
+    context: String,
+    previous_response_id: Option<String>,
+    on_event: Channel<AiStreamEvent>,
+) -> Result<AiChatResult, String> {
+    if endpoint.trim().is_empty() || model.trim().is_empty() {
+        return Err("请配置 API 地址和模型".into());
+    }
+    if api_key.trim().is_empty() {
+        return Err("请输入 API Key（仅保留在本次运行内存中）".into());
+    }
+    let request_body = request_body(
+        &model,
+        &protocol,
+        &assistance_level,
+        &messages,
+        &context,
+        previous_response_id,
+        true,
+    );
+    let (client_builder, proxy_configured) = network_client::builder();
+    let mut response = client_builder
+        .timeout(std::time::Duration::from_secs(120))
+        .build()
+        .map_err(|e| format!("创建 AI 客户端失败: {e}"))?
+        .post(endpoint_url(&endpoint, &protocol))
+        .bearer_auth(api_key.trim())
+        .json(&request_body)
+        .send()
+        .await
+        .map_err(|e| {
+            let proxy_hint = if proxy_configured {
+                "（已通过系统代理连接）"
+            } else {
+                "（未检测到可用代理）"
+            };
+            format!("AI 请求失败{proxy_hint}: {e}")
+        })?;
+    let status = response.status();
+    if !status.is_success() {
+        let body: Value = response
+            .json()
+            .await
+            .map_err(|e| format!("AI 错误响应不是有效 JSON: {e}"))?;
+        return Err(format!(
+            "AI API {status}: {}",
+            extract_api_error(&body).unwrap_or("未知 API 错误")
+        ));
+    }
+
+    let is_event_stream = response
+        .headers()
+        .get(reqwest::header::CONTENT_TYPE)
+        .and_then(|value| value.to_str().ok())
+        .is_some_and(|value| value.contains("text/event-stream"));
+    if !is_event_stream {
+        let body: Value = response
+            .json()
+            .await
+            .map_err(|e| format!("AI 返回内容不是有效 JSON: {e}"))?;
+        let text = response_text(&body, &protocol);
+        if text.trim().is_empty() {
+            return Err("模型没有返回文本内容".into());
+        }
+        on_event
+            .send(AiStreamEvent {
+                delta: text.clone(),
+            })
+            .map_err(|e| format!("刷新助手页面失败: {e}"))?;
+        return Ok(AiChatResult {
+            text,
+            response_id: body.get("id").and_then(Value::as_str).map(str::to_string),
+        });
+    }
+
+    let mut buffer = Vec::new();
+    let mut text = String::new();
+    let mut response_id = None;
+    while let Some(chunk) = response
+        .chunk()
+        .await
+        .map_err(|e| format!("读取 AI 流式响应失败: {e}"))?
+    {
+        buffer.extend_from_slice(&chunk);
+        while let Some(event) = take_sse_event(&mut buffer) {
+            consume_stream_event(&event, &protocol, &on_event, &mut text, &mut response_id)?;
+        }
+    }
+    if !buffer.is_empty() {
+        consume_stream_event(&buffer, &protocol, &on_event, &mut text, &mut response_id)?;
+    }
+    if text.trim().is_empty() {
+        return Err("模型没有返回文本内容".into());
+    }
+    Ok(AiChatResult { text, response_id })
 }
 
 #[cfg(test)]
@@ -303,5 +510,34 @@ mod tests {
             extract_api_error(&json!({"code":401,"msg":"Invalid API Key!"})),
             Some("Invalid API Key!")
         );
+    }
+
+    #[test]
+    fn extracts_streaming_deltas_for_both_protocols() {
+        assert_eq!(
+            stream_delta(
+                &json!({"type":"response.output_text.delta","delta":"你好"}),
+                "responses"
+            ),
+            Some("你好".into())
+        );
+        assert_eq!(
+            stream_delta(
+                &json!({"choices":[{"delta":{"content":"world"}}]}),
+                "chat_completions"
+            ),
+            Some("world".into())
+        );
+    }
+
+    #[test]
+    fn keeps_partial_utf8_bytes_until_a_complete_sse_event() {
+        let raw = "data: {\"delta\":\"中文\"}\n\nnext".as_bytes();
+        let mut buffer = raw.to_vec();
+        assert_eq!(
+            String::from_utf8(take_sse_event(&mut buffer).unwrap()).unwrap(),
+            "data: {\"delta\":\"中文\"}"
+        );
+        assert_eq!(buffer, b"next");
     }
 }

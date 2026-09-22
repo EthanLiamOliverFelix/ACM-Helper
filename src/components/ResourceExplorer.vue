@@ -140,7 +140,7 @@ async function submitDialog() {
 
 async function openEntry(entry: WorkspaceEntry) {
   if (holdMove.shouldSuppressClick()) return
-  if (entry.draft) await store.openDraftFile(entry.draft).then(() => workbench.openCurrentCode()).catch((cause) => { error.value = String(cause) })
+  if (entry.draft) await workbench.openDraftFile(entry.draft).catch((cause) => { error.value = String(cause) })
 }
 
 async function moveEntry(source: WorkspaceEntry, targetPath: string | null) {

@@ -35,6 +35,8 @@ const dragOverId = ref('')
 const metadataLoading = ref(false)
 const contestUrl = ref('')
 const contestSearch = ref('')
+const contestPage = ref(1)
+const contestPageSize = 30
 const contestCatalog = ref<ContestCatalogEntry[]>([])
 const contestCatalogPlatform = ref<'codeforces' | 'atcoder'>('codeforces')
 const contestCatalogLoading = ref(false)
@@ -95,8 +97,31 @@ const filteredContestCatalog = computed(() => {
   return contestCatalog.value.filter((contest) => contest.platform === contestCatalogPlatform.value
     && (!query || contest.id.toLowerCase().includes(query) || contest.title.toLowerCase().includes(query)))
 })
+const contestPages = computed(() => Math.max(1, Math.ceil(filteredContestCatalog.value.length / contestPageSize)))
+const pagedContestCatalog = computed(() => {
+  const start = (contestPage.value - 1) * contestPageSize
+  return filteredContestCatalog.value.slice(start, start + contestPageSize)
+})
+const contestProgressByKey = computed(() => {
+  const result = new Map<string, { solved: number; total: number }>()
+  const solved = new Set(learning.profile.solvedProblems.map(key => key.toLowerCase()))
+  for (const problem of problems.problems) {
+    let contestId = ''
+    if (problem.platform === 'codeforces') contestId = problem.id.match(/^(\d+)[A-Za-z]/)?.[1] ?? ''
+    else if (problem.platform === 'atcoder') contestId = problem.id.split('_')[0]?.toLowerCase() ?? ''
+    else continue
+    if (!contestId) continue
+    const key = `${problem.platform}:${contestId}`
+    const progress = result.get(key) ?? { solved: 0, total: 0 }
+    progress.total++
+    if (solved.has(`${problem.platform}:${problem.id}`.toLowerCase())) progress.solved++
+    result.set(key, progress)
+  }
+  return result
+})
 
 const contestPlatformLabel = (platform: string) => platform === 'codeforces' ? 'CF' : platform === 'luogu' ? '洛谷' : platform === 'atcoder' ? 'AtCoder' : ''
+const contestProgress = (contest: ContestCatalogEntry) => contestProgressByKey.value.get(`${contest.platform}:${contest.id.toLowerCase()}`) ?? { solved: 0, total: 0 }
 
 function flash(message: string) {
   notice.value = message
@@ -303,7 +328,11 @@ async function loadContestCatalog(force = false) {
 
 async function openContestBrowser() {
   view.value = 'contests'
-  await loadContestCatalog()
+  contestPage.value = 1
+  const tasks: Promise<unknown>[] = [loadContestCatalog()]
+  if (!problems.problems.some(problem => problem.platform === 'codeforces')) tasks.push(problems.fetchProblems())
+  if (!problems.problems.some(problem => problem.platform === 'atcoder')) tasks.push(problems.fetchAtCoderProblems())
+  await Promise.allSettled(tasks)
 }
 
 function openContestFavorites() {
@@ -403,6 +432,8 @@ onBeforeUnmount(() => { clearHold(); detachHoldListeners(); document.body.classL
 
 watch(setSearch, () => { setPage.value = 1 })
 watch(setPages, (pages) => { setPage.value = Math.min(setPage.value, pages) })
+watch([contestSearch, contestCatalogPlatform], () => { contestPage.value = 1 })
+watch(contestPages, (pages) => { contestPage.value = Math.min(contestPage.value, pages) })
 </script>
 
 <template>
@@ -498,12 +529,13 @@ watch(setPages, (pages) => { setPage.value = Math.min(setPage.value, pages) })
       <div class="contest-tabs"><button :class="{ active: contestCatalogPlatform === 'codeforces' }" @click="contestCatalogPlatform = 'codeforces'">Codeforces Div</button><button :class="{ active: contestCatalogPlatform === 'atcoder' }" @click="contestCatalogPlatform = 'atcoder'">AtCoder</button></div>
       <strong class="contest-section-title">比赛目录</strong>
       <div v-if="contestCatalogLoading && !contestCatalog.length" class="empty">正在读取比赛目录…</div>
-      <ul v-else class="contest-items contest-catalog-items">
-        <li v-for="contest in filteredContestCatalog" :key="`${contest.platform}:${contest.id}`">
-          <button class="contest-open" @click="openContest({ ...contest, contestId: contest.id })"><span>{{ contestPlatformLabel(contest.platform) }}</span><div><strong>{{ contest.title }}</strong><small>{{ contest.id }}</small></div></button>
+      <ul v-else :key="`${contestCatalogPlatform}:${contestPage}:${contestSearch}`" class="contest-items contest-catalog-items">
+        <li v-for="contest in pagedContestCatalog" :key="`${contest.platform}:${contest.id}`">
+          <button class="contest-open" @click="openContest({ ...contest, contestId: contest.id })"><span>{{ contestPlatformLabel(contest.platform) }}</span><div><strong>{{ contest.title }}</strong><small><span>{{ contest.id }}</span><em :class="{ complete: contestProgress(contest).total > 0 && contestProgress(contest).solved === contestProgress(contest).total }">已做 {{ contestProgress(contest).solved }}/{{ contestProgress(contest).total }}</em></small></div></button>
           <button class="contest-favorite" :class="{ active: contests.contains(contest.platform, contest.id) }" title="收藏比赛" @click="favoriteCatalogContest(contest)">{{ contests.contains(contest.platform, contest.id) ? '★' : '☆' }}</button>
         </li>
       </ul>
+      <div v-if="contestPages > 1" class="pagination contest-pagination"><button :disabled="contestPage <= 1" @click="contestPage--">‹</button><span>{{ contestPage }} / {{ contestPages }}</span><button :disabled="contestPage >= contestPages" @click="contestPage++">›</button></div>
       <footer class="bottom-search"><span>⌕</span><input v-model="contestSearch" placeholder="搜索 CF / AtCoder 比赛" /></footer>
     </template>
 
@@ -540,7 +572,7 @@ button, input { font: inherit; }.panel-header { display: flex; align-items: cent
 .problem-items, .training-items { flex: 1; min-height: 0; overflow-y: auto; list-style: none; margin: 0; padding: 0 7px 10px; li { content-visibility: auto; contain-intrinsic-size: 62px; display: flex; align-items: flex-start; gap: 7px; padding: 9px 7px; border-left: 3px solid transparent; border-radius: 4px; &:hover { background: var(--color-bg-hover); border-left-color: var(--color-accent); } > div { min-width: 0; flex: 1; display: flex; flex-direction: column; gap: 3px; } small { color: var(--color-text-faint); font: 8px Consolas, monospace; } strong { overflow: hidden; color: var(--color-tone-d2d2d2); font-size: 11px; text-overflow: ellipsis; white-space: nowrap; } p { display: flex; gap: 3px; margin: 0; overflow: hidden; span { flex: 0 0 auto; padding: 1px 4px; border-radius: 3px; background: var(--color-tone-373737); color: var(--color-accent-text); font-size: 8px; } } > button { border: 0; background: transparent; color: var(--color-text-faint); cursor: pointer; &:hover { color: var(--color-danger); } } } }.problem-items li { cursor: pointer; }.solved { display: grid; place-items: center; flex: 0 0 14px; width: 14px; height: 14px; margin-top: 2px; border: 1px solid var(--color-tone-36b36a); border-radius: 2px; color: var(--color-success-bright); font-size: 9px; }
 .smart-tabs { display: flex; gap: 4px; padding: 7px 10px 0; button { flex: 1; padding: 5px; border: 1px solid var(--color-border-control); border-radius: 4px; background: var(--color-bg-control-alt); color: var(--color-tone-888); font-size: 8px; cursor: pointer; &.active { border-color: var(--color-success-border); background: var(--color-success-surface); color: var(--color-tone-8fe0b5); } } }.smart-explanation { padding: 7px 10px; border-bottom: 1px solid var(--color-bg-subtle); color: var(--color-tone-888); font-size: 8px; line-height: 1.5; }.review-state { display: grid; place-items: center; flex: 0 0 16px; width: 16px; height: 16px; margin-top: 2px; border: 1px solid var(--color-warning-strong); border-radius: 50%; color: var(--color-warning); font-size: 10px; &.unresolved { border-color: var(--color-tone-d86758); color: var(--color-danger); } }.practice-summary { color: var(--color-warning-strong); font-size: 8px; }.stale-skills { color: var(--color-code); font-size: 8px; }.practice-actions { display: flex; flex-wrap: wrap; gap: 3px; margin-top: 3px; button { padding: 2px 5px; border: 1px solid var(--color-border-control); border-radius: 3px; background: var(--color-tone-2d2d2d); color: var(--color-text-soft); font-size: 7px; cursor: pointer; &:hover, &.active { border-color: var(--color-accent-border); color: var(--color-accent-text); } &.muted:hover { border-color: var(--color-tone-6a4a4a); color: var(--color-danger); } &.danger { border-color: var(--color-tone-633b3b); color: var(--color-danger); } } }.restore-ignored { margin: 4px 10px 7px; padding: 5px; border: 1px solid var(--color-border-control); border-radius: 4px; background: var(--color-bg-control-alt); color: var(--color-tone-888); font-size: 8px; cursor: pointer; &:hover { color: var(--color-text-secondary); } }
 .categories { display: flex; gap: 4px; padding: 2px 9px 7px; overflow-x: auto; button { flex: 0 0 auto; padding: 4px 6px; border: 1px solid var(--color-tone-3d3d3d); border-radius: 4px; background: var(--color-bg-panel); color: var(--color-tone-999); font-size: 8px; cursor: pointer; &.active { border-color: var(--color-accent-border); background: var(--color-accent-surface); color: var(--color-accent-text); } } }.training-items li { align-items: center; div > span { color: var(--color-text-faint); font-size: 8px; } > button { padding: 5px 8px; border: 1px solid var(--color-tone-3b6e90); border-radius: 4px; background: var(--color-accent-surface-hover); color: var(--color-accent-text); font-size: 9px; &:disabled { opacity: .4; } } }.pagination { display: flex; justify-content: center; align-items: center; gap: 9px; padding: 6px; border-top: 1px solid var(--color-bg-subtle); color: var(--color-text-faint); font-size: 9px; button { width: 25px; border: 1px solid var(--color-border-control); border-radius: 3px; background: var(--color-bg-control-alt); color: var(--color-text-secondary); cursor: pointer; &:disabled { opacity: .3; } } }
-.contest-items { flex: 1; min-height: 0; overflow-y: auto; list-style: none; margin: 0; padding: 0 8px 10px; li { display: flex; align-items: stretch; gap: 4px; margin: 5px 0; border: 1px solid var(--color-border-soft); border-radius: 6px; background: var(--color-bg-panel); &:hover { border-color: var(--color-tone-536f85); } }.contest-open { display: grid; min-width: 0; flex: 1; grid-template-columns: 37px 1fr; align-items: center; gap: 8px; padding: 9px; border: 0; background: transparent; color: var(--color-tone-ccc); text-align: left; cursor: pointer; > span { display: grid; place-items: center; min-height: 25px; border-radius: 4px; background: var(--color-accent-surface); color: var(--color-accent-text); font-size: 8px; } > div { display: flex; min-width: 0; flex-direction: column; gap: 3px; } strong, small { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; } strong { font-size: 10px; } small { color: var(--color-text-faint); font: 7px Consolas, monospace; } }.contest-remove { width: 28px; border: 0; border-left: 1px solid var(--color-border-soft); background: transparent; color: var(--color-text-faint); cursor: pointer; &:hover { color: var(--color-danger); } } }
-.contest-tabs { display: flex; gap: 4px; padding: 0 9px 6px; button { flex: 1; padding: 5px; border: 1px solid var(--color-border-control); border-radius: 4px; background: var(--color-bg-control-alt); color: var(--color-tone-888); font-size: 8px; cursor: pointer; &.active { border-color: var(--color-accent-border); background: var(--color-accent-surface); color: var(--color-accent-text); } } }.contest-section-title { padding: 3px 10px; color: var(--color-tone-888); font-size: 8px; }.contest-catalog-items { flex: 1; }.contest-favorite { width: 28px; border: 0; border-left: 1px solid var(--color-border-soft); background: transparent; color: var(--color-tone-888); cursor: pointer; &.active { color: var(--color-warning); } }.contest-problem-items { flex: 1; }.contest-problem-items > li > button { color: var(--color-tone-75beff); }
+.contest-items { flex: 1; min-height: 0; overflow-y: auto; list-style: none; margin: 0; padding: 0 8px 10px; li { display: flex; align-items: stretch; gap: 4px; margin: 6px 0; border: 1px solid var(--color-border-soft); border-radius: 7px; background: var(--color-bg-panel); &:hover { border-color: var(--color-tone-536f85); } }.contest-open { display: grid; min-width: 0; flex: 1; grid-template-columns: 54px 1fr; align-items: center; gap: 11px; padding: 12px 14px; border: 0; background: transparent; color: var(--color-tone-ccc); text-align: left; cursor: pointer; > span { display: grid; place-items: center; min-height: 37px; border-radius: 6px; background: var(--color-accent-surface); color: var(--color-accent-text); font-size: 11px; } > div { display: flex; min-width: 0; flex-direction: column; gap: 6px; } strong { overflow: hidden; color: var(--color-text-strong); font-size: 14px; text-overflow: ellipsis; white-space: nowrap; } small { display: flex; align-items: center; gap: 10px; min-width: 0; color: var(--color-text-faint); font: 10px Consolas, monospace; > span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; } em { flex: 0 0 auto; padding: 2px 6px; border-radius: 4px; background: var(--color-bg-subtle); color: var(--color-text-secondary); font: 10px var(--font-ui); font-style: normal; &.complete { background: var(--color-success-surface); color: var(--color-success); } } } }.contest-remove { width: 34px; border: 0; border-left: 1px solid var(--color-border-soft); background: transparent; color: var(--color-text-faint); cursor: pointer; &:hover { color: var(--color-danger); } } }
+.contest-tabs { display: flex; gap: 5px; padding: 0 10px 8px; button { flex: 1; padding: 7px; border: 1px solid var(--color-border-control); border-radius: 5px; background: var(--color-bg-control-alt); color: var(--color-tone-888); font-size: 11px; cursor: pointer; &.active { border-color: var(--color-accent-border); background: var(--color-accent-surface); color: var(--color-accent-text); } } }.contest-section-title { padding: 4px 12px; color: var(--color-text-soft); font-size: 11px; }.contest-catalog-items { flex: 1; }.contest-pagination { flex: 0 0 auto; }.contest-favorite { width: 40px; border: 0; border-left: 1px solid var(--color-border-soft); background: transparent; color: var(--color-tone-888); font-size: 19px; cursor: pointer; &.active { color: var(--color-warning); } }.contest-problem-items { flex: 1; }.contest-problem-items > li > button { color: var(--color-tone-75beff); }
 .bottom-search { display: flex; align-items: center; gap: 5px; flex: 0 0 auto; padding: 8px 9px; border-top: 1px solid var(--color-border); background: var(--color-bg-panel); color: var(--color-text-faint); input { min-width: 0; flex: 1; padding: 6px 7px; border: 1px solid var(--color-border-control); border-radius: 4px; background: var(--color-bg-app); color: var(--color-text-strong); font-size: 10px; outline: none; &:focus { border-color: var(--color-accent); } } button { padding: 5px 8px; border: 0; border-radius: 3px; background: var(--color-accent-strong); color: var(--color-text-on-accent); font-size: 9px; cursor: pointer; } }.notice, .error { padding: 4px 10px; font-size: 9px; }.notice { color: var(--color-success); }.error { color: var(--color-danger); word-break: break-all; }.empty { padding: 28px 12px; color: var(--color-text-faint); text-align: center; font-size: 10px; }
 </style>

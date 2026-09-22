@@ -9,6 +9,8 @@ import { useSettingsStore } from './settingsStore'
 import { selectWorkbenchResult } from '../utils/runDiagnostics'
 import { getDataCenterValue, saveDataCenterValue } from '../dataCenter'
 import { withOjDiagnostic } from '../diagnostics'
+import { normalizeOutput } from '../utils/outputDiff'
+import { compareCodeforcesProblems } from '../utils/problemSort'
 
 export const useProblemStore = defineStore('problem', () => {
   type CatalogCache = { version: 1; updatedAt: number; cf: Problem[]; luogu: Problem[]; atcoder?: Problem[]; luoguTotal: number; luoguPerPage: number; luoguTags: LuoguTag[] }
@@ -47,7 +49,14 @@ export const useProblemStore = defineStore('problem', () => {
   const currentLanguage = ref<Language>('cpp')
   const submissions = ref<Submission[]>([])
   const isSubmitting = ref(false)
-  const isLoadingDetail = ref(false)
+  // Statement requests may overlap when the user switches tabs quickly. Keep
+  // loading state per problem so an older request cannot cover the newly
+  // selected code or statement with its placeholder.
+  const detailLoadCounts = ref<Record<string, number>>({})
+  const currentProblemKey = computed(() => currentProblem.value
+    ? `${currentProblem.value.platform}:${currentProblem.value.id.toUpperCase()}`
+    : '')
+  const isLoadingDetail = computed(() => (detailLoadCounts.value[currentProblemKey.value] ?? 0) > 0)
   const isRunning = ref(false)
   const runResult = ref<RunResult | null>(null)
   const debugResult = ref<DebugResult | null>(null)
@@ -294,12 +303,6 @@ export const useProblemStore = defineStore('problem', () => {
     persistTestCases()
   }
 
-  function comparableOutput(value: string) {
-    const lines = value.replace(/\r\n?/g, '\n').split('\n').map((line) => line.trimEnd())
-    while (lines.length && !lines[lines.length - 1]) lines.pop()
-    return lines.join('\n')
-  }
-
   function toggleProblemTags() {
     showProblemTags.value = !showProblemTags.value
     void saveDataCenterValue('show-problem-tags', showProblemTags.value)
@@ -309,6 +312,24 @@ export const useProblemStore = defineStore('problem', () => {
     const next = workspaceTransition.then(operation, operation)
     workspaceTransition = next.catch(() => undefined)
     return next
+  }
+
+  function problemKey(problem: Problem) {
+    return `${problem.platform}:${problem.id.toUpperCase()}`
+  }
+
+  function changeDetailLoadCount(problem: Problem, delta: 1 | -1) {
+    const key = problemKey(problem)
+    const next = Math.max(0, (detailLoadCounts.value[key] ?? 0) + delta)
+    if (next) detailLoadCounts.value = { ...detailLoadCounts.value, [key]: next }
+    else {
+      const { [key]: _finished, ...rest } = detailLoadCounts.value
+      detailLoadCounts.value = rest
+    }
+  }
+
+  function isCurrentProblem(problem: Problem) {
+    return Boolean(currentProblem.value && problemKey(currentProblem.value) === problemKey(problem))
   }
 
   const luoguVerdicts: Record<string, Verdict> = {
@@ -398,6 +419,8 @@ export const useProblemStore = defineStore('problem', () => {
         p.tags.some((t) => selectedTags.value.has(t)),
       )
     }
+
+    if (currentPlatform.value === 'codeforces') list = [...list].sort(compareCodeforcesProblems)
 
     return list
   })
@@ -997,6 +1020,7 @@ export const useProblemStore = defineStore('problem', () => {
 
   async function openDraftFile(file: DraftFileInfo) {
     if (debugSession.value?.sessionId) await stopDebugSession()
+    let detailProblem: Problem | null = null
     await queueWorkspaceTransition(async () => {
       if (saveTimer) clearTimeout(saveTimer)
       if (currentProblem.value) await persistDraft().catch(() => undefined)
@@ -1036,10 +1060,13 @@ export const useProblemStore = defineStore('problem', () => {
       breakpoints.value = []
       draftSaveStatus.value = 'saved'
       if (!boundProblem && !file.unbound) {
-        await fetchProblemDetail(currentProblem.value)
+        detailProblem = currentProblem.value
       }
       loadTestCases(currentProblem.value)
     })
+    // Restoring remote metadata must not keep the code workspace locked. The
+    // statement updates in place when its independent request completes.
+    if (detailProblem) void fetchProblemDetail(detailProblem)
   }
 
   async function createEmptyDraft(name: string, language: Language) {
@@ -1099,8 +1126,8 @@ export const useProblemStore = defineStore('problem', () => {
     const isAtCoderMissingRich = problem.platform === 'atcoder'
       && !(problem.description && problem.contentFormat === 'html')
     if (!force && !isCfMissingRich && !isLuoguMissingRich && !isAtCoderMissingRich) return
-    isLoadingDetail.value = true
-    error.value = null
+    changeDetailLoadCount(problem, 1)
+    if (isCurrentProblem(problem)) error.value = null
     try {
       const preserved = { rating: problem.rating, tags: problem.tags, difficulty: problem.difficulty, source: problem.source }
       const detail = problem.platform === 'codeforces'
@@ -1125,12 +1152,12 @@ export const useProblemStore = defineStore('problem', () => {
         importedProblems.value[importedIndex] = { ...problem }
         await invoke('save_imported_problems', { problems: importedProblems.value })
       }
-      error.value = null
+      if (isCurrentProblem(problem)) error.value = null
     } catch (e: any) {
-      error.value = typeof e === 'string' ? e : e?.message ?? '题面抓取失败'
+      if (isCurrentProblem(problem)) error.value = typeof e === 'string' ? e : e?.message ?? '题面抓取失败'
       if (force) throw e
     } finally {
-      isLoadingDetail.value = false
+      changeDetailLoadCount(problem, -1)
     }
   }
 
@@ -1146,7 +1173,7 @@ export const useProblemStore = defineStore('problem', () => {
     if (!hasSavedTests) loadTestCases(currentProblem.value, true)
   }
 
-  async function selectProblem(problem: Problem) {
+  async function selectProblem(problem: Problem, options: { waitForDetail?: boolean } = {}) {
     if (debugSession.value?.sessionId) await stopDebugSession()
     await queueWorkspaceTransition(async () => {
       if (saveTimer) clearTimeout(saveTimer)
@@ -1157,9 +1184,27 @@ export const useProblemStore = defineStore('problem', () => {
       breakpoints.value = []
       testCases.value = []
       activeTestCaseId.value = ''
-      await Promise.all([loadCurrentDraft(), fetchProblemDetail(problem)])
+      await loadCurrentDraft()
       loadTestCases(problem)
     })
+    const hadSamples = Boolean(problem.samples?.length)
+    const hasSavedTests = Object.prototype.hasOwnProperty.call(readStoredTestCases(), testStorageKey(problem))
+    const detailPromise = fetchProblemDetail(problem)
+    if (options.waitForDetail === false) {
+      void detailPromise.then(() => {
+        // Populate samples that arrived with the background statement only if
+        // the untouched empty test case is still visible for this problem.
+        if (hadSamples || hasSavedTests || !isCurrentProblem(problem) || !problem.samples?.length) return
+        const untouched = testCases.value.length === 1
+          && !testCases.value[0].input
+          && !testCases.value[0].expectedOutput
+          && testCases.value[0].status === 'idle'
+        if (untouched) loadTestCases(problem, true)
+      })
+      return
+    }
+    await detailPromise
+    if (isCurrentProblem(problem)) loadTestCases(problem)
   }
 
   function updateCode(code: string) {
@@ -1251,7 +1296,7 @@ export const useProblemStore = defineStore('problem', () => {
     test.status = !result.success
       ? 'error'
       : test.expectedOutput.trim()
-        ? (comparableOutput(result.stdout) === comparableOutput(test.expectedOutput) ? 'passed' : 'failed')
+        ? (normalizeOutput(result.stdout) === normalizeOutput(test.expectedOutput) ? 'passed' : 'failed')
         : 'completed'
   }
 

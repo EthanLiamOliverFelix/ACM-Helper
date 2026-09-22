@@ -1,5 +1,6 @@
+import { reactive, watchEffect } from 'vue'
 import { describe, expect, it } from 'vitest'
-import { normalizeWorkbenchState } from './workbenchStore'
+import { normalizeWorkbenchState, upsertWorkbenchTab, type EditorGroupState } from './workbenchStore'
 
 describe('workbench persisted state', () => {
   it('falls back safely when persisted data is invalid', () => {
@@ -66,5 +67,18 @@ describe('workbench persisted state', () => {
     })
     expect(state.groups[0].tabs).toEqual([])
     expect(state.groups[0].activeTabId).toBeNull()
+  })
+})
+
+describe('workbench tab loading state', () => {
+  it('returns the reactive tab stored in a newly opened editor group', () => {
+    const group = reactive<EditorGroupState>({ id: 'group-1', tabs: [], activeTabId: null })
+    const tab = upsertWorkbenchTab(group, { id: 'code:1A', kind: 'code', title: '1A.cpp', loading: true })
+    let visibleLoading = false
+    watchEffect(() => { visibleLoading = Boolean(group.tabs[0]?.loading) }, { flush: 'sync' })
+
+    expect(visibleLoading).toBe(true)
+    tab.loading = false
+    expect(visibleLoading).toBe(false)
   })
 })

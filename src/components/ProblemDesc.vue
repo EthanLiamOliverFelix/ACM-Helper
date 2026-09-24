@@ -40,9 +40,17 @@ const noteError = ref('')
 const statementOpen = ref(false)
 const statementMode = ref<'read' | 'edit'>('edit')
 const statementDraft = ref('')
+const statementTitleDraft = ref('')
 const statementSaving = ref(false)
 const statementError = ref('')
-const statementDirty = computed(() => statementDraft.value !== store.localStatement)
+const statementDirty = computed(() => statementDraft.value !== store.localStatement
+  || Boolean(statementTitleDraft.value.trim() && statementTitleDraft.value.trim() !== store.currentProblem?.title))
+const localTitleHtml = computed(() => {
+  const title = store.currentProblem?.title ?? ''
+  const html = safeRichText(title, 'markdown')
+  const document = new DOMParser().parseFromString(html, 'text/html')
+  return document.querySelector('p')?.innerHTML ?? html
+})
 const problemSource = computed(() => {
   const problem = store.currentProblem
   if (!problem) return ''
@@ -227,6 +235,7 @@ async function openProblemNote() {
 
 function openLocalStatement() {
   statementDraft.value = store.localStatement
+  statementTitleDraft.value = ''
   statementMode.value = 'edit'
   statementError.value = ''
   statementOpen.value = true
@@ -236,7 +245,10 @@ async function saveLocalStatement() {
   if (statementSaving.value || !statementDirty.value) return
   statementSaving.value = true
   statementError.value = ''
-  try { await store.saveLocalStatement(statementDraft.value) }
+  try {
+    await store.saveLocalStatement(statementDraft.value, statementTitleDraft.value)
+    statementTitleDraft.value = ''
+  }
   catch (cause) { statementError.value = cause instanceof Error ? cause.message : String(cause); throw cause }
   finally { statementSaving.value = false }
 }
@@ -254,7 +266,7 @@ async function closeLocalStatement() {
     <div v-if="store.currentProblem" class="problem-desc__header">
       <div class="problem-desc__overview">
         <div class="problem-desc__heading">
-          <h1><span class="problem-desc__id">{{ store.currentProblem.id }}</span> {{ store.currentProblem.title }}</h1>
+          <h1><span class="problem-desc__id">{{ store.currentProblem.id }}</span> <span v-if="store.currentProblem.platform === 'local'" class="problem-desc__name" v-html="localTitleHtml" /><template v-else>{{ store.currentProblem.title }}</template></h1>
           <small>{{ problemSource }}</small>
         </div>
         <div class="problem-desc__facts">
@@ -320,10 +332,11 @@ async function closeLocalStatement() {
     <div v-if="statementOpen" class="problem-note-modal" @click.self="closeLocalStatement">
       <section>
         <header>
-          <div><strong>{{ store.currentProblem?.title }} · 本地题面</strong><span :title="store.draftPath">{{ store.draftPath }}</span></div>
+          <div><strong><span v-html="localTitleHtml" /> · 本地题面</strong><span :title="store.draftPath">{{ store.draftPath }}</span></div>
           <nav><button :class="{ active: statementMode === 'read' }" @click="saveLocalStatement().then(() => { statementMode = 'read' }).catch(() => undefined)">预览</button><button :class="{ active: statementMode === 'edit' }" @click="statementMode = 'edit'">编辑</button><button v-if="statementMode === 'edit'" class="save" :disabled="statementSaving || !statementDirty" @click="saveLocalStatement">{{ statementSaving ? '保存中…' : statementDirty ? '保存' : '已保存' }}</button><button class="close" aria-label="关闭" @click="closeLocalStatement">×</button></nav>
         </header>
         <div v-if="statementError" class="problem-note-modal__error">题面保存失败：{{ statementError }}</div>
+        <label v-if="statementMode === 'edit'" class="local-title-field"><span>题目名称（支持 LaTeX，留空则不更改）</span><input v-model="statementTitleDraft" type="text" :placeholder="store.currentProblem?.title || '输入新的题目名称，例如：求和 $\\sum_{i=1}^{n} i$'" spellcheck="false" /></label>
         <MarkdownNoteEditor v-model="statementDraft" :mode="statementMode" :note-path="store.draftPath" placeholder="粘贴或输入题面，支持 Markdown、LaTeX 公式、图片、表格和代码块…" @save="saveLocalStatement" />
       </section>
     </div>
@@ -360,6 +373,8 @@ async function closeLocalStatement() {
     color: var(--color-accent-text);
     font: inherit;
   }
+
+  &__name :deep(p) { display: inline; margin: 0; }
 
   &__title { font-size: 16px; font-weight: 600; color: var(--color-text-primary); }
 
@@ -517,6 +532,7 @@ async function closeLocalStatement() {
 .problem-desc__notice { padding: 6px 20px; border-top: 1px solid var(--color-tone-315b4c); color: var(--color-success); background: var(--color-tone-192b25); font-size: 11px; }
 .solved-btn { padding: 4px 8px; border: 1px solid var(--color-border-strong); border-radius: 4px; background: transparent; color: var(--color-text-soft); font-size: 11px; cursor: pointer; &--active { border-color: var(--color-success); color: var(--color-success); background: var(--color-tone-1b3029); } }
 .problem-note-modal { position: fixed; inset: 36px 0 0; z-index: 1600; display: grid; place-items: center; padding: 24px; background: var(--color-overlay); > section { width: min(980px, 94vw); height: min(760px, 88vh); display: flex; flex-direction: column; overflow: hidden; border: 1px solid var(--color-tone-505050); border-radius: 9px; background: var(--color-bg-app); box-shadow: 0 18px 60px var(--color-overlay-strong); > header { display: flex; align-items: center; gap: 12px; padding: 10px 13px; border-bottom: 1px solid var(--color-border); background: var(--color-bg-panel); > div { min-width: 0; flex: 1; display: flex; flex-direction: column; } strong { font-size: 14px; } span { overflow: hidden; color: var(--color-text-faint); font: 8px Consolas, monospace; text-overflow: ellipsis; white-space: nowrap; } nav { display: flex; align-items: center; gap: 4px; } button { padding: 5px 9px; border: 1px solid var(--color-border-control); border-radius: 4px; background: var(--color-bg-control-alt); color: var(--color-text-soft); font-size: 10px; cursor: pointer; &.active { border-color: var(--color-accent-border); background: var(--color-accent-surface-hover); color: var(--color-accent-text); } &.save { border-color: var(--color-tone-39704f); background: var(--color-tone-20372a); color: var(--color-tone-8ad0a1); } &.close { padding: 0 7px; border: 0; background: transparent; font-size: 22px; } &:disabled { opacity: .5; } } } } &__error { padding: 6px 10px; color: var(--color-danger); background: var(--color-danger-surface); font-size: 10px; } }
+.local-title-field { display: flex; flex-direction: column; gap: 6px; padding: 12px 14px; border-bottom: 1px solid var(--color-border); color: var(--color-text-soft); font-size: 13px; font-weight: 600; input { width: 100%; box-sizing: border-box; padding: 8px 10px; border: 1px solid var(--color-border-control); border-radius: 4px; outline: none; background: var(--color-bg-deep); color: var(--color-text-strong); font: 13px/1.45 Consolas, monospace; &:focus { border-color: var(--color-accent); } } }
 @media (max-width: 760px) { .problem-desc__overview { grid-template-columns: 1fr; gap: 12px; } .problem-desc__facts { width: 100%; } }
 @media (max-width: 460px) { .problem-desc__facts { grid-template-columns: repeat(2, 1fr); row-gap: 10px; } }
 </style>

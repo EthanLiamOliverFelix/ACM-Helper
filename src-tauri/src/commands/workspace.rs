@@ -1367,6 +1367,7 @@ pub async fn save_local_statement(
     app: AppHandle,
     path: String,
     statement_markdown: String,
+    title: Option<String>,
 ) -> Result<(), String> {
     let root = workspace_root(&app)?;
     let target = canonical_workspace_target(&root, Path::new(&path))?;
@@ -1391,6 +1392,12 @@ pub async fn save_local_statement(
         statement_markdown: String::new(),
     });
     metadata.statement_markdown = statement_markdown;
+    if let Some(title) = title
+        .map(|value| value.trim().to_string())
+        .filter(|value| !value.is_empty())
+    {
+        metadata.title = title;
+    }
     write_source_metadata(&target, &metadata)
 }
 
@@ -1476,7 +1483,7 @@ pub async fn rename_workspace_entry(
                 write_source_metadata(&renamed, &metadata)?;
             }
             metadata.file_stem = new_stem.to_string();
-            if metadata.platform == "local" {
+            if metadata.platform == "local" && metadata.title == old_stem {
                 metadata.title = new_stem.to_string();
             }
             for entry in std::fs::read_dir(parent)

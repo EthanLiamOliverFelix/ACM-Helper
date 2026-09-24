@@ -1075,18 +1075,23 @@ export const useProblemStore = defineStore('problem', () => {
     await openDraftFile(file)
   }
 
-  async function saveLocalStatement(markdown: string) {
+  async function saveLocalStatement(markdown: string, title?: string) {
     if (!currentProblem.value || currentProblem.value.platform !== 'local' || !draftPath.value) {
       throw new Error('只有资源管理器中的未绑定本地代码文件可以编辑题面')
     }
-    await invoke('save_local_statement', { path: draftPath.value, statementMarkdown: markdown })
+    const nextTitle = title?.trim()
+    await invoke('save_local_statement', { path: draftPath.value, statementMarkdown: markdown, title: nextTitle || null })
     localStatement.value = markdown
+    if (nextTitle) currentProblem.value.title = nextTitle
     currentProblem.value.description = markdown.trim()
       ? markdown
       : '这是一个未绑定题目的本地代码文件。可以正常运行和调试，但不会提交到 OJ。'
     currentProblem.value.contentFormat = 'markdown'
     const draft = draftFiles.value.find((item) => item.path === draftPath.value)
-    if (draft) draft.statementMarkdown = markdown
+    if (draft) {
+      draft.statementMarkdown = markdown
+      if (nextTitle) draft.title = nextTitle
+    }
   }
 
   function workspacePathChanged(oldPath: string, newPath: string) {
@@ -1095,7 +1100,10 @@ export const useProblemStore = defineStore('problem', () => {
     const currentNormalized = draftPath.value.replace(/\\/g, '/').toLowerCase()
     if (currentNormalized === oldNormalized) {
       draftPath.value = newPath
-      if (currentProblem.value?.platform === 'local') currentProblem.value.title = newPath.split(/[\\/]/).pop()?.replace(/\.(cpp|py|java)$/i, '') || currentProblem.value.title
+      const oldStem = oldPath.split(/[\\/]/).pop()?.replace(/\.(cpp|py|java)$/i, '')
+      if (currentProblem.value?.platform === 'local' && currentProblem.value.title === oldStem) {
+        currentProblem.value.title = newPath.split(/[\\/]/).pop()?.replace(/\.(cpp|py|java)$/i, '') || currentProblem.value.title
+      }
     } else if (currentNormalized.startsWith(`${oldNormalized}/`)) {
       draftPath.value = `${newPath}${draftPath.value.slice(oldPath.length)}`
     }
@@ -1421,6 +1429,7 @@ export const useProblemStore = defineStore('problem', () => {
         sessionId: debugSession.value.sessionId,
         action,
         watches: watchExpressions.value,
+        breakpoints: breakpoints.value,
       })
     } catch (e) {
       debugError.value = String(e)

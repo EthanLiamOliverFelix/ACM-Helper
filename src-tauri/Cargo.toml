@@ -1,6 +1,6 @@
 [package]
 name = "my-acm-helper"
-version = "14.0.0"
+version = "18.0.0"
 description = "A local-first ACM problem-solving desktop workspace"
 authors = ["EthanLiamOliverFelix"]
 license = "MIT"

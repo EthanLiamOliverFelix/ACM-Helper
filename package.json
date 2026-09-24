@@ -1,7 +1,7 @@
 {
   "name": "my-acm-helper",
   "private": true,
-  "version": "14.0.0",
+  "version": "18.0.0",
   "type": "module",
   "scripts": {
     "dev": "vite",

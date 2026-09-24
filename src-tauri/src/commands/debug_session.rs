@@ -1,6 +1,6 @@
 use serde::Serialize;
 use serde_json::Value;
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::process::Stdio;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 use tauri::{AppHandle, Manager, State};
@@ -20,6 +20,7 @@ struct DebugSession {
     stdin: ChildStdin,
     stdout: Lines<BufReader<ChildStdout>>,
     program_stdout: String,
+    gdb_breakpoints: HashMap<u32, String>,
 }
 
 #[derive(Serialize, Clone)]
@@ -82,12 +83,13 @@ def snapshot(frame, watches, active=True, error=''):
     controller_out.write(json.dumps(body, ensure_ascii=True) + '\n'); controller_out.flush()
 
 def wait_command(frame):
-    global mode, target_frame, target_depth
+    global mode, target_frame, target_depth, breakpoints
     while True:
         raw = controller_in.readline()
         if not raw: raise DebugQuit()
         command = json.loads(raw)
         action, watches = command.get('action', 'continue'), command.get('watches', [])
+        if 'breakpoints' in command: breakpoints = set(command['breakpoints'])
         if action == 'stop': raise DebugQuit()
         if action == 'inspect': snapshot(frame, watches); continue
         mode = action
@@ -188,6 +190,7 @@ async fn spawn_session(mut command: Command, adapter: &str) -> Result<DebugSessi
         stdin,
         stdout: BufReader::new(stdout).lines(),
         program_stdout: String::new(),
+        gdb_breakpoints: HashMap::new(),
     })
 }
 
@@ -250,6 +253,9 @@ async fn gdb_execute(session: &mut DebugSession, command: &str) -> Result<String
         output.push_str(&line);
         output.push('\n');
     }
+    if output.lines().any(|line| line.starts_with("^error")) {
+        return Err(capture_field(&output, "msg").unwrap_or(output));
+    }
     Ok(output)
 }
 
@@ -262,7 +268,7 @@ fn mi_stream_text(line: &str) -> Option<String> {
 
 fn capture_field(text: &str, field: &str) -> Option<String> {
     let marker = format!("{}=\"", field);
-    let start = text.rfind(&marker)? + marker.len();
+    let start = text.find(&marker)? + marker.len();
     let mut escaped = false;
     let mut end = start;
     for (offset, character) in text[start..].char_indices() {
@@ -280,6 +286,7 @@ fn capture_field(text: &str, field: &str) -> Option<String> {
 
 fn parse_gdb_variables(text: &str) -> Vec<DebugVariable> {
     let mut result = Vec::new();
+    let mut seen = HashSet::new();
     let mut rest = text;
     while let Some(name_at) = rest.find("name=\"") {
         rest = &rest[name_at..];
@@ -287,14 +294,52 @@ fn parse_gdb_variables(text: &str) -> Vec<DebugVariable> {
             break;
         };
         let value = capture_field(rest, "value").unwrap_or_else(|| "<不可用>".into());
-        result.push(DebugVariable {
-            name,
-            value,
-            error: None,
-        });
+        if seen.insert(name.clone()) {
+            result.push(DebugVariable {
+                name,
+                value,
+                error: None,
+            });
+        }
         rest = &rest[6..];
     }
     result
+}
+
+async fn sync_gdb_breakpoints(
+    session: &mut DebugSession,
+    breakpoints: &[u32],
+) -> Result<(), String> {
+    let desired: HashSet<u32> = breakpoints.iter().copied().collect();
+    let old: Vec<u32> = session.gdb_breakpoints.keys().copied().collect();
+    for line in old {
+        if !desired.contains(&line) {
+            let number = session.gdb_breakpoints.get(&line).unwrap().clone();
+            let response = gdb_command(session, &format!("-break-delete {}", number)).await?;
+            if response.contains("^error") {
+                return Err(capture_field(&response, "msg").unwrap_or(response));
+            }
+            session.gdb_breakpoints.remove(&line);
+        }
+    }
+    for line in breakpoints {
+        if session.gdb_breakpoints.contains_key(line) {
+            continue;
+        }
+        let location = if *line == 0 {
+            "main".to_string()
+        } else {
+            format!("main.cpp:{}", line)
+        };
+        let response = gdb_command(session, &format!("-break-insert {}", location)).await?;
+        if response.contains("^error") {
+            return Err(capture_field(&response, "msg").unwrap_or(response));
+        }
+        let number = capture_field(&response, "number")
+            .ok_or_else(|| format!("无法识别断点编号: {}", response))?;
+        session.gdb_breakpoints.insert(*line, number);
+    }
+    Ok(())
 }
 
 async fn inspect_gdb(
@@ -492,13 +537,12 @@ pub async fn start_debug_session(
         gdb_until_prompt(&mut session).await?;
         gdb_command(&mut session, "-gdb-set pagination off").await?;
         gdb_command(&mut session, "-file-exec-and-symbols \"debug-main.exe\"").await?;
-        if breakpoints.is_empty() {
-            gdb_command(&mut session, "-break-insert main").await?;
+        let initial_breakpoints = if breakpoints.is_empty() {
+            vec![0]
         } else {
-            for line in &breakpoints {
-                gdb_command(&mut session, &format!("-break-insert main.cpp:{}", line)).await?;
-            }
-        }
+            breakpoints.clone()
+        };
+        sync_gdb_breakpoints(&mut session, &initial_breakpoints).await?;
         let execution = gdb_execute(
             &mut session,
             "-interpreter-exec console \"run < debug-input.txt\"",
@@ -562,12 +606,14 @@ pub async fn debug_session_action(
     session_id: String,
     action: String,
     watches: Vec<String>,
+    breakpoints: Vec<u32>,
 ) -> Result<DebugSessionState, String> {
     let mut sessions = sessions.0.lock().await;
     let session = sessions
         .get_mut(&session_id)
         .ok_or_else(|| "调试会话不存在或已经结束".to_string())?;
     if session.adapter == "gdb" {
+        sync_gdb_breakpoints(session, &breakpoints).await?;
         if action == "inspect" {
             return inspect_gdb(&session_id, session, "", &watches).await;
         }
@@ -583,7 +629,8 @@ pub async fn debug_session_action(
     } else {
         write_command(
             session,
-            &serde_json::json!({"action":action,"watches":watches}).to_string(),
+            &serde_json::json!({"action":action,"watches":watches,"breakpoints":breakpoints})
+                .to_string(),
         )
         .await?;
         let line = read_line(session, Duration::from_secs(30)).await?;
@@ -617,6 +664,21 @@ mod tests {
         let path = std::env::temp_dir().join(format!("acm-helper-{}-{}", name, session_id()));
         fs::create_dir_all(&path).unwrap();
         path
+    }
+
+    #[test]
+    fn gdb_variables_are_parsed_in_order_and_deduplicated() {
+        let variables = parse_gdb_variables(
+            r#"^done,variables=[{name="this",value="0x1000"},{name="p",value="0x2000"},{name="p",value="0x3000"},{name="tmp",value="0x4000"}]"#,
+        );
+
+        assert_eq!(variables.len(), 3);
+        assert_eq!(variables[0].name, "this");
+        assert_eq!(variables[0].value, "0x1000");
+        assert_eq!(variables[1].name, "p");
+        assert_eq!(variables[1].value, "0x2000");
+        assert_eq!(variables[2].name, "tmp");
+        assert_eq!(variables[2].value, "0x4000");
     }
 
     #[test]
@@ -670,6 +732,37 @@ mod tests {
     }
 
     #[test]
+    fn interactive_python_steps_out_and_uses_updated_breakpoints() {
+        let runtime = tokio::runtime::Runtime::new().unwrap();
+        runtime.block_on(async {
+            let dir = test_dir("python-controls");
+            let source = dir.join("main.py");
+            let input = dir.join("input.txt");
+            let runner = dir.join("controller.py");
+            fs::write(&source, "def work():\n    total = 0\n    for i in range(3):\n        total += i\n    return total\nx = work()\ny = x + 1\nprint(y)\n").unwrap();
+            fs::write(&input, "").unwrap();
+            fs::write(&runner, PYTHON_INTERACTIVE_DEBUGGER).unwrap();
+            let mut command = Command::new("python");
+            command.arg("-u").arg(&runner).arg(&source).arg(&input).arg("6").current_dir(&dir);
+            let mut session = spawn_session(command, "python-trace").await.unwrap();
+            let state = python_state("test", "python-trace", &read_line(&mut session, Duration::from_secs(10)).await.unwrap()).unwrap();
+            assert_eq!(state.line, Some(6));
+            write_command(&mut session, r#"{"action":"step","breakpoints":[7]}"#).await.unwrap();
+            let state = python_state("test", "python-trace", &read_line(&mut session, Duration::from_secs(10)).await.unwrap()).unwrap();
+            assert_eq!(state.function, "work");
+            write_command(&mut session, r#"{"action":"finish","breakpoints":[7]}"#).await.unwrap();
+            let state = python_state("test", "python-trace", &read_line(&mut session, Duration::from_secs(10)).await.unwrap()).unwrap();
+            assert_eq!(state.line, Some(7));
+            assert_eq!(state.function, "<module>");
+            write_command(&mut session, r#"{"action":"continue","breakpoints":[7]}"#).await.unwrap();
+            let state = python_state("test", "python-trace", &read_line(&mut session, Duration::from_secs(10)).await.unwrap()).unwrap();
+            assert!(!state.active);
+            let _ = session.child.kill().await;
+            let _ = fs::remove_dir_all(dir);
+        });
+    }
+
+    #[test]
     fn interactive_gdb_steps_and_watches_expression() {
         let runtime = tokio::runtime::Runtime::new().unwrap();
         runtime.block_on(async {
@@ -696,6 +789,42 @@ mod tests {
             let state = inspect_gdb("test", &mut session, &execution, &["c".into()]).await.unwrap();
             assert_eq!(state.line, Some(6));
             assert_eq!(state.watches[0].value, "5");
+            let _ = session.child.kill().await;
+            let _ = fs::remove_dir_all(dir);
+        });
+    }
+
+    #[test]
+    fn interactive_gdb_continues_to_breakpoint_and_finishes_function() {
+        let runtime = tokio::runtime::Runtime::new().unwrap();
+        runtime.block_on(async {
+            let dir = test_dir("gdb-controls");
+            let source = dir.join("main.cpp");
+            let executable = dir.join("debug-main.exe");
+            fs::write(&source, "int work() {\n int result = 0;\n for (int i = 0; i < 3; ++i) result += i;\n return result;\n}\nint main() {\n int a = work();\n int b = a + 1;\n return b;\n}\n").unwrap();
+            let mut compile = Command::new("g++");
+            compile.args(["-g", "-O0"]).arg(&source).arg("-o").arg(&executable);
+            assert!(command_output(compile).await.unwrap().status.success());
+            let mut command = Command::new("gdb");
+            command.args(["--interpreter=mi2", "--quiet"]).current_dir(&dir);
+            let mut session = spawn_session(command, "gdb").await.unwrap();
+            gdb_until_prompt(&mut session).await.unwrap();
+            gdb_command(&mut session, "-file-exec-and-symbols \"debug-main.exe\"").await.unwrap();
+            sync_gdb_breakpoints(&mut session, &[7]).await.unwrap();
+            let execution = gdb_execute(&mut session, "-exec-run").await.unwrap();
+            assert_eq!(inspect_gdb("test", &mut session, &execution, &[]).await.unwrap().line, Some(7));
+            let execution = gdb_execute(&mut session, "-exec-step").await.unwrap();
+            let state = inspect_gdb("test", &mut session, &execution, &[]).await.unwrap();
+            assert_eq!(state.function, "work");
+            let execution = gdb_execute(&mut session, "-exec-finish").await.unwrap();
+            let state = inspect_gdb("test", &mut session, &execution, &[]).await.unwrap();
+            assert_eq!(state.line, Some(7));
+            assert_eq!(state.function, "main");
+            sync_gdb_breakpoints(&mut session, &[8]).await.unwrap();
+            let execution = gdb_execute(&mut session, "-exec-continue").await.unwrap();
+            assert_eq!(inspect_gdb("test", &mut session, &execution, &[]).await.unwrap().line, Some(8));
+            let execution = gdb_execute(&mut session, "-exec-continue").await.unwrap();
+            assert!(!inspect_gdb("test", &mut session, &execution, &[]).await.unwrap().active);
             let _ = session.child.kill().await;
             let _ = fs::remove_dir_all(dir);
         });

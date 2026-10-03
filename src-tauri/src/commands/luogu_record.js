@@ -35,8 +35,8 @@
   function verdict(record) {
     var result = status(record.status);
     var extra = detail(record);
-    var compile = decode(extra.compileResult || extra.compile);
-    if (compile && compile.success === false) return 'CE';
+    // Compilation metadata may be an unfinished placeholder. Only the record
+    // or judge status establishes a verdict; a false flag must not end polling.
     var judge = decode(extra.judgeResult || extra.judge || record.judgeResult) || {};
     var judgeStatus = status(judge.status);
     if ((result === 0 || result === 1) && judgeStatus !== undefined && judgeStatus > 1) result = judgeStatus;

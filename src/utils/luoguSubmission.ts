@@ -12,7 +12,7 @@ export function isLuoguJudging(status: Verdict) {
 }
 
 export function resolveLuoguRecordVerdict(detail: LuoguRecordDetail): Verdict | undefined {
-  if (detail.compileSuccess === false) return 'Compilation Error'
+  // Compilation metadata alone does not establish a final verdict.
   const explicit = detail.verdict && luoguSubmissionVerdicts[detail.verdict]
   const overall = explicit || luoguSubmissionVerdicts[statuses[detail.status]]
   if (!overall || isLuoguJudging(overall)) return undefined

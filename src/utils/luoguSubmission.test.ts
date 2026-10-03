@@ -47,7 +47,7 @@ describe('Luogu record payload detection', () => {
     expect(reader.verdict({status:0,detail:JSON.stringify({judgeResult:{status:12}})})).toBe('AC')
     expect(reader.effectiveStatus({status:0,detail:JSON.stringify({judgeResult:{status:12}})})).toBe(12)
     expect(reader.verdict({status:0,detail:{judgeResult:{subtasks:[{testCases:[{status:12}]}]}}})).toBe('WJ')
-    expect(reader.verdict({status:1,detail:{compileResult:{success:false}}})).toBe('CE')
+    expect(reader.verdict({status:1,detail:{compileResult:{success:false}}})).toBe('Judging')
   })
   it('aborts requests that hang instead of freezing the polling loop', async () => {
     vi.useFakeTimers()
@@ -61,6 +61,20 @@ describe('Luogu record payload detection', () => {
     await result
     expect(signal?.aborted).toBe(true)
   })
+  it.each([0, 1])('does not turn unfinished compilation metadata into CE for status %s', status => {
+    for (const compile of [{success:false}, {success:null}, {}]) {
+      const record = {status, detail:{compileResult:compile, judgeResult:null}}
+      expect(reader.verdict(record)).toBe(status === 0 ? 'WJ' : 'Judging')
+      expect(reader.effectiveStatus(record)).toBe(status)
+    }
+  })
+  it('preserves AC and actual CE independently of stale compilation metadata', () => {
+    const metadata = {compileResult:{success:false}}
+    expect(reader.verdict({status:12,detail:metadata})).toBe('AC')
+    expect(reader.verdict({status:0,detail:{...metadata,judgeResult:{status:12}}})).toBe('AC')
+    expect(reader.verdict({status:2,detail:metadata})).toBe('CE')
+    expect(reader.verdict({status:1,detail:{judgeResult:{status:2}}})).toBe('CE')
+  })
 })
 
 describe('Luogu result recovery', () => {
@@ -69,7 +83,7 @@ describe('Luogu result recovery', () => {
   })
   it('recognizes CE without test points and keeps pending records unresolved', () => {
     expect(resolveLuoguRecordVerdict(detail(2))).toBe('Compilation Error')
-    expect(resolveLuoguRecordVerdict(detail(1,{compileSuccess:false}))).toBe('Compilation Error')
+    expect(resolveLuoguRecordVerdict(detail(1,{compileSuccess:false}))).toBeUndefined()
     expect(resolveLuoguRecordVerdict(detail(0))).toBeUndefined()
     expect(resolveLuoguRecordVerdict(detail(1))).toBeUndefined()
     expect(resolveLuoguRecordVerdict(detail(999))).toBeUndefined()
@@ -79,5 +93,12 @@ describe('Luogu result recovery', () => {
     const subtasks = [{id:0,status:14,score:0,testCases:[{id:1,status:5,score:0,timeMs:1,memoryBytes:1}]}]
     expect(resolveLuoguRecordVerdict(detail(14,{subtasks}))).toBe('Time Limit Exceeded')
     expect(resolveLuoguRecordVerdict(detail(1,{subtasks}))).toBeUndefined()
+  })
+  it('does not override a final or absent verdict with compilation metadata', () => {
+    expect(resolveLuoguRecordVerdict(detail(12,{compileSuccess:false}))).toBe('Accepted')
+    expect(resolveLuoguRecordVerdict(detail(0,{verdict:'AC',compileSuccess:false}))).toBe('Accepted')
+    expect(resolveLuoguRecordVerdict(detail(0,{compileSuccess:false}))).toBeUndefined()
+    expect(resolveLuoguRecordVerdict(detail(999,{compileSuccess:false}))).toBeUndefined()
+    expect(resolveLuoguRecordVerdict(detail(2,{compileSuccess:false}))).toBe('Compilation Error')
   })
 })

@@ -101,4 +101,24 @@ describe('Luogu submission lifecycle', () => {
     await expect(store.fetchLuoguRecordDetail(store.submissions[0])).rejects.toThrow('记录号不匹配')
     expect(store.submissions[0].status).toBe('Running')
   })
+  it('keeps querying an unfinished compile result until the actual AC arrives', async () => {
+    vi.useFakeTimers()
+    let reads = 0
+    mocks.invoke.mockImplementation(async command => {
+      if (command === 'submit_luogu') return JSON.stringify({rid:123,pending:true})
+      if (command === 'fetch_luogu_record_detail') {
+        const result = detail(++reads === 1 ? 1 : 12)
+        return JSON.stringify({...result,compileSuccess:false})
+      }
+    })
+    const store = readyStore()
+    const task = store.submitLuogu()
+    await vi.runAllTimersAsync()
+    await task
+    expect(reads).toBe(2)
+    expect(store.submissions[0]).toMatchObject({remoteId:123,status:'Accepted',score:100})
+    expect(store.isSubmitting).toBe(false)
+    expect(mocks.accepted).toHaveBeenCalledWith('luogu:P1001',[])
+    expect(mocks.invoke.mock.calls.filter(([command]) => command === 'submit_luogu')).toHaveLength(1)
+  })
 })

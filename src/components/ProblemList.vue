@@ -69,11 +69,6 @@ async function openProblem(problem: typeof store.problems[number]) {
   await workbench.openProblem(problem)
 }
 
-async function importProblem() {
-  await store.importProblem()
-  if (store.currentProblem) workbench.openCurrentCode()
-}
-
 </script>
 
 <template>
@@ -89,10 +84,6 @@ async function importProblem() {
     <div class="problem-list__sources">
       <span>来源</span>
       <button v-for="source in sourceOptions" :key="source.key" :class="{ active: store.currentPlatform === source.key }" @click="store.setPlatform(source.key)">{{ source.label }}</button>
-    </div>
-    <div class="problem-import">
-      <input v-model="store.importUrl" placeholder="粘贴 CF / AtCoder / 洛谷题目链接" @keyup.enter="importProblem" />
-      <button :disabled="store.isImporting || !store.importUrl.trim()" @click="importProblem">{{ store.isImporting ? '抓取中…' : '导入' }}</button>
     </div>
     <div v-if="store.error && store.activeView === 'workspace'" class="problem-import__error">{{ store.error }}</div>
     <!-- 搜索框 -->

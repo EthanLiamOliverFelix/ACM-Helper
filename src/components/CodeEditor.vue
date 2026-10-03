@@ -8,6 +8,7 @@ import { configureMonaco } from '../monaco'
 import { VueMonacoEditor } from '@guolao/vue-monaco-editor'
 import { formatCode } from '../utils/codeFormatter'
 import CodeVersionManager from './CodeVersionManager.vue'
+import EditorRunControl from './EditorRunControl.vue'
 import { useWorkbenchStore } from '../stores/workbenchStore'
 
 const store = useProblemStore()
@@ -191,13 +192,13 @@ onBeforeUnmount(() => {
           {{ opt.label }}
         </button>
       </div>
-      <span class="code-editor__filename">
-        {{ store.contextFileName }}
-      </span>
-      <button class="code-editor__format" :disabled="store.isFormatting || !store.currentCode.trim()" title="格式化文档 (Shift+Alt+F)" @click="formatDocument()">{{ store.isFormatting ? '格式化中…' : '格式化' }}</button>
-      <button class="code-editor__reset" title="恢复为设置中的初始代码片段" @click="confirmResetCode">重置代码</button>
-      <CodeVersionManager />
-      <span v-if="store.formatError" class="code-editor__format-error" :title="store.formatError">{{ store.formatError }}</span>
+      <div class="code-editor__actions">
+        <span v-if="store.formatError" class="code-editor__format-error" :title="store.formatError">{{ store.formatError }}</span>
+        <button class="code-editor__icon" :disabled="store.isFormatting || !store.currentCode.trim()" title="格式化文档 (Shift+Alt+F)" aria-label="格式化文档" :aria-busy="store.isFormatting" @click="formatDocument()"><i class="codicon codicon-code" aria-hidden="true" /></button>
+        <button class="code-editor__icon" title="重置代码：恢复为设置中的初始代码片段" aria-label="重置代码" @click="confirmResetCode"><i class="codicon codicon-discard" aria-hidden="true" /></button>
+        <CodeVersionManager />
+        <EditorRunControl />
+      </div>
     </div>
 
     <!-- 编辑器主体 -->
@@ -241,15 +242,9 @@ onBeforeUnmount(() => {
     padding: 2px;
   }
 
-  &__filename {
-    font-size: 12px;
-    color: var(--color-text-muted);
-    font-family: 'Consolas', 'Courier New', monospace;
-  }
-
-  &__format { padding: 3px 8px; border: 1px solid var(--color-tone-464646); border-radius: 3px; background: var(--color-bg-raised); color: var(--color-text-secondary); font-size: 10px; cursor: pointer; &:hover:not(:disabled) { border-color: var(--color-accent); color: var(--color-text-on-accent); } &:disabled { opacity: .4; cursor: not-allowed; } }
-  &__format-error { max-width: 210px; overflow: hidden; color: var(--color-danger); font-size: 9px; text-overflow: ellipsis; white-space: nowrap; }
-  &__reset { padding: 4px 7px; border: 1px solid var(--color-tone-6f4b4b); border-radius: 4px; background: var(--color-tone-342424); color: var(--color-tone-e8aaaa); font-size: 10px; cursor: pointer; &:hover { border-color: var(--color-tone-b35d5d); color: var(--color-tone-ffd0d0); } }
+  &__actions { display: flex; align-items: center; gap: 4px; margin-left: auto; min-width: 0; }
+  &__icon { display: inline-flex; align-items: center; justify-content: center; width: 28px; height: 28px; padding: 0; border: 0; border-radius: 3px; background: transparent; color: var(--color-text-secondary); cursor: pointer; .codicon { font-size: 18px; } &:hover:not(:disabled) { background: var(--color-bg-hover); color: var(--color-text-primary); } &:disabled { opacity: .4; cursor: not-allowed; } }
+  &__format-error { max-width: 160px; overflow: hidden; color: var(--color-danger); font-size: 9px; text-overflow: ellipsis; white-space: nowrap; }
 
   &__editor {
     flex: 1;

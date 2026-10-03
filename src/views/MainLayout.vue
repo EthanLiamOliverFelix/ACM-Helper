@@ -24,6 +24,12 @@ function startResize(event: PointerEvent) {
   startPointerResize(event, { axis: 'x', onMove: current => workbench.setSidebarWidth(startValue + current.clientX - startX) })
 }
 function handleWorkbenchShortcut(event: KeyboardEvent) {
+  if (event.ctrlKey && !event.altKey && !event.shiftKey && event.code === 'Backquote') {
+    event.preventDefault()
+    if (workbench.terminalVisible) workbench.terminalVisible = false
+    else workbench.openTerminal()
+    return
+  }
   if (!isToggleSidebarShortcut(event)) return
   if (event.target instanceof Element && event.target.closest('[data-sidebar-shortcut-ignore]')) return
   event.preventDefault()

@@ -145,3 +145,34 @@ describe('batch collection moves', () => {
     expect(store.sets.map(item => item.id)).toEqual(['a', 'c', 'b', 'd'])
   })
 })
+
+describe('problem ordering in a set', () => {
+  it('moves at the requested boundary, preserves other entries and restores saved order', () => {
+    const store = useProblemSetStore()
+    const set = store.activeSet!
+    set.problems = ['P1000', 'P1001', 'P1002', 'P1003'].map(id => ({ platform: 'luogu', id, title: id, tags: [], addedAt: 1 }))
+    expect(store.reorderProblem(set.id, 'luogu:P1000', 'luogu:P1003', 'before')).toBe(true)
+    expect(set.problems.map(problem => problem.id)).toEqual(['P1001', 'P1002', 'P1000', 'P1003'])
+    expect(store.reorderProblem(set.id, 'luogu:P1003', 'luogu:P1001', 'after')).toBe(true)
+    expect(set.problems.map(problem => problem.id)).toEqual(['P1001', 'P1003', 'P1002', 'P1000'])
+    setActivePinia(createPinia())
+    expect(useProblemSetStore().activeSet!.problems.map(problem => problem.id)).toEqual(['P1001', 'P1003', 'P1002', 'P1000'])
+  })
+  it('distinguishes platforms and rejects invalid moves without dropping entries', () => {
+    const store = useProblemSetStore()
+    const set = store.activeSet!
+    set.problems = [
+      { platform: 'luogu', id: 'A', title: '洛谷 A', tags: [], addedAt: 1 },
+      { platform: 'codeforces', id: 'A', title: 'CF A', tags: [], addedAt: 2 },
+      { platform: 'luogu', id: 'B', title: 'B', tags: [], addedAt: 3 },
+    ]
+    expect(store.reorderProblem(set.id, 'codeforces:A', 'luogu:B', 'after')).toBe(true)
+    expect(set.problems.map(problem => `${problem.platform}:${problem.id}`)).toEqual(['luogu:A', 'luogu:B', 'codeforces:A'])
+    const before = JSON.stringify(set.problems)
+    expect(store.reorderProblem(set.id, 'luogu:A', 'missing', 'before')).toBe(false)
+    expect(store.reorderProblem(set.id, 'luogu:A', 'luogu:A', 'after')).toBe(false)
+    expect(store.reorderProblem('missing', 'luogu:A', 'luogu:B', 'after')).toBe(false)
+    expect(JSON.stringify(set.problems)).toBe(before)
+    expect(store.exportSetEntries().map(problem => problem.title)).toEqual(['A 洛谷 A', 'B B', 'A CF A'])
+  })
+})

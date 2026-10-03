@@ -1,7 +1,19 @@
 import { describe, expect, it } from 'vitest'
 import { renderLuoguMarkdown } from './luoguMarkdown'
+import { readFileSync } from 'node:fs'
 
 describe('Luogu Markdown renderer', () => {
+  it('loads styles matching the renderer layout for not-equal signs and fractions', () => {
+    const html = renderLuoguMarkdown(String.raw`$i \ne j$ and $\frac{a}{b}$`)
+    const css = readFileSync(new URL('../../node_modules/katex/dist/katex.css', import.meta.url), 'utf8')
+    // The slash must overlap the equals sign; fractions need vertical stacking.
+    expect(html).toContain('class="rlap"')
+    expect(html).toContain('vlist')
+    expect(css).toContain('.katex .rlap')
+    expect(css).toContain('.katex .vlist')
+    expect(css).toContain('.katex .base')
+  })
+
   it('renders GFM tables and math structurally', () => {
     const html = renderLuoguMarkdown('| A | B |\n| - | - |\n| 1 | 2 |\n\n$x^2$')
     expect(html).toContain('<table>')

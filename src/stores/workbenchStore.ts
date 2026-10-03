@@ -159,6 +159,14 @@ export const useWorkbenchStore = defineStore('workbench', () => {
   const sidebarWidth = ref(saved.sidebarWidth)
   const noteSidebarWidth = ref(saved.noteSidebarWidth)
   const bottomPanelHeight = ref(saved.bottomPanelHeight)
+  const terminalVisible = ref(false)
+  const terminalRunMode = ref<'run' | 'compile-run'>('compile-run')
+  const terminalRunning = ref(false)
+  const terminalRequest = ref({ sequence: 0, action: 'show' as 'show' | 'compile' | 'run' | 'run-existing' })
+  function openTerminal(action: 'show' | 'compile' | 'run' | 'run-existing' = 'show') {
+    terminalVisible.value = true
+    terminalRequest.value = { sequence: terminalRequest.value.sequence + 1, action }
+  }
   const splitRatio = ref(saved.splitRatio)
   const activeGroupId = ref(saved.activeGroupId)
   const groups = reactive<EditorGroupState[]>(saved.groups)
@@ -544,7 +552,7 @@ export const useWorkbenchStore = defineStore('workbench', () => {
     } finally { restoring.value = false }
   }
 
-  return { activity, runnerTool, sidebarVisible, sidebarWidth, noteSidebarWidth, bottomPanelHeight, splitRatio, activeGroupId, groups, activeGroup, activeTab, activeContext, layoutTree,
+  return { terminalVisible, terminalRequest, terminalRunMode, terminalRunning, openTerminal, activity, runnerTool, sidebarVisible, sidebarWidth, noteSidebarWidth, bottomPanelHeight, splitRatio, activeGroupId, groups, activeGroup, activeTab, activeContext, layoutTree,
     setActivity, toggleSidebar, setSidebarWidth, setNoteSidebarWidth, setBottomPanelHeight, setSplitRatio, openProblem, openDraftFile, openCurrentCode, setCurrentLanguage, openStatement, openProblemNote, openAi, openRunner, openTests, openSubmission, openDebugger, openLearning, openNotes,
     activateTab, closeTab, moveTab, restore, snapshot, workspacePathChanged, workspacePathRemoved }
 })

@@ -177,6 +177,24 @@ export const useProblemSetStore = defineStore('problemSets', () => {
     return set ? set.problems.map(problem => `${problem.title || problem.id}\r\n${problemUrl(problem)}`).join('\r\n\r\n') : ''
   }
 
+  function exportSetEntries(setId = activeSetId.value) {
+    return sets.value.find(set => set.id === setId)?.problems.map(problem => ({ title: problem.title ? `${problem.id} ${problem.title}` : problem.id, url: problemUrl(problem) })) ?? []
+  }
+
+  function reorderProblem(setId: string, sourceKey: string, targetKey: string, side: 'before' | 'after') {
+    const set = sets.value.find(set => set.id === setId)
+    if (!set || sourceKey === targetKey) return false
+    const key = (problem: ProblemSetEntry) => `${problem.platform}:${problem.id}`
+    const source = set.problems.find(problem => key(problem) === sourceKey)
+    if (!source || !set.problems.some(problem => key(problem) === targetKey)) return false
+    const remaining = set.problems.filter(problem => key(problem) !== sourceKey)
+    const insertion = remaining.findIndex(problem => key(problem) === targetKey) + Number(side === 'after')
+    remaining.splice(insertion, 0, source)
+    set.problems = remaining
+    save()
+    return true
+  }
+
   function deleteSet(id: string) {
     const index = sets.value.findIndex((set) => set.id === id)
     if (index < 0) return
@@ -456,5 +474,5 @@ export const useProblemSetStore = defineStore('problemSets', () => {
   }
 
   save()
-  return { sets, groups, activeSetId, activeSet, createSet, createGroup, renameItem, canMoveItem, moveItem, moveItems, topLevelItemIds, reorderItems, reorderGroup, deleteGroup, exportSetText, deleteSet, deleteSets, reorderSet, addProblem, addProblemUrl, addProblemsBatch, importPlan, importLuoguTraining, enrichSetMetadata, removeProblem, contains, openProblem }
+  return { sets, groups, activeSetId, activeSet, createSet, createGroup, renameItem, canMoveItem, moveItem, moveItems, topLevelItemIds, reorderItems, reorderGroup, deleteGroup, exportSetText, exportSetEntries, reorderProblem, deleteSet, deleteSets, reorderSet, addProblem, addProblemUrl, addProblemsBatch, importPlan, importLuoguTraining, enrichSetMetadata, removeProblem, contains, openProblem }
 })

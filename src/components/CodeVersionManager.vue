@@ -109,7 +109,7 @@ watch(() => [store.currentProblem?.platform, store.currentProblem?.id, store.cur
 </script>
 
 <template>
-  <button class="version-trigger" :disabled="!store.currentProblem" title="保存、切换或回退本地代码版本" @click="show">⑂ 版本</button>
+  <button class="version-trigger" :disabled="!store.currentProblem" title="代码版本管理：保存、切换或回退本地版本" aria-label="代码版本管理" @click="show"><i class="codicon codicon-source-control" aria-hidden="true" /></button>
   <div v-if="open" class="version-modal" @click.self="open = false">
     <section>
       <header><div><strong>代码版本管理</strong><span>{{ store.contextFileName }} · {{ store.currentLanguage }}</span></div><button aria-label="关闭" @click="open = false">×</button></header>
@@ -145,7 +145,7 @@ watch(() => [store.currentProblem?.platform, store.currentProblem?.id, store.cur
 </template>
 
 <style scoped lang="scss">
-.version-trigger { padding: 4px 8px; border: 1px solid var(--color-tone-566c86); border-radius: 4px; background: var(--color-tone-243242); color: var(--color-tone-a9ccec); font-size: 10px; cursor: pointer; white-space: nowrap; &:disabled { opacity: .4; cursor: not-allowed; } }
+.version-trigger { display: inline-flex; align-items: center; justify-content: center; width: 28px; height: 28px; padding: 0; border: 0; border-radius: 3px; background: transparent; color: var(--color-text-secondary); cursor: pointer; .codicon { font-size: 18px; } &:hover:not(:disabled) { background: var(--color-bg-hover); color: var(--color-text-primary); } &:disabled { opacity: .4; cursor: not-allowed; } }
 .version-modal { position: fixed; inset: 36px 0 0; z-index: 1800; display: grid; place-items: center; padding: 24px; background: var(--color-overlay); > section { width: min(920px, 94vw); height: min(650px, 84vh); display: flex; flex-direction: column; overflow: hidden; border: 1px solid var(--color-tone-505050); border-radius: 9px; background: var(--color-bg-app); box-shadow: 0 18px 60px var(--color-overlay-strong); > header { display: flex; align-items: center; padding: 11px 14px; border-bottom: 1px solid var(--color-border); background: var(--color-bg-panel); > div { flex: 1; display: flex; flex-direction: column; gap: 2px; } strong { color: var(--color-text-strong); font-size: 14px; } span { color: var(--color-text-faint); font: 9px Consolas, monospace; } button { border: 0; background: transparent; color: var(--color-text-soft); font-size: 22px; cursor: pointer; } } } }
 .version-body { min-height: 0; flex: 1; display: grid; grid-template-columns: 300px 1fr; }
 aside, main { min-width: 0; min-height: 0; padding: 15px; overflow: auto; }

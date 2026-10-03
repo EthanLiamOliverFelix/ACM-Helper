@@ -365,7 +365,7 @@ onBeforeUnmount(() => {
       <button @click="revealItemInDir(contextMenu.entry?.path || rootPath); contextMenu = null">在文件资源管理器中显示</button>
       <button @click="refresh(); contextMenu = null">刷新</button>
       <button @click="collapseFolders(); contextMenu = null">全部折叠</button>
-      <button :disabled="loading" @click="showHidden = !showHidden; persistTreeState(); contextMenu = null; refresh()">{{ showHidden ? '隐藏系统文件及编译产物' : '显示隐藏文件及编译产物' }}</button>
+      <button :disabled="loading" @click="showHidden = !showHidden; persistTreeState(); contextMenu = null; refresh()">{{ showHidden ? '隐藏系统文件' : '显示隐藏文件' }}</button>
       <button v-if="currentRoot && !currentRoot.builtin" @click="contextMenu = null; removeRoot()">移出当前工作区（保留文件）</button>
       <button @click="contextMenu = null; workbench.toggleSidebar()">收起侧边栏</button>
     </div>

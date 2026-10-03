@@ -5,6 +5,7 @@ import { useAiStore } from '../stores/aiStore'
 import { useSettingsStore } from '../stores/settingsStore'
 import { useProblemStore } from '../stores/problemStore'
 import { useNoteStore } from '../stores/noteStore'
+import { useWorkbenchStore } from '../stores/workbenchStore'
 import type { ToolchainPaths } from '../stores/settingsStore'
 import type { Language } from '../types'
 import { openUrl } from '@tauri-apps/plugin-opener'
@@ -30,6 +31,7 @@ const ai = useAiStore()
 const settings = useSettingsStore()
 const problems = useProblemStore()
 const notes = useNoteStore()
+const workbench = useWorkbenchStore()
 const appWindow = getCurrentWindow()
 const settingsOpen = ref(false)
 const settingsPage = ref<'main' | 'translation' | 'solution'>('main')
@@ -223,6 +225,7 @@ async function moveDataCenter() {
     <div class="topbar__brand" data-tauri-drag-region>ACM Helper</div>
     <div class="topbar__menu">
       <button @click="openSettings">设置</button>
+      <button title="打开终端 (Ctrl+`)" @click="workbench.openTerminal()">终端</button>
     </div>
     <div class="topbar__hint">{{ savedNotice }}</div>
     <div class="window-controls">

@@ -981,11 +981,9 @@ export const useProblemStore = defineStore('problem', () => {
     clearFilters()
     if (platform === 'luogu') {
       if (!problems.value.some((problem) => problem.platform === 'luogu')) await fetchLuoguProblems(1)
-      if (currentProblem.value?.platform !== 'luogu') currentProblem.value = null
       return
     }
     if (platform === 'atcoder' && !problems.value.some((problem) => problem.platform === 'atcoder')) await fetchAtCoderProblems()
-    if (currentProblem.value?.platform !== platform) currentProblem.value = null
   }
 
   async function loadCurrentDraft() {

@@ -9,6 +9,7 @@ import { usePracticeStore, type PracticeProblem } from '../stores/practiceStore'
 import { useWorkbenchStore } from '../stores/workbenchStore'
 import { useMultiSelection } from '../composables/useMultiSelection'
 import { createDragGhost } from '../composables/dragGhost'
+import '@vscode/codicons/dist/codicon.css'
 import type { ContestAnalysis, ContestCatalogEntry, LuoguTrainingCategory, LuoguTrainingPage, Problem } from '../types'
 
 const sets = useProblemSetStore()
@@ -29,6 +30,77 @@ const collectionRoot = ref<HTMLElement | null>(null)
 const dropPreview = ref<{ id: string | null; kind: 'into' | 'before' | 'after' } | null>(null)
 let dragGhost: ReturnType<typeof createDragGhost> | null = null
 const exporting = ref(false)
+const editingSet = ref(false)
+const exportMenuOpen = ref(false)
+function dismissSetExport(event: MouseEvent) {
+  if (!(event.target as Element).closest('.set-export')) exportMenuOpen.value = false
+}
+const problemListElement = ref<HTMLUListElement | null>(null)
+const movingProblemKey = ref('')
+const problemDrop = ref<{ key: string; side: 'before' | 'after' } | null>(null)
+let problemGhost: ReturnType<typeof createDragGhost> | null = null
+let problemPointerId = -1
+const difficultyColors: Record<string, string> = {
+  '暂无评定': 'var(--color-tone-bfbfbf)', '入门': 'var(--color-tone-fe4c61)', '普及-': 'var(--color-tone-f39c11)', '普及': 'var(--color-tone-ffc116)',
+  '普及+/提高-': 'var(--color-tone-52c41a)', '提高': 'var(--color-tone-13c2c2)', '提高+/省选-': 'var(--color-tone-3498db)',
+  '省选/NOI-': 'var(--color-tone-9d3dcf)', 'NOI/NOI+/CTS': 'var(--color-tone-7187d8)',
+}
+function stopProblemMove() {
+  window.removeEventListener('pointermove', moveProblem)
+  window.removeEventListener('pointerup', finishProblemMove)
+  window.removeEventListener('pointercancel', stopProblemMove)
+  window.removeEventListener('blur', stopProblemMove)
+  window.removeEventListener('keydown', escapeProblemMove)
+  problemGhost?.remove()
+  problemGhost = null
+  movingProblemKey.value = ''
+  problemDrop.value = null
+  problemPointerId = -1
+}
+function escapeProblemMove(event: KeyboardEvent) { if (event.key === 'Escape') stopProblemMove() }
+function beginProblemMove(key: string, event: PointerEvent) {
+  if (!editingSet.value || event.button !== 0) return
+  stopProblemMove()
+  const row = (event.currentTarget as HTMLElement).closest<HTMLElement>('[data-problem-key]')
+  if (!row) return
+  event.preventDefault()
+  problemPointerId = event.pointerId
+  movingProblemKey.value = key
+  problemGhost = createDragGhost(row, event.clientX, event.clientY)
+  window.addEventListener('pointermove', moveProblem)
+  window.addEventListener('pointerup', finishProblemMove)
+  window.addEventListener('pointercancel', stopProblemMove)
+  window.addEventListener('blur', stopProblemMove)
+  window.addEventListener('keydown', escapeProblemMove)
+}
+function moveProblem(event: PointerEvent) {
+  if (event.pointerId !== problemPointerId) return
+  event.preventDefault()
+  problemGhost?.move(event.clientX, event.clientY)
+  problemDrop.value = null
+  const list = problemListElement.value
+  if (!list) return
+  const bounds = list.getBoundingClientRect()
+  if (event.clientX < bounds.left || event.clientX > bounds.right || event.clientY < bounds.top || event.clientY > bounds.bottom) return
+  if (event.clientY < bounds.top + 24) list.scrollTop -= 16
+  if (event.clientY > bounds.bottom - 24) list.scrollTop += 16
+  const row = document.elementFromPoint(event.clientX, event.clientY)?.closest<HTMLElement>('[data-problem-key]')
+  if (!row || !list.contains(row) || row.dataset.problemKey === movingProblemKey.value) return
+  const rect = row.getBoundingClientRect()
+  problemDrop.value = { key: row.dataset.problemKey!, side: event.clientY < rect.top + rect.height / 2 ? 'before' : 'after' }
+}
+function finishProblemMove(event: PointerEvent) {
+  if (event.pointerId !== problemPointerId) return
+  moveProblem(event)
+  if (editingSet.value && sets.activeSet && problemDrop.value) sets.reorderProblem(sets.activeSet.id, movingProblemKey.value, problemDrop.value.key, problemDrop.value.side)
+  stopProblemMove()
+}
+function moveProblemByKeyboard(key: string, direction: -1 | 1) {
+  if (!editingSet.value || !sets.activeSet) return
+  const index = filteredProblems.value.findIndex(problem => `${problem.platform}:${problem.id}` === key)
+  const target = filteredProblems.value[index + direction]
+  if (target) sets.reorderProblem(sets.activeSet.id, key, `${target.platform}:${target.id}`, direction === -1 ? 'before' : 'after')
+}
 const itemDialog = reactive({ mode: '' as '' | 'set' | 'group' | 'rename' | 'move', id: '', name: '', parentId: '' })
 const itemMenu = ref<{ id: string | null; left: number; top: number } | null>(null)
 const menuElement = ref<HTMLElement | null>(null)
@@ -217,17 +289,19 @@ function leaveCollection(event: DragEvent) {
   if (!(event.relatedTarget instanceof Node) || !collectionRoot.value?.contains(event.relatedTarget)) dropPreview.value = null
 }
 
-async function exportActiveSet(destination: 'clipboard' | 'file') {
-  if (!sets.activeSet || exporting.value) return
+async function exportActiveSet(destination: 'clipboard' | 'word') {
+  if (!editingSet.value || !sets.activeSet || exporting.value) return
+  exportMenuOpen.value = false
   exporting.value = true
   error.value = ''
+  const activeSet = sets.activeSet
   try {
     const content = sets.exportSetText()
     if (destination === 'clipboard') {
       await navigator.clipboard.writeText(content)
-      flash(`已复制题单全部 ${sets.activeSet.problems.length} 道题目的名称和链接`)
+      flash(`已复制题单全部 ${activeSet.problems.length} 道题目的名称和链接`)
     } else {
-      const path = await invoke<string | null>('export_problem_set_text', { name: sets.activeSet.name, content })
+      const path = await invoke<string | null>('export_problem_set_word', { name: activeSet.name, entries: sets.exportSetEntries(activeSet.id) })
       if (path) flash(`已保存到 ${path}`)
     }
   } catch (reason) { error.value = `导出失败：${String(reason)}` }
@@ -676,7 +750,9 @@ async function importTraining(source: string | number) {
   finally { importingTrainingId.value = null; metadataLoading.value = false }
 }
 
-onBeforeUnmount(() => { endHold(); endNativeDrag() })
+onBeforeUnmount(() => { endHold(); endNativeDrag(); stopProblemMove() })
+watch([view, () => sets.activeSetId], () => { editingSet.value = false; exportMenuOpen.value = false; stopProblemMove() })
+watch(editingSet, value => { if (!value) { exportMenuOpen.value = false; stopProblemMove() } })
 
 watch(setSearch, () => { setPage.value = 1 })
 watch(setPages, (pages) => { setPage.value = Math.min(setPage.value, pages) })
@@ -689,7 +765,7 @@ watch(() => itemDialog.mode, mode => {
 </script>
 
 <template>
-  <div ref="collectionRoot" class="problem-sets" @dragleave="leaveCollection">
+  <div ref="collectionRoot" class="problem-sets" @dragleave="leaveCollection" @click="dismissSetExport">
     <template v-if="view === 'list'">
       <header class="panel-header collection-header">
         <div><strong>我的题单 <small>{{ sets.sets.length }}</small></strong></div>
@@ -771,15 +847,31 @@ watch(() => itemDialog.mode, mode => {
     </template>
 
     <template v-else-if="view === 'detail' && sets.activeSet">
-      <header class="panel-header detail-header"><button class="back" @click="view = 'list'">‹ 返回</button><div><strong>{{ sets.activeSet.name }}</strong></div><div class="detail-header__actions"><button v-if="sets.activeSet.source" :disabled="importingTrainingId != null" @click="importTraining(sets.activeSet.source.trainingId)">同步</button><button class="tag-toggle" :class="{ active: problems.showProblemTags }" @click="problems.toggleProblemTags">{{ problems.showProblemTags ? '隐藏算法标签' : '显示算法标签' }}</button></div></header>
-      <div class="group-tools"><button :disabled="exporting || !sets.activeSet.problems.length" @click="exportActiveSet('clipboard')">复制全部题名和链接</button><button :disabled="exporting || !sets.activeSet.problems.length" @click="exportActiveSet('file')">导出 TXT</button></div>
+      <header class="panel-header detail-header"><button class="back" @click="view = 'list'">‹ 返回</button><div><strong>{{ sets.activeSet.name }}</strong></div><div class="detail-header__actions"><button v-if="sets.activeSet.source" :disabled="importingTrainingId != null" @click="importTraining(sets.activeSet.source.trainingId)">同步</button><button class="tag-toggle" :class="{ active: problems.showProblemTags }" @click="problems.toggleProblemTags">{{ problems.showProblemTags ? '隐藏算法标签' : '显示算法标签' }}</button><button class="edit-set" :class="{ active: editingSet }" :aria-pressed="editingSet" :disabled="batchAdding || exporting" @click="editingSet = !editingSet">{{ editingSet ? '完成编辑' : '编辑' }}</button></div></header>
+      <div v-if="editingSet" class="set-edit-toolbar">
+        <span class="editing-status">编辑中</span>
+        <details class="set-export" :open="exportMenuOpen" @toggle="exportMenuOpen = ($event.currentTarget as HTMLDetailsElement).open" @keydown.esc="exportMenuOpen = false">
+          <summary :aria-disabled="exporting || !sets.activeSet.problems.length" @click.prevent="exportMenuOpen = !exporting && !!sets.activeSet.problems.length && !exportMenuOpen">{{ exporting ? '导出中…' : '导出' }}</summary>
+          <div class="set-export__menu"><button :disabled="exporting || !sets.activeSet.problems.length" @click="exportActiveSet('clipboard')">复制题目名称和链接</button><button :disabled="exporting || !sets.activeSet.problems.length" @click="exportActiveSet('word')">导出为 Word</button></div>
+        </details>
+      </div>
       <div class="detail-progress-label"><span>{{ solvedCount }}/{{ visibleActiveSetProblemCount }} 已完成</span><em v-if="metadataLoading">正在补全题目信息…</em></div>
       <div class="progress"><i :style="{ width: `${visibleActiveSetProblemCount ? solvedCount / visibleActiveSetProblemCount * 100 : 0}%` }" /></div>
       <div v-if="sets.activeSet.source" class="source-info">来自洛谷 #{{ sets.activeSet.source.trainingId }} · {{ sets.activeSet.source.providerName }}</div>
-      <div class="add-actions"><button :disabled="!problems.currentProblem || (problems.currentProblem.platform !== 'codeforces' && problems.currentProblem.platform !== 'luogu')" @click="addCurrent">＋ 加入当前题目</button><form @submit.prevent="addBatch"><textarea v-model="batchInput" rows="2" placeholder="批量粘贴链接、题号或题名；空格或换行分隔链接"></textarea><button :disabled="!batchInput.trim() || batchAdding">{{ batchAdding ? '添加中…' : '批量添加' }}</button></form><small>支持 P1000、977A、题目名称，以及“洛谷-P1000/题名”等格式</small></div>
+      <div v-if="editingSet" class="add-actions"><button :disabled="!problems.currentProblem || (problems.currentProblem.platform !== 'codeforces' && problems.currentProblem.platform !== 'luogu')" @click="addCurrent">＋ 加入当前题目</button><form @submit.prevent="addBatch"><textarea v-model="batchInput" rows="2" placeholder="批量粘贴链接、题号或题名；空格或换行分隔链接"></textarea><button :disabled="!batchInput.trim() || batchAdding">{{ batchAdding ? '添加中…' : '批量添加' }}</button></form><small>支持 P1000、977A、题目名称，以及“洛谷-P1000/题名”等格式</small></div>
       <div v-if="notice" class="notice">{{ notice }}</div><div v-if="error" class="error">{{ error }}</div>
-      <ul class="problem-items">
-        <li v-for="problem in filteredProblems" :key="`${problem.platform}:${problem.id}`" @click="openSetProblem(problem)"><span class="solved">{{ learning.profile.solvedProblems.includes(`${problem.platform}:${problem.id}`) ? '✓' : '' }}</span><div><small>{{ problem.platform === 'codeforces' ? 'CF' : problem.platform === 'atcoder' ? 'AtCoder' : '洛谷' }} · {{ problem.id }}</small><strong>{{ problem.title }}</strong><p><span v-if="problem.platform === 'luogu' && problem.difficulty">{{ problem.difficulty }}</span><span v-if="problem.rating">★ {{ problem.rating }}</span><template v-if="problems.showProblemTags"><span v-for="tag in problem.tags" :key="tag">{{ tag }}</span></template></p></div><button title="从题单移除" @click.stop="sets.removeProblem(sets.activeSet!.id, problem.platform, problem.id)">×</button></li>
+      <ul ref="problemListElement" class="problem-items set-problem-items">
+        <li v-for="problem in filteredProblems" :key="`${problem.platform}:${problem.id}`" :data-problem-key="`${problem.platform}:${problem.id}`" :class="{ moving: movingProblemKey === `${problem.platform}:${problem.id}`, 'drop-before': problemDrop?.key === `${problem.platform}:${problem.id}` && problemDrop.side === 'before', 'drop-after': problemDrop?.key === `${problem.platform}:${problem.id}` && problemDrop.side === 'after' }">
+          <div class="set-problem-line">
+            <button v-if="editingSet" class="problem-grip" :aria-label="`调整 ${problem.id} 的顺序`" title="拖动排序，也可使用上下方向键" @pointerdown.stop="beginProblemMove(`${problem.platform}:${problem.id}`, $event)" @keydown.up.prevent="moveProblemByKeyboard(`${problem.platform}:${problem.id}`, -1)" @keydown.down.prevent="moveProblemByKeyboard(`${problem.platform}:${problem.id}`, 1)"><i class="codicon codicon-menu" aria-hidden="true" /></button>
+            <span v-if="learning.profile.solvedProblems.includes(`${problem.platform}:${problem.id}`)" class="set-problem-solved" title="已完成">✓</span>
+            <button class="set-problem-name" :title="`${problem.id} ${problem.title}`" @click="openSetProblem(problem)"><small>{{ problem.platform === 'codeforces' ? 'CF' : problem.platform === 'atcoder' ? 'ATC' : problem.platform === 'luogu' ? '洛谷' : 'QOJ' }} · {{ problem.id }}</small><strong>{{ problem.title }}</strong></button>
+            <span v-if="problem.platform === 'luogu' && problem.difficulty" class="set-problem-difficulty" :style="{ backgroundColor: difficultyColors[problem.difficulty] }">{{ problem.difficulty }}</span>
+            <span v-else-if="problem.rating" class="set-problem-rating">★ {{ problem.rating }}</span>
+            <button v-if="editingSet" class="problem-remove" :aria-label="`从题单移除 ${problem.id}`" title="从题单移除" @click="sets.removeProblem(sets.activeSet!.id, problem.platform, problem.id)">×</button>
+          </div>
+          <div v-if="problems.showProblemTags && problem.tags.length" class="set-problem-tags"><span v-for="tag in problem.tags" :key="tag">{{ tag }}</span></div>
+        </li>
       </ul>
       <div v-if="!filteredProblems.length" class="empty">{{ visibleActiveSetProblemCount ? '没有找到对应题目' : '题单中还没有题目' }}</div>
       <footer class="bottom-search"><span>⌕</span><input v-model="problemSearch" placeholder="搜索题号或题目名称" /></footer>
@@ -902,4 +994,37 @@ button, input { font: inherit; }.panel-header { display: flex; align-items: cent
 
 <style scoped>
 .collection-checkbox { flex: 0 0 14px; width: 14px; height: 14px; margin: 0 5px; accent-color: var(--color-accent); cursor: pointer; }
+.set-edit-toolbar { display: flex; align-items: center; justify-content: space-between; padding: 6px 11px; font-size: 11px; }
+.editing-status { color: var(--color-accent-text); }
+.detail-header .edit-set.active { background: var(--color-accent-surface); border-color: var(--color-accent-border); color: var(--color-accent-text); }
+.set-export { position: relative; }
+.set-export summary { list-style: none; border: 1px solid var(--color-border-control); border-radius: 4px; padding: 5px 9px; cursor: pointer; color: var(--color-text-secondary); }
+.set-export summary::-webkit-details-marker { display: none; }
+.set-export summary[aria-disabled='true'] { opacity: .45; cursor: default; }
+.set-export__menu { position: absolute; top: calc(100% + 4px); right: 0; z-index: 60; width: 175px; padding: 4px; border: 1px solid var(--color-border-control); border-radius: 5px; background: var(--color-bg-panel); box-shadow: 0 5px 18px var(--color-overlay); }
+.set-export__menu button { display: block; width: 100%; padding: 8px; text-align: left; background: transparent; border: 0; color: var(--color-text-secondary); font-size: 12px; cursor: pointer; }
+.set-export__menu button:hover { background: var(--color-bg-hover); }
+.set-problem-items > li { position: relative; display: block; padding: 0; border: 0; border-radius: 0; contain-intrinsic-size: 40px; cursor: default; }
+.set-problem-items > li:hover { background: var(--color-bg-hover); }
+.set-problem-items > li.moving { opacity: .4; }
+.set-problem-items > li.drop-before::before, .set-problem-items > li.drop-after::after { content: ''; position: absolute; left: 0; right: 0; height: 2px; background: var(--color-accent); z-index: 1; }
+.set-problem-items > li.drop-before::before { top: 0; }
+.set-problem-items > li.drop-after::after { bottom: 0; }
+.set-problem-items > li > .set-problem-line { display: flex; flex-direction: row; align-items: center; gap: 7px; min-height: 40px; padding: 4px 5px; }
+.set-problem-line button { border: 0; background: transparent; color: var(--color-text-strong); cursor: pointer; }
+.set-problem-line .set-problem-name { display: flex; flex-direction: column; gap: 3px; min-width: 0; flex: 1; padding: 3px 0; overflow: hidden; text-align: left; }
+.set-problem-name small { color: var(--color-text-muted); font: 10px/1.3 Consolas, monospace; }
+.set-problem-name strong { font-size: 13px; line-height: 1.4; font-weight: 600; }
+.set-problem-name small, .set-problem-name strong { display: block; max-width: 100%; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.set-problem-line .set-problem-name:hover { color: var(--color-accent-text); }
+.set-problem-line .problem-grip { flex: 0 0 20px; padding: 2px 0; color: var(--color-text-muted); cursor: grab; touch-action: none; }
+.set-problem-line .problem-grip:active { cursor: grabbing; }
+.set-problem-line .problem-remove { flex: 0 0 20px; padding: 0; color: var(--color-text-muted); font-size: 19px; }
+.set-problem-line .problem-remove:hover { color: var(--color-danger); }
+.set-problem-difficulty, .set-problem-rating { flex: 0 0 auto; border-radius: 3px; padding: 3px 5px; font-size: 11px; white-space: nowrap; }
+.set-problem-difficulty { color: #fff; }
+.set-problem-rating { color: var(--color-warning); font-weight: 600; }
+.set-problem-solved { color: var(--color-success); font-size: 12px; }
+.set-problem-items > li > .set-problem-tags { display: flex; flex-direction: row; flex-wrap: wrap; gap: 4px; padding: 0 5px 6px; }
+.set-problem-tags span { padding: 1px 4px; border-radius: 3px; background: var(--color-bg-subtle); color: var(--color-text-muted); font-size: 10px; }
 </style>

@@ -18,6 +18,22 @@ beforeEach(() => {
 afterEach(() => vi.useRealTimers())
 
 describe('problem draft creation workflow', () => {
+  it.each(['codeforces', 'atcoder', 'luogu'] as const)('preserves the open statement and draft when browsing the %s catalog', async platform => {
+    const store = useProblemStore()
+    await store.selectProblem({...problem})
+    store.currentPlatform = 'luogu'
+    store.problems = [problem, {platform:'codeforces',id:'1A',title:'Theatre Square',tags:[]}, {platform:'atcoder',id:'abc001_a',title:'A',tags:[]}]
+    store.updateCode('int main() {return 0;}')
+    const opened = store.currentProblem
+    await store.setPlatform(platform)
+    expect(store.currentPlatform).toBe(platform)
+    expect(store.currentProblem).toBe(opened)
+    expect(store.currentProblem?.description).toBe('statement')
+    expect(store.currentCode).toBe('int main() {return 0;}')
+    await vi.advanceTimersByTimeAsync(500)
+    expect(mocks.invoke).toHaveBeenCalledWith('save_draft', {platform:'luogu',problemId:'P1596',problemTitle:'Lake Counting',language:'cpp',code:'int main() {return 0;}'})
+  })
+
   it('only shows a template when opening an unsaved problem, then creates on the first edit', async () => {
     const store = useProblemStore()
     await store.selectProblem({...problem})

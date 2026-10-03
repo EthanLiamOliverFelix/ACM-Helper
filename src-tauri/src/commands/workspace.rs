@@ -500,6 +500,19 @@ fn root_for_path(app: &AppHandle, path: Option<&str>) -> Result<PathBuf, String>
     Err("该路径不在已打开的工作区内".into())
 }
 
+pub(crate) fn terminal_directory(app: &AppHandle, path: Option<&str>) -> Result<PathBuf, String> {
+    let root = root_for_path(app, path)?;
+    std::fs::create_dir_all(&root).map_err(|e| e.to_string())?;
+    let target = match path.filter(|path| !path.is_empty()) {
+        Some(path) => canonical_workspace_target(&root, Path::new(path))?,
+        None => root,
+    };
+    let directory = if target.is_dir() { target } else {
+        target.parent().ok_or("代码文件没有父目录")?.to_path_buf()
+    };
+    Ok(data_center::portable_path(&directory))
+}
+
 #[tauri::command]
 pub async fn list_workspace_roots(app: AppHandle) -> Result<Vec<WorkspaceRoot>, String> {
     let builtin = workspace_root(&app)?;
@@ -1543,19 +1556,9 @@ fn collect_workspace_entries_bounded(
         let path = child.path();
         let name = child.file_name().to_string_lossy().into_owned();
         let metadata = name == ".acm-meta.json" || name.ends_with(".acm-meta.json");
-        let generated = matches!(
-            path.extension()
-                .and_then(|ext| ext.to_str())
-                .unwrap_or("")
-                .to_ascii_lowercase()
-                .as_str(),
-            "exe" | "dll" | "obj" | "o" | "pdb" | "class" | "pyc"
-        );
-        if metadata
+        if metadata || name == ".acm-cph"
             || (!show_hidden
-                && (name.starts_with('.')
-                    || generated
-                    || matches!(name.as_str(), "node_modules" | "target" | "__pycache__")))
+                && name.starts_with('.'))
             || child.file_type().map(|t| t.is_symlink()).unwrap_or(true)
         {
             continue;
@@ -2336,6 +2339,17 @@ fn truncate_output_lines(value: String, max_lines: usize) -> String {
     format!("[Truncated]\n{}", kept.join("\n"))
 }
 
+const CPH_EXECUTABLE_NAME: &str = "__acm_cph_runner_9f3a__.exe";
+
+fn cph_executable(directory: &Path) -> Result<PathBuf, String> {
+    let output = directory.join(".acm-cph");
+    std::fs::create_dir_all(&output).map_err(|error| format!("创建评测目录失败: {}", error))?;
+    if std::fs::canonicalize(&output).map_err(|e| e.to_string())?.parent() != Some(std::fs::canonicalize(directory).map_err(|e| e.to_string())?.as_path()) {
+        return Err("评测产物目录不能指向代码目录以外的位置".into());
+    }
+    Ok(output.join(CPH_EXECUTABLE_NAME))
+}
+
 #[tauri::command]
 pub async fn run_code(
     app: AppHandle,
@@ -2362,7 +2376,7 @@ pub async fn run_code(
 
     let run = match language.as_str() {
         "cpp" => {
-            let executable = workdir.join("main.exe");
+            let executable = cph_executable(workdir)?;
             let mut compile = Command::new(data_center::tool_command(&app, "cppCompiler", "g++"));
             compile
                 .arg(data_center::cpp_standard_flag(&app))
@@ -2406,13 +2420,13 @@ pub async fn run_code(
             command
         }
         "java" => {
-            let java_source = workdir.join("Main.java");
+            let java_source = cph_executable(workdir)?.with_file_name("Main.java");
             tokio::fs::copy(&source, &java_source)
                 .await
                 .map_err(|e| format!("准备 Java 源码失败: {}", e))?;
             let mut compile =
                 Command::new(data_center::tool_command(&app, "javaCompiler", "javac"));
-            compile.arg("Main.java").current_dir(workdir);
+            compile.arg(&java_source).args(["-d", ".acm-cph"]).current_dir(workdir);
             let compile_started = Instant::now();
             match command_output(compile, None, Duration::from_secs(30)).await {
                 Ok(output) if output.status.success() => {
@@ -2435,7 +2449,7 @@ pub async fn run_code(
                 }
             }
             let mut command = Command::new(data_center::tool_command(&app, "javaRuntime", "java"));
-            command.args(["-cp", ".", "Main"]).current_dir(workdir);
+            command.args(["-cp", ".acm-cph", "Main"]).current_dir(workdir);
             command
         }
         _ => return Err(format!("不支持的语言: {}", language)),
@@ -2484,7 +2498,7 @@ async fn run_prepared_code(
     let run_started = Instant::now();
     let command = match language.as_str() {
         "cpp" => {
-            let mut command = Command::new(workdir.join("main.exe"));
+            let mut command = Command::new(workdir.join(".acm-cph").join(CPH_EXECUTABLE_NAME));
             command.current_dir(&workdir);
             command
         }
@@ -2495,7 +2509,7 @@ async fn run_prepared_code(
         }
         "java" => {
             let mut command = Command::new(java_runtime);
-            command.args(["-cp", ".", "Main"]).current_dir(&workdir);
+            command.args(["-cp", ".acm-cph", "Main"]).current_dir(&workdir);
             command
         }
         _ => {
@@ -2563,7 +2577,7 @@ pub async fn run_test_suite(
     let mut compile_duration_ms = 0;
     let compile_error = match language.as_str() {
         "cpp" => {
-            let executable = workdir.join("main.exe");
+            let executable = cph_executable(&workdir)?;
             let mut compile = Command::new(data_center::tool_command(&app, "cppCompiler", "g++"));
             compile
                 .arg(data_center::cpp_standard_flag(&app))
@@ -2589,12 +2603,13 @@ pub async fn run_test_suite(
             }
         }
         "java" => {
-            tokio::fs::copy(&source, workdir.join("Main.java"))
+            let java_source = cph_executable(&workdir)?.with_file_name("Main.java");
+            tokio::fs::copy(&source, &java_source)
                 .await
                 .map_err(|e| format!("准备 Java 源码失败: {}", e))?;
             let mut compile =
                 Command::new(data_center::tool_command(&app, "javaCompiler", "javac"));
-            compile.arg("Main.java").current_dir(&workdir);
+            compile.arg(&java_source).args(["-d", ".acm-cph"]).current_dir(&workdir);
             let started = Instant::now();
             let outcome = command_output(compile, None, Duration::from_secs(30)).await;
             compile_duration_ms = started.elapsed().as_millis();
@@ -3186,9 +3201,15 @@ mod debug_tests {
         fs::write(root.join("main.exe"), "binary").unwrap();
         fs::write(root.join("main.cpp"), "int main() {}").unwrap();
         ensure_workspace_bindings(&root.join("main.cpp")).unwrap();
-        assert_eq!(collect_workspace_entries(&root).len(), 1);
+        fs::create_dir(root.join(".acm-cph")).unwrap();
+        fs::write(root.join(".acm-cph/main.exe"), "cph binary").unwrap();
+        fs::write(root.join("solution.exe"), "user binary").unwrap();
+        fs::write(root.join("data.in"), "input").unwrap();
+        assert_eq!(collect_workspace_entries(&root).len(), 4);
         let visible = collect_workspace_entries_bounded(&root, 0, &mut 10_000, true);
-        assert_eq!(visible.len(), 3);
+        assert_eq!(visible.len(), 5);
+        assert!(!visible.iter().any(|entry| entry.name == ".acm-cph"));
+        assert!(visible.iter().any(|entry| entry.name == "solution.exe"));
         assert!(visible.iter().any(|entry| entry.name == ".gitignore"));
         assert!(!visible
             .iter()
@@ -3196,6 +3217,25 @@ mod debug_tests {
         let bounded = collect_workspace_entries_bounded(&root, 0, &mut 1, true);
         assert_eq!(bounded.len(), 1);
         let _ = fs::remove_dir_all(root);
+    }
+
+    #[tokio::test]
+    async fn cph_runs_hidden_main_without_overwriting_user_executable() {
+        let root = temp_test_dir("cph-hidden-output");
+        let source = root.join("solution.cpp");
+        fs::write(&source, "#include <iostream>\nint main(){int x;std::cin>>x;std::cout<<x+1;}").unwrap();
+        let user_executable = root.join("main.exe");
+        fs::write(&user_executable, "user-owned executable").unwrap();
+        let executable = cph_executable(&root).unwrap();
+        let mut compile = Command::new("g++");
+        compile.arg(&source).arg("-o").arg(&executable).current_dir(&root);
+        assert!(command_output(compile, None, Duration::from_secs(30)).await.unwrap().status.success());
+        let result = run_prepared_code("cpp".into(), source, root.clone(), "41\n".into(), Duration::from_secs(5), 100, 0, "python".into(), "java".into()).await;
+        assert!(result.success);
+        assert_eq!(result.stdout.trim(), "42");
+        assert_eq!(fs::read_to_string(user_executable).unwrap(), "user-owned executable");
+        assert!(!collect_workspace_entries(&root).iter().any(|entry| entry.name == ".acm-cph"));
+        fs::remove_dir_all(root).unwrap();
     }
 
     #[test]

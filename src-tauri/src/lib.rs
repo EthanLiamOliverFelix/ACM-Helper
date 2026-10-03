@@ -21,8 +21,14 @@ pub fn run() {
     tauri::Builder::default()
         .plugin(tauri_plugin_opener::init())
         .manage(debug_session::DebugSessions::default())
+        .manage(commands::terminal::TerminalSessions::default())
         .manage(network_session::IsolatedWebSessions::default())
         .invoke_handler(tauri::generate_handler![
+            commands::terminal::start_terminal,
+            commands::terminal::write_terminal,
+            commands::terminal::resize_terminal,
+            commands::terminal::close_terminal,
+            commands::terminal::terminal_run_command,
             codeforces::login_via_browser,
             codeforces::fetch_problems_cf,
             codeforces::open_cf_manual_submit,
@@ -46,6 +52,7 @@ pub fn run() {
             diagnostics::get_oj_diagnostics,
             diagnostics::export_oj_diagnostics,
             commands::problem_sets::export_problem_set_text,
+            commands::problem_sets::export_problem_set_word,
             diagnostics::clear_oj_diagnostics,
             codeforces::fetch_problem_detail_cf,
             codeforces::analyze_contest_cf,

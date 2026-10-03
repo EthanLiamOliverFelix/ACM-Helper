@@ -446,6 +446,126 @@ fn workspace_root(app: &AppHandle) -> Result<PathBuf, String> {
     Ok(data_center::root(app)?.join("solutions"))
 }
 
+#[derive(Serialize, Deserialize, Clone)]
+#[serde(rename_all = "camelCase")]
+pub struct WorkspaceRoot {
+    pub path: String,
+    pub name: String,
+    pub builtin: bool,
+}
+
+fn external_roots_file(app: &AppHandle) -> Result<PathBuf, String> {
+    Ok(data_center::root(app)?.join(".workspace-roots.json"))
+}
+
+fn external_roots(app: &AppHandle) -> Result<Vec<String>, String> {
+    let path = external_roots_file(app)?;
+    if !path.exists() {
+        return Ok(Vec::new());
+    }
+    serde_json::from_slice(&std::fs::read(path).map_err(|e| e.to_string())?)
+        .map_err(|e| format!("工作区配置读取失败: {}", e))
+}
+
+fn root_for_path(app: &AppHandle, path: Option<&str>) -> Result<PathBuf, String> {
+    let builtin = workspace_root(app)?;
+    let Some(path) = path.filter(|p| !p.trim().is_empty()) else {
+        return Ok(builtin);
+    };
+    let target = std::fs::canonicalize(path).map_err(|e| format!("无法访问文件: {}", e))?;
+    // Check the built-in root first. External roots must never grant access to
+    // the app's private data, even when a parent folder was registered.
+    if let Ok(root) = std::fs::canonicalize(&builtin) {
+        if target.starts_with(&root) {
+            return Ok(data_center::portable_path(&root));
+        }
+    }
+    let private = std::fs::canonicalize(data_center::root(app)?).map_err(|e| e.to_string())?;
+    if target.starts_with(&private) {
+        return Err("软件内部数据不属于工作区".into());
+    }
+    let mut roots: Vec<_> = external_roots(app)?
+        .into_iter()
+        .filter_map(|path| std::fs::canonicalize(path).ok())
+        .collect();
+    roots.sort_by_key(|root| std::cmp::Reverse(root.components().count()));
+    for root in roots {
+        if private.starts_with(&root) {
+            continue;
+        }
+        if target.starts_with(&root) {
+            return Ok(data_center::portable_path(&root));
+        }
+    }
+    Err("该路径不在已打开的工作区内".into())
+}
+
+#[tauri::command]
+pub async fn list_workspace_roots(app: AppHandle) -> Result<Vec<WorkspaceRoot>, String> {
+    let builtin = workspace_root(&app)?;
+    std::fs::create_dir_all(&builtin).map_err(|e| e.to_string())?;
+    let mut roots = vec![WorkspaceRoot {
+        path: builtin.to_string_lossy().into_owned(),
+        name: "默认工作区".into(),
+        builtin: true,
+    }];
+    roots.extend(external_roots(&app)?.into_iter().map(|path| {
+        WorkspaceRoot {
+            name: Path::new(&path)
+                .file_name()
+                .unwrap_or_default()
+                .to_string_lossy()
+                .into_owned(),
+            path,
+            builtin: false,
+        }
+    }));
+    Ok(roots)
+}
+
+#[tauri::command]
+pub async fn add_workspace_root(app: AppHandle) -> Result<Option<String>, String> {
+    let chosen = tauri::async_runtime::spawn_blocking(|| {
+        rfd::FileDialog::new()
+            .set_title("添加工作区文件夹（直接使用原文件，不复制）")
+            .pick_folder()
+    })
+    .await
+    .map_err(|e| e.to_string())?;
+    let Some(path) = chosen else {
+        return Ok(None);
+    };
+    let path = std::fs::canonicalize(path).map_err(|e| e.to_string())?;
+    let private = std::fs::canonicalize(data_center::root(&app)?).map_err(|e| e.to_string())?;
+    if path.starts_with(&private) || private.starts_with(&path) {
+        return Err("请添加独立的项目目录，不能添加软件数据目录或包含它的上级目录".into());
+    }
+    let mut roots = external_roots(&app)?;
+    let value = data_center::portable_path(&path)
+        .to_string_lossy()
+        .into_owned();
+    if !roots.contains(&value) {
+        roots.push(value.clone());
+        std::fs::write(
+            external_roots_file(&app)?,
+            serde_json::to_vec(&roots).map_err(|e| e.to_string())?,
+        )
+        .map_err(|e| e.to_string())?;
+    }
+    Ok(Some(value))
+}
+
+#[tauri::command]
+pub async fn remove_workspace_root(app: AppHandle, path: String) -> Result<(), String> {
+    let mut roots = external_roots(&app)?;
+    roots.retain(|root| root != &path);
+    std::fs::write(
+        external_roots_file(&app)?,
+        serde_json::to_vec(&roots).map_err(|e| e.to_string())?,
+    )
+    .map_err(|e| e.to_string())
+}
+
 fn validate_child_name(value: &str) -> Result<String, String> {
     let trimmed = value.trim();
     if trimmed.is_empty() || trimmed == "." || trimmed == ".." {
@@ -464,7 +584,7 @@ fn canonical_workspace_target(root: &Path, target: &Path) -> Result<PathBuf, Str
     if target == root || !target.starts_with(&root) {
         return Err("仅允许操作资源管理器代码目录内的项目".into());
     }
-    Ok(target)
+    Ok(data_center::portable_path(&target))
 }
 
 fn canonical_workspace_parent(root: &Path, parent: Option<&str>) -> Result<PathBuf, String> {
@@ -478,7 +598,7 @@ fn canonical_workspace_parent(root: &Path, parent: Option<&str>) -> Result<PathB
     if !parent.starts_with(&root) || !parent.is_dir() {
         return Err("新项目只能建立在资源管理器代码目录内".into());
     }
-    Ok(parent)
+    Ok(data_center::portable_path(&parent))
 }
 
 fn read_draft_metadata(directory: &Path) -> Option<DraftMetadata> {
@@ -757,6 +877,97 @@ pub async fn load_draft(
     }
 }
 
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct LoadedProblemDraft {
+    path: String,
+    code: String,
+}
+
+fn find_bound_code(
+    directory: &Path,
+    platform: &str,
+    problem_id: &str,
+    language: &str,
+    remaining: &mut usize,
+) -> Option<PathBuf> {
+    let mut entries: Vec<_> = std::fs::read_dir(directory).ok()?.flatten().collect();
+    entries.sort_by_key(|entry| entry.file_name());
+    for entry in entries {
+        if *remaining == 0 {
+            return None;
+        }
+        *remaining -= 1;
+        let path = entry.path();
+        let kind = entry.file_type().ok()?;
+        if kind.is_symlink() {
+            continue;
+        }
+        if kind.is_dir() {
+            let name = entry.file_name();
+            if name.to_string_lossy().starts_with('.')
+                || matches!(
+                    name.to_str(),
+                    Some("node_modules" | "target" | "__pycache__")
+                )
+            {
+                continue;
+            }
+            if let Some(found) = find_bound_code(&path, platform, problem_id, language, remaining) {
+                return Some(found);
+            }
+        } else if source_language(&path) == Some(language) {
+            if let Some(info) = draft_info_for_path(&path) {
+                if info.platform == platform && info.problem_id == problem_id {
+                    return Some(path);
+                }
+            }
+        }
+    }
+    None
+}
+
+fn existing_problem_draft(
+    app: &AppHandle,
+    platform: &str,
+    problem_id: &str,
+    language: &str,
+) -> Result<Option<PathBuf>, String> {
+    extension(language)?;
+    let mut roots = vec![workspace_root(app)?];
+    roots.extend(external_roots(app)?.into_iter().map(PathBuf::from));
+    for root in roots {
+        if let Some(path) = find_bound_code(&root, platform, problem_id, language, &mut 100_000) {
+            // Revalidate external roots and resolved file paths before opening.
+            let allowed = root_for_path(app, path.to_str())?;
+            return canonical_workspace_target(&allowed, &path).map(Some);
+        }
+    }
+    Ok(None)
+}
+
+#[tauri::command]
+pub async fn load_problem_draft(
+    app: AppHandle,
+    platform: String,
+    problem_id: String,
+    language: String,
+) -> Result<Option<LoadedProblemDraft>, String> {
+    tauri::async_runtime::spawn_blocking(move || {
+        let Some(path) = existing_problem_draft(&app, &platform, &problem_id, &language)? else {
+            return Ok(None);
+        };
+        let code =
+            std::fs::read_to_string(&path).map_err(|e| format!("读取已有代码失败: {}", e))?;
+        Ok(Some(LoadedProblemDraft {
+            path: path.to_string_lossy().into_owned(),
+            code,
+        }))
+    })
+    .await
+    .map_err(|e| e.to_string())?
+}
+
 #[tauri::command]
 pub async fn save_draft(
     app: AppHandle,
@@ -766,13 +977,24 @@ pub async fn save_draft(
     language: String,
     code: String,
 ) -> Result<String, String> {
-    let path = draft_path(
-        &app,
-        &platform,
-        &problem_id,
-        problem_title.as_deref(),
-        &language,
-    )?;
+    let existing = existing_problem_draft(&app, &platform, &problem_id, &language)?;
+    let path = if let Some(path) = existing {
+        path
+    } else {
+        let preferred = draft_path(
+            &app,
+            &platform,
+            &problem_id,
+            problem_title.as_deref(),
+            &language,
+        )?;
+        // Never replace an unrelated file merely because its name matches.
+        if preferred.exists() {
+            available_copy_target(preferred.parent().ok_or("草稿路径没有父目录")?, &preferred)
+        } else {
+            preferred
+        }
+    };
     if let Some(parent) = path.parent() {
         tokio::fs::create_dir_all(parent)
             .await
@@ -983,6 +1205,115 @@ fn draft_info_for_path(path: &Path) -> Option<DraftFileInfo> {
     })
 }
 
+// Freeze the existing path-derived id before a file or folder is moved. The
+// original id is kept so tests already stored under it remain reachable.
+fn ensure_workspace_bindings(path: &Path) -> Result<(), String> {
+    if std::fs::symlink_metadata(path)
+        .map_err(|e| e.to_string())?
+        .file_type()
+        .is_symlink()
+    {
+        return Err("不能移动包含符号链接的文件夹".into());
+    }
+    if path.is_dir() {
+        for child in std::fs::read_dir(path).map_err(|e| e.to_string())? {
+            ensure_workspace_bindings(&child.map_err(|e| e.to_string())?.path())?;
+        }
+    } else if !source_metadata_path(path).exists() {
+        if let Some(info) = draft_info_for_path(path) {
+            let metadata = DraftMetadata {
+                platform: info.platform,
+                problem_id: info.problem_id,
+                title: info.title.unwrap_or_default(),
+                created_at: info.created_at,
+                statement_markdown: info.statement_markdown,
+                file_stem: path
+                    .file_stem()
+                    .unwrap_or_default()
+                    .to_string_lossy()
+                    .into_owned(),
+            };
+            write_source_metadata(path, &metadata)?;
+        }
+    }
+    Ok(())
+}
+
+#[tauri::command]
+pub async fn get_workspace_draft_info(
+    app: AppHandle,
+    path: String,
+) -> Result<DraftFileInfo, String> {
+    let root = root_for_path(&app, Some(&path))?;
+    let target = canonical_workspace_target(&root, Path::new(&path))?;
+    if !target.is_file() {
+        return Err("请选择代码文件".into());
+    }
+    ensure_workspace_bindings(Path::new(&path))?;
+    draft_info_for_path(Path::new(&path)).ok_or_else(|| "该文件不是可运行代码".into())
+}
+
+fn read_text_file(path: &Path) -> Result<String, String> {
+    let length = std::fs::metadata(path).map_err(|e| e.to_string())?.len();
+    if length > 2 * 1024 * 1024 {
+        return Err("文本编辑器支持不超过 2 MB 的文件，请使用系统应用打开".into());
+    }
+    let text = std::fs::read_to_string(path)
+        .map_err(|_| "该文件不是 UTF-8 文本，请使用系统应用打开".to_string())?;
+    if text.contains('\0') {
+        return Err("该文件包含二进制内容，请使用系统应用打开".into());
+    }
+    Ok(text)
+}
+
+#[tauri::command]
+pub async fn read_workspace_text(app: AppHandle, path: String) -> Result<String, String> {
+    let root = root_for_path(&app, Some(&path))?;
+    read_text_file(&canonical_workspace_target(&root, Path::new(&path))?)
+}
+
+#[tauri::command]
+pub async fn save_workspace_text(
+    app: AppHandle,
+    path: String,
+    text: String,
+    expected: String,
+) -> Result<(), String> {
+    let root = root_for_path(&app, Some(&path))?;
+    let target = canonical_workspace_target(&root, Path::new(&path))?;
+    if read_text_file(&target)? != expected {
+        return Err("文件已被外部修改，请复制当前内容后重新打开，避免覆盖外部修改".into());
+    }
+    std::fs::write(target, text).map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+pub async fn create_workspace_text(
+    app: AppHandle,
+    parent_path: String,
+    name: String,
+) -> Result<String, String> {
+    let root = root_for_path(&app, Some(&parent_path))?;
+    let parent = canonical_workspace_parent(&root, Some(&parent_path))?;
+    let target = parent.join(validate_child_name(&name)?);
+    std::fs::OpenOptions::new()
+        .write(true)
+        .create_new(true)
+        .open(&target)
+        .map_err(|e| format!("新建文件失败: {}", e))?;
+    Ok(target.to_string_lossy().into_owned())
+}
+
+#[tauri::command]
+pub async fn open_workspace_system(app: AppHandle, path: String) -> Result<(), String> {
+    use tauri_plugin_opener::OpenerExt;
+    let root = root_for_path(&app, Some(&path))?;
+    let target = canonical_workspace_target(&root, Path::new(&path))?;
+    app.opener()
+        .open_path(target.to_string_lossy(), None::<&str>)
+        .map_err(|e| e.to_string())
+}
+
 fn move_file_preserving_contents(source: &Path, target: &Path) -> Result<(), String> {
     if target.exists() {
         let same = std::fs::read(source).ok() == std::fs::read(target).ok();
@@ -1187,17 +1518,49 @@ fn flatten_workspace_layout(root: &Path) -> Result<(), String> {
     Ok(())
 }
 
+#[cfg(test)]
 fn collect_workspace_entries(directory: &Path) -> Vec<WorkspaceEntry> {
+    collect_workspace_entries_bounded(directory, 0, &mut 10_000, false)
+}
+
+fn collect_workspace_entries_bounded(
+    directory: &Path,
+    depth: usize,
+    remaining: &mut usize,
+    show_hidden: bool,
+) -> Vec<WorkspaceEntry> {
     let mut entries = Vec::new();
+    if depth > 32 || *remaining == 0 {
+        return entries;
+    }
     let Ok(children) = std::fs::read_dir(directory) else {
         return entries;
     };
     for child in children.flatten() {
+        if *remaining == 0 {
+            break;
+        }
         let path = child.path();
         let name = child.file_name().to_string_lossy().into_owned();
-        if name.starts_with('.') {
+        let metadata = name == ".acm-meta.json" || name.ends_with(".acm-meta.json");
+        let generated = matches!(
+            path.extension()
+                .and_then(|ext| ext.to_str())
+                .unwrap_or("")
+                .to_ascii_lowercase()
+                .as_str(),
+            "exe" | "dll" | "obj" | "o" | "pdb" | "class" | "pyc"
+        );
+        if metadata
+            || (!show_hidden
+                && (name.starts_with('.')
+                    || generated
+                    || matches!(name.as_str(), "node_modules" | "target" | "__pycache__")))
+            || child.file_type().map(|t| t.is_symlink()).unwrap_or(true)
+        {
             continue;
         }
+        *remaining -= 1;
         if path.is_dir() {
             entries.push(WorkspaceEntry {
                 name,
@@ -1205,15 +1568,21 @@ fn collect_workspace_entries(directory: &Path) -> Vec<WorkspaceEntry> {
                 is_directory: true,
                 language: None,
                 draft: None,
-                children: collect_workspace_entries(&path),
+                children: collect_workspace_entries_bounded(
+                    &path,
+                    depth + 1,
+                    remaining,
+                    show_hidden,
+                ),
             });
-        } else if let Some(draft) = draft_info_for_path(&path) {
+        } else {
+            let draft = draft_info_for_path(&path);
             entries.push(WorkspaceEntry {
                 name,
                 path: path.to_string_lossy().into_owned(),
                 is_directory: false,
-                language: Some(draft.language.clone()),
-                draft: Some(draft),
+                language: draft.as_ref().map(|file| file.language.clone()),
+                draft,
                 children: Vec::new(),
             });
         }
@@ -1227,14 +1596,26 @@ fn collect_workspace_entries(directory: &Path) -> Vec<WorkspaceEntry> {
 }
 
 #[tauri::command]
-pub async fn list_workspace_entries(app: AppHandle) -> Result<Vec<WorkspaceEntry>, String> {
-    let root = workspace_root(&app)?;
+pub async fn list_workspace_entries(
+    app: AppHandle,
+    root_path: Option<String>,
+    show_hidden: Option<bool>,
+) -> Result<Vec<WorkspaceEntry>, String> {
+    let root = root_for_path(&app, root_path.as_deref())?;
+    let builtin = std::fs::canonicalize(workspace_root(&app)?).ok();
     tokio::fs::create_dir_all(&root)
         .await
         .map_err(|e| format!("创建代码目录失败: {}", e))?;
     tauri::async_runtime::spawn_blocking(move || {
-        flatten_workspace_layout(&root)?;
-        Ok::<_, String>(collect_workspace_entries(&root))
+        if builtin.as_ref() == std::fs::canonicalize(&root).ok().as_ref() {
+            flatten_workspace_layout(&root)?;
+        }
+        Ok::<_, String>(collect_workspace_entries_bounded(
+            &root,
+            0,
+            &mut 10_000,
+            show_hidden.unwrap_or(false),
+        ))
     })
     .await
     .map_err(|e| format!("扫描资源管理器失败: {}", e))?
@@ -1255,7 +1636,7 @@ pub async fn create_workspace_folder(
     parent_path: Option<String>,
     name: String,
 ) -> Result<String, String> {
-    let root = workspace_root(&app)?;
+    let root = root_for_path(&app, parent_path.as_deref())?;
     tokio::fs::create_dir_all(&root)
         .await
         .map_err(|e| e.to_string())?;
@@ -1277,7 +1658,7 @@ pub async fn create_workspace_file(
     name: String,
     language: String,
 ) -> Result<DraftFileInfo, String> {
-    let root = workspace_root(&app)?;
+    let root = root_for_path(&app, parent_path.as_deref())?;
     tokio::fs::create_dir_all(&root)
         .await
         .map_err(|e| e.to_string())?;
@@ -1340,7 +1721,7 @@ pub async fn create_workspace_file(
 
 #[tauri::command]
 pub async fn read_workspace_file(app: AppHandle, path: String) -> Result<String, String> {
-    let root = workspace_root(&app)?;
+    let root = root_for_path(&app, Some(&path))?;
     let target = canonical_workspace_target(&root, Path::new(&path))?;
     if target.is_dir() {
         return Err("不能把文件夹作为代码打开".into());
@@ -1352,7 +1733,7 @@ pub async fn read_workspace_file(app: AppHandle, path: String) -> Result<String,
 
 #[tauri::command]
 pub async fn save_workspace_file(app: AppHandle, path: String, code: String) -> Result<(), String> {
-    let root = workspace_root(&app)?;
+    let root = root_for_path(&app, Some(&path))?;
     let target = canonical_workspace_target(&root, Path::new(&path))?;
     if target.is_dir() {
         return Err("不能向文件夹保存代码".into());
@@ -1369,7 +1750,7 @@ pub async fn save_local_statement(
     statement_markdown: String,
     title: Option<String>,
 ) -> Result<(), String> {
-    let root = workspace_root(&app)?;
+    let root = root_for_path(&app, Some(&path))?;
     let target = canonical_workspace_target(&root, Path::new(&path))?;
     if target.is_dir() {
         return Err("不能给文件夹保存题面".into());
@@ -1403,7 +1784,7 @@ pub async fn save_local_statement(
 
 /// Image ownership is limited to editable, unbound source files inside the workspace.
 pub(crate) fn validate_statement_image_owner(app: &AppHandle, path: &str) -> Result<(), String> {
-    let root = workspace_root(app)?;
+    let root = root_for_path(app, Some(path))?;
     validate_statement_image_path(&root, Path::new(path))
 }
 
@@ -1422,8 +1803,9 @@ pub async fn rename_workspace_entry(
     path: String,
     new_name: String,
 ) -> Result<String, String> {
-    let root = workspace_root(&app)?;
+    let root = root_for_path(&app, Some(&path))?;
     let target = canonical_workspace_target(&root, Path::new(&path))?;
+    ensure_workspace_bindings(Path::new(&path))?;
     let parent = target
         .parent()
         .ok_or_else(|| "无法重命名代码目录根节点".to_string())?;
@@ -1437,6 +1819,9 @@ pub async fn rename_workspace_entry(
         raw_name
     };
     let destination = parent.join(new_name);
+    if source_language(&target).is_some() && target.extension() != destination.extension() {
+        return Err("代码文件重命名时请保留原来的语言扩展名".into());
+    }
     if destination.exists() {
         return Err("同名文件或文件夹已经存在".into());
     }
@@ -1515,19 +1900,18 @@ pub async fn rename_workspace_entry(
 
 #[tauri::command]
 pub async fn delete_workspace_entry(app: AppHandle, path: String) -> Result<(), String> {
-    let root = workspace_root(&app)?;
+    let root = root_for_path(&app, Some(&path))?;
     let target = canonical_workspace_target(&root, Path::new(&path))?;
-    if target.is_dir() {
-        tokio::fs::remove_dir_all(&target)
-            .await
-            .map_err(|e| format!("删除文件夹失败: {}", e))?;
-    } else {
+    tauri::async_runtime::spawn_blocking(move || {
+        let mut paths = vec![target.clone()];
         let sidecar = source_metadata_path(&target);
-        tokio::fs::remove_file(&target)
-            .await
-            .map_err(|e| format!("删除文件失败: {}", e))?;
-        let _ = tokio::fs::remove_file(sidecar).await;
-    }
+        if target.is_file() && sidecar.exists() {
+            paths.push(sidecar);
+        }
+        trash::delete_all(paths).map_err(|e| format!("无法移到回收站，文件未被永久删除: {}", e))
+    })
+    .await
+    .map_err(|e| e.to_string())??;
     if let Ok(mut cache) = draft_cache().lock() {
         cache.clear();
     }
@@ -1592,13 +1976,16 @@ pub async fn paste_workspace_entry(
     destination_path: Option<String>,
     cut: bool,
 ) -> Result<String, String> {
-    let root = workspace_root(&app)?;
+    let root = root_for_path(&app, Some(&source_path))?;
     let source = canonical_workspace_target(&root, Path::new(&source_path))?;
     let source_was_file = source.is_file();
-    let destination_parent = canonical_workspace_parent(&root, destination_path.as_deref())?;
+    let destination_root = root_for_path(&app, destination_path.as_deref())?;
+    let destination_parent =
+        canonical_workspace_parent(&destination_root, destination_path.as_deref())?;
     if source.is_dir() && destination_parent.starts_with(&source) {
         return Err("不能把文件夹粘贴到它自身或其子文件夹中".into());
     }
+    ensure_workspace_bindings(Path::new(&source_path))?;
     let mut target = destination_parent.join(source.file_name().unwrap_or_default());
     if target == source {
         if cut {
@@ -2676,6 +3063,138 @@ mod debug_tests {
         fs::write(&outside, "").unwrap();
         assert!(canonical_workspace_target(&root, &outside).is_err());
         let _ = fs::remove_file(outside);
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn moving_plain_code_preserves_the_original_test_identity() {
+        let root = temp_test_dir("stable-workspace-identity");
+        let source = root.join("before.cpp");
+        fs::write(&source, "int main() {}\n").unwrap();
+        let original = draft_info_for_path(&source).unwrap().problem_id;
+        ensure_workspace_bindings(&source).unwrap();
+        let destination = root.join("after.cpp");
+        fs::rename(&source, &destination).unwrap();
+        fs::rename(
+            source_metadata_path(&source),
+            source_metadata_path(&destination),
+        )
+        .unwrap();
+        assert_eq!(
+            draft_info_for_path(&destination).unwrap().problem_id,
+            original
+        );
+        assert_eq!(fs::read_to_string(&destination).unwrap(), "int main() {}\n");
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn bound_code_lookup_is_read_only_and_uses_identity_instead_of_filename() {
+        let root = temp_test_dir("bound-code-lookup");
+        let folder = root.join("user-folder");
+        fs::create_dir(&folder).unwrap();
+        let path = folder.join("renamed-by-user.cpp");
+        fs::write(&path, "").unwrap();
+        write_source_metadata(
+            &path,
+            &DraftMetadata {
+                platform: "luogu".into(),
+                problem_id: "P1596".into(),
+                title: "Lake Counting".into(),
+                file_stem: "old-name".into(),
+                ..Default::default()
+            },
+        )
+        .unwrap();
+        assert_eq!(
+            find_bound_code(&root, "luogu", "P1596", "cpp", &mut 100),
+            Some(path.clone())
+        );
+        assert!(find_bound_code(&root, "luogu", "P1596", "python", &mut 100).is_none());
+        assert!(find_bound_code(&root, "codeforces", "P1596", "cpp", &mut 100).is_none());
+        assert!(find_bound_code(&root, "luogu", "P1000", "cpp", &mut 100).is_none());
+        assert_eq!(fs::read_to_string(&path).unwrap(), "");
+        assert_eq!(fs::read_dir(&folder).unwrap().count(), 2);
+        let missing = root.join("not-created");
+        assert!(find_bound_code(&missing, "luogu", "P1000", "cpp", &mut 100).is_none());
+        assert!(!missing.exists());
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn folder_move_preserves_oj_and_local_bindings_without_binding_text_files() {
+        let root = temp_test_dir("mixed-workspace-bindings");
+        let folder = root.join("before");
+        fs::create_dir(&folder).unwrap();
+        let local = folder.join("local.py");
+        let bound = folder.join("bound.cpp");
+        let text = folder.join("config.json");
+        fs::write(&local, "print('ok')").unwrap();
+        fs::write(&bound, "int main() {}").unwrap();
+        fs::write(&text, "{}").unwrap();
+        let local_id = draft_info_for_path(&local).unwrap().problem_id;
+        write_source_metadata(
+            &bound,
+            &DraftMetadata {
+                platform: "luogu".into(),
+                problem_id: "P1596".into(),
+                title: "Lake Counting".into(),
+                file_stem: "bound".into(),
+                ..Default::default()
+            },
+        )
+        .unwrap();
+        ensure_workspace_bindings(&folder).unwrap();
+        assert!(!source_metadata_path(&text).exists());
+        let destination = root.join("after");
+        fs::rename(&folder, &destination).unwrap();
+        assert_eq!(
+            draft_info_for_path(&destination.join("local.py"))
+                .unwrap()
+                .problem_id,
+            local_id
+        );
+        let info = draft_info_for_path(&destination.join("bound.cpp")).unwrap();
+        assert_eq!(info.platform, "luogu");
+        assert_eq!(info.problem_id, "P1596");
+        assert!(!info.unbound);
+        let entries = collect_workspace_entries(&destination);
+        assert_eq!(entries.len(), 3);
+        assert!(entries
+            .iter()
+            .any(|entry| entry.name == "config.json" && entry.draft.is_none()));
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn text_reader_rejects_binary_and_large_files() {
+        let root = temp_test_dir("workspace-text");
+        let path = root.join("text.txt");
+        fs::write(&path, "中文\nUTF-8").unwrap();
+        assert_eq!(read_text_file(&path).unwrap(), "中文\nUTF-8");
+        fs::write(&path, b"a\0b").unwrap();
+        assert!(read_text_file(&path).is_err());
+        fs::write(&path, vec![b'a'; 2 * 1024 * 1024 + 1]).unwrap();
+        assert!(read_text_file(&path).is_err());
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn explorer_can_show_hidden_files_and_generated_output_but_never_binding_metadata() {
+        let root = temp_test_dir("workspace-visibility");
+        fs::write(root.join(".gitignore"), "*.exe").unwrap();
+        fs::write(root.join("main.exe"), "binary").unwrap();
+        fs::write(root.join("main.cpp"), "int main() {}").unwrap();
+        ensure_workspace_bindings(&root.join("main.cpp")).unwrap();
+        assert_eq!(collect_workspace_entries(&root).len(), 1);
+        let visible = collect_workspace_entries_bounded(&root, 0, &mut 10_000, true);
+        assert_eq!(visible.len(), 3);
+        assert!(visible.iter().any(|entry| entry.name == ".gitignore"));
+        assert!(!visible
+            .iter()
+            .any(|entry| entry.name.ends_with(".acm-meta.json")));
+        let bounded = collect_workspace_entries_bounded(&root, 0, &mut 1, true);
+        assert_eq!(bounded.len(), 1);
         let _ = fs::remove_dir_all(root);
     }
 

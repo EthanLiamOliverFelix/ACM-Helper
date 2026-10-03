@@ -990,15 +990,15 @@ export const useProblemStore = defineStore('problem', () => {
 
   async function loadCurrentDraft() {
     if (!currentProblem.value) return
-    const code = await invoke<string>('load_draft', {
+    const draft = await invoke<{ path: string; code: string } | null>('load_problem_draft', {
       platform: currentProblem.value.platform,
       problemId: currentProblem.value.id,
       language: currentLanguage.value,
     })
-    currentCode.value = code || useSettingsStore().codeTemplates[currentLanguage.value]
-    draftPath.value = ''
+    currentCode.value = draft ? draft.code : useSettingsStore().codeTemplates[currentLanguage.value]
+    draftPath.value = draft?.path ?? ''
     draftDirty.value = false
-    draftSaveStatus.value = code ? 'saved' : 'template'
+    draftSaveStatus.value = draft ? 'saved' : 'template'
   }
 
   async function persistDraft() {

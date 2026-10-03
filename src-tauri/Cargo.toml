@@ -36,6 +36,7 @@ rfd = "0.15"
 base64 = "0.22"
 image = { version = "0.25", default-features = false, features = ["png"] }
 pdf-extract = "0.7"
+trash = "5.2.9"
 
 [target.'cfg(windows)'.dependencies]
 winreg = "0.55"

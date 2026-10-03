@@ -1,5 +1,6 @@
 import { computed, reactive, ref, watch } from 'vue'
 import { defineStore } from 'pinia'
+import { invoke } from '@tauri-apps/api/core'
 import type { DraftFileInfo, Language, Platform, Problem } from '../types'
 import { getDataCenterValue, saveDataCenterValue } from '../dataCenter'
 import { useProblemStore } from './problemStore'
@@ -416,6 +417,7 @@ export const useWorkbenchStore = defineStore('workbench', () => {
     if (context.kind === 'local-file' && context.path) {
       if (!store.draftFiles.length) await store.loadDraftFiles()
       const file = store.draftFiles.find(item => item.path.toLowerCase() === context.path!.toLowerCase())
+        ?? await invoke<DraftFileInfo>('get_workspace_draft_info', { path: context.path })
       if (file) await store.openDraftFile(file)
     } else {
       const known = [...store.problems, ...store.importedProblems].find(item => item.platform === context.platform && item.id === context.problemId)
@@ -501,6 +503,32 @@ export const useWorkbenchStore = defineStore('workbench', () => {
     else { activity.value = next; sidebarVisible.value = true }
   }
 
+  function workspacePathChanged(oldPath: string, newPath: string) {
+    const normalize = (path: string) => path.replace(/\\/g, '/').toLowerCase()
+    const old = normalize(oldPath)
+    for (const group of groups) for (const tab of group.tabs) {
+      const path = tab.context?.path
+      if (!path || (normalize(path) !== old && !normalize(path).startsWith(`${old}/`))) continue
+      const next = `${newPath}${path.slice(oldPath.length)}`
+      const wasActive = group.activeTabId === tab.id
+      tab.context!.path = next
+      tab.context!.contextId = `file:${next.toLowerCase()}`
+      if (tab.kind === 'code') {
+        tab.id = `code:${tab.context!.contextId}:${tab.context!.language}`
+        tab.title = next.split(/[\\/]/).pop() || tab.title
+        if (wasActive) group.activeTabId = tab.id
+      }
+    }
+  }
+
+  function workspacePathRemoved(path: string) {
+    const normalized = path.replace(/\\/g, '/').toLowerCase()
+    for (const group of [...groups]) for (const tab of [...group.tabs]) {
+      const current = tab.context?.path?.replace(/\\/g, '/').toLowerCase()
+      if (current === normalized || current?.startsWith(`${normalized}/`)) closeTab(group.id, tab.id)
+    }
+  }
+
   function setSplitRatio(value: number) { splitRatio.value = Math.min(75, Math.max(25, value)) }
   function setSidebarWidth(value: number) { sidebarWidth.value = Math.min(520, Math.max(220, value)) }
   function setNoteSidebarWidth(value: number) { noteSidebarWidth.value = Math.min(520, Math.max(180, value)) }
@@ -518,5 +546,5 @@ export const useWorkbenchStore = defineStore('workbench', () => {
 
   return { activity, runnerTool, sidebarVisible, sidebarWidth, noteSidebarWidth, bottomPanelHeight, splitRatio, activeGroupId, groups, activeGroup, activeTab, activeContext, layoutTree,
     setActivity, toggleSidebar, setSidebarWidth, setNoteSidebarWidth, setBottomPanelHeight, setSplitRatio, openProblem, openDraftFile, openCurrentCode, setCurrentLanguage, openStatement, openProblemNote, openAi, openRunner, openTests, openSubmission, openDebugger, openLearning, openNotes,
-    activateTab, closeTab, moveTab, restore, snapshot }
+    activateTab, closeTab, moveTab, restore, snapshot, workspacePathChanged, workspacePathRemoved }
 })

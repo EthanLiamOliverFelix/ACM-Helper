@@ -89,7 +89,7 @@ fn timestamp_id(now: u64) -> String {
 /// `\\?\C:\data`. Rust's filesystem APIs understand it, but some external
 /// tools (notably MinGW GCC/GDB) do not, and it should never leak into the
 /// user-facing data-center setting.
-fn portable_path(path: &Path) -> PathBuf {
+pub(crate) fn portable_path(path: &Path) -> PathBuf {
     #[cfg(windows)]
     {
         let value = path.to_string_lossy();

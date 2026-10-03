@@ -10,7 +10,7 @@ const titles = { problems: '题库与题单', files: '资源管理器', learning
 </script>
 <template>
   <aside class="primary-sidebar">
-    <header v-if="workbench.activity !== 'runner'"><strong>{{ titles[workbench.activity] }}</strong><button title="收起侧边栏" @click="workbench.toggleSidebar">×</button></header>
+    <header v-if="workbench.activity !== 'runner' && workbench.activity !== 'files'"><strong>{{ titles[workbench.activity] }}</strong><button title="收起侧边栏" @click="workbench.toggleSidebar">×</button></header>
     <div class="primary-sidebar__content">
       <ProblemList v-show="workbench.activity === 'problems'" :show-files="false" />
       <ResourceExplorer v-if="workbench.activity === 'files'" />

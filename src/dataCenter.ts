@@ -40,6 +40,7 @@ export type DataCenterKey =
   | 'ui-layout'
   | 'ui-workbench'
   | 'workspace-tree-state'
+  | 'workspace-active-root'
   | 'submit-pane-sizes'
   | 'show-problem-tags'
   | 'problem-catalog'
@@ -56,6 +57,7 @@ const legacyKeys: Record<DataCenterKey, string> = {
   'ui-layout': 'acm-helper-layout',
   'ui-workbench': 'acm-helper-workbench-v1',
   'workspace-tree-state': 'acm-helper-workspace-tree-state-v1',
+  'workspace-active-root': 'acm-helper-workspace-active-root-v1',
   'submit-pane-sizes': 'acm-helper-submit-pane-sizes',
   'show-problem-tags': 'acm-helper-show-problem-tags',
   'problem-catalog': 'acm-helper-problem-catalog-v1',

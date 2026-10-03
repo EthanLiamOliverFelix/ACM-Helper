@@ -11,15 +11,24 @@ import { batchDirectoryDropTarget, directoryDropTarget } from '../utils/director
 import { useLongPressMove } from '../composables/useLongPressMove'
 import { useWorkbenchStore } from '../stores/workbenchStore'
 import { getDataCenterValue, saveDataCenterValue } from '../dataCenter'
+import '@vscode/codicons/dist/codicon.css'
 
 const store = useProblemStore()
 const workbench = useWorkbenchStore()
 const entries = ref<WorkspaceEntry[]>([])
 const rootPath = ref('')
+type WorkspaceRoot = { path: string; name: string; builtin: boolean }
+const roots = ref<WorkspaceRoot[]>([])
+const savedRoot = getDataCenterValue<string>('workspace-active-root', '')
+let activeRootInitialized = false
+const currentRoot = computed(() => roots.value.find(root => root.path === rootPath.value))
+const textFile = reactive({ open: false, path: '', text: '', original: '', busy: false, error: '' })
+let refreshTimer: ReturnType<typeof setInterval> | undefined
 const loading = ref(false)
 const error = ref('')
 const notice = ref('')
-const savedTreeState = getDataCenterValue<{ version: 1; expandedPaths: string[] } | null>('workspace-tree-state', null)
+const savedTreeState = getDataCenterValue<{ version: 1; expandedPaths: string[]; showHidden?: boolean } | null>('workspace-tree-state', null)
+const showHidden = ref(savedTreeState?.showHidden ?? false)
 const expandedPaths = ref(new Set(savedTreeState?.version === 1 ? savedTreeState.expandedPaths : []))
 let treeStateInitialized = savedTreeState?.version === 1
 const selectionMode = ref(false)
@@ -29,7 +38,7 @@ const visibleEntries = computed(() => flattenTree(entries.value, expandedPaths.v
 const selection = useMultiSelection(() => visibleEntries.value.map(entry => entry.path), () => allEntries.value.map(entry => entry.path))
 const contextMenu = ref<{ x: number; y: number; entry: WorkspaceEntry | null } | null>(null)
 const fileClipboard = ref<{ entry: WorkspaceEntry; cut: boolean } | null>(null)
-const dialog = reactive({ open: false, mode: '' as 'file' | 'folder' | 'rename' | 'delete' | '', target: null as WorkspaceEntry | null, parentPath: '', name: '', language: 'cpp' as Language })
+const dialog = reactive({ open: false, mode: '' as 'file' | 'folder' | 'rename' | 'delete' | '', target: null as WorkspaceEntry | null, parentPath: '', name: '', language: 'cpp' as Language | 'text' })
 
 function findEntry(path: string, list = entries.value): WorkspaceEntry | null {
   for (const entry of list) {
@@ -40,12 +49,8 @@ function findEntry(path: string, list = entries.value): WorkspaceEntry | null {
   return null
 }
 
-function directoryPaths(list = entries.value): string[] {
-  return list.flatMap((entry) => entry.isDirectory ? [entry.path, ...directoryPaths(entry.children)] : [])
-}
-
 function persistTreeState() {
-  void saveDataCenterValue('workspace-tree-state', { version: 1, expandedPaths: [...expandedPaths.value] })
+  void saveDataCenterValue('workspace-tree-state', { version: 1, expandedPaths: [...expandedPaths.value], showHidden: showHidden.value })
 }
 
 function setFolderExpanded(path: string, expanded: boolean) {
@@ -68,29 +73,85 @@ function replaceExpandedPath(oldPath: string, newPath?: string) {
   persistTreeState()
 }
 
-async function refresh() {
+async function refresh(quiet = false) {
+  if (loading.value) return
   loading.value = true
-  error.value = ''
+  if (!quiet) error.value = ''
+  let requestedRoot = ''
   try {
-    ;[entries.value, rootPath.value] = await Promise.all([
-      invoke<WorkspaceEntry[]>('list_workspace_entries'),
-      invoke<string>('workspace_root_path'),
-    ])
-    const availableDirectories = new Set(directoryPaths())
+    roots.value = await invoke<WorkspaceRoot[]>('list_workspace_roots')
+    if (!activeRootInitialized) { rootPath.value = savedRoot; activeRootInitialized = true }
+    if (!roots.value.some(root => root.path === rootPath.value)) rootPath.value = roots.value[0]?.path ?? ''
+    requestedRoot = rootPath.value
+    const next = await invoke<WorkspaceEntry[]>('list_workspace_entries', { rootPath: requestedRoot, showHidden: showHidden.value })
+    if (rootPath.value !== requestedRoot) return
+    if (JSON.stringify(entries.value) !== JSON.stringify(next)) entries.value = next
     if (!treeStateInitialized) {
-      expandedPaths.value = availableDirectories
+      expandedPaths.value = new Set(entries.value.filter(entry => entry.isDirectory).map(entry => entry.path))
       treeStateInitialized = true
       persistTreeState()
-    } else {
-      const existing = new Set([...expandedPaths.value].filter((path) => availableDirectories.has(path)))
-      if (existing.size !== expandedPaths.value.size) {
-        expandedPaths.value = existing
-        persistTreeState()
-      }
     }
-    await store.loadDraftFiles()
+    if (!quiet) await store.loadDraftFiles()
   } catch (cause) { error.value = String(cause) }
-  finally { loading.value = false }
+  finally { loading.value = false; if (requestedRoot && requestedRoot !== rootPath.value) void refresh(true) }
+}
+
+async function selectRoot() {
+  selection.clear()
+  entries.value = []
+  await saveDataCenterValue('workspace-active-root', rootPath.value)
+  await refresh()
+}
+function collapseFolders() {
+  const paths = new Set(allEntries.value.filter(entry => entry.isDirectory).map(entry => entry.path))
+  expandedPaths.value = new Set([...expandedPaths.value].filter(path => !paths.has(path)))
+  persistTreeState()
+}
+function dismissMenus() { contextMenu.value = null }
+function handleEscape(event: KeyboardEvent) { if (event.key === 'Escape') dismissMenus() }
+async function addRoot() {
+  try {
+    const path = await invoke<string | null>('add_workspace_root')
+    if (path) { rootPath.value = path; activeRootInitialized = true; await selectRoot() }
+  } catch (cause) { error.value = String(cause) }
+}
+async function removeRoot() {
+  if (currentRoot.value?.builtin) return
+  try {
+    if (store.draftPath.toLowerCase().startsWith(`${rootPath.value.toLowerCase()}\\`)) await store.persistDraft()
+    await store.workspacePathDeleted(rootPath.value)
+    workbench.workspacePathRemoved(rootPath.value)
+    await invoke('remove_workspace_root', { path: rootPath.value })
+    rootPath.value = roots.value[0]?.path ?? ''
+    notice.value = '已移出工作区，磁盘文件未删除'
+    await selectRoot()
+  } catch (cause) { error.value = String(cause) }
+}
+async function openTextFile(path: string) {
+  if (textFile.open && textFile.text !== textFile.original && !window.confirm('放弃当前文本文件的未保存修改？')) return
+  try {
+    const text = await invoke<string>('read_workspace_text', { path })
+    Object.assign(textFile, { open: true, path, text, original: text, error: '' })
+  } catch (cause) { error.value = String(cause) }
+}
+function closeTextFile() {
+  if (textFile.text !== textFile.original && !window.confirm('放弃未保存的修改？')) return
+  textFile.open = false
+}
+async function saveTextFile() {
+  if (textFile.busy) return
+  textFile.busy = true
+  textFile.error = ''
+  try {
+    await invoke('save_workspace_text', { path: textFile.path, text: textFile.text, expected: textFile.original })
+    textFile.original = textFile.text
+  } catch (cause) { textFile.error = String(cause) }
+  finally { textFile.busy = false }
+}
+async function openSystem(entry: WorkspaceEntry) {
+  contextMenu.value = null
+  try { await invoke('open_workspace_system', { path: entry.path }) }
+  catch (cause) { error.value = String(cause) }
 }
 
 function parentOf(entry: WorkspaceEntry | null) {
@@ -109,7 +170,7 @@ function openDialog(mode: typeof dialog.mode, entry: WorkspaceEntry | null = con
   dialog.open = true
   dialog.mode = mode
   dialog.target = entry
-  dialog.parentPath = mode === 'file' && !entry ? '' : mode === 'file' || mode === 'folder' ? parentOf(entry) : ''
+  dialog.parentPath = mode === 'file' && !entry && currentRoot.value?.builtin ? '' : mode === 'file' || mode === 'folder' ? parentOf(entry) : ''
   dialog.name = mode === 'rename' && entry ? entry.name : ''
   dialog.language = 'cpp'
 }
@@ -120,18 +181,24 @@ async function submitDialog() {
   error.value = ''
   try {
     if (dialog.mode === 'file') {
+      if (dialog.language === 'text') {
+        const path = await invoke<string>('create_workspace_text', { parentPath: dialog.parentPath || rootPath.value, name: dialog.name })
+        closeDialog(); await refresh(); await openTextFile(path); return
+      }
       const file = await invoke<DraftFileInfo>('create_workspace_file', { parentPath: dialog.parentPath || null, name: dialog.name, language: dialog.language })
       closeDialog()
       await refresh()
-      await store.openDraftFile(file)
+      await workbench.openDraftFile(file)
     } else if (dialog.mode === 'folder') {
       await invoke('create_workspace_folder', { parentPath: dialog.parentPath || null, name: dialog.name })
       closeDialog()
       await refresh()
     } else if (dialog.mode === 'rename' && dialog.target) {
+      await store.persistDraft()
       const oldPath = dialog.target.path
       const newPath = await invoke<string>('rename_workspace_entry', { path: oldPath, newName: dialog.name })
       store.workspacePathChanged(oldPath, newPath)
+      workbench.workspacePathChanged(oldPath, newPath)
       if (dialog.target.isDirectory) replaceExpandedPath(oldPath, newPath)
       closeDialog()
       await refresh()
@@ -139,6 +206,7 @@ async function submitDialog() {
       const deletedPath = dialog.target.path
       await invoke('delete_workspace_entry', { path: deletedPath })
       await store.workspacePathDeleted(deletedPath)
+      workbench.workspacePathRemoved(deletedPath)
       if (dialog.target.isDirectory) replaceExpandedPath(deletedPath)
       closeDialog()
       await refresh()
@@ -160,7 +228,12 @@ function beginEntryMove(entry: WorkspaceEntry, event: PointerEvent) {
 async function openEntry(entry: WorkspaceEntry, event?: MouseEvent) {
   if (event && selectEntry(entry, event)) return
   if (holdMove.shouldSuppressClick() || entry.isDirectory) return
-  if (entry.draft) await workbench.openDraftFile(entry.draft).catch((cause) => { error.value = String(cause) })
+  if (entry.draft) {
+    try {
+      const file = await invoke<DraftFileInfo>('get_workspace_draft_info', { path: entry.path })
+      await workbench.openDraftFile(file)
+    } catch (cause) { error.value = String(cause) }
+  } else await openTextFile(entry.path)
 }
 
 async function moveEntries(sources: WorkspaceEntry[], destinationPath: string) {
@@ -170,12 +243,14 @@ async function moveEntries(sources: WorkspaceEntry[], destinationPath: string) {
   let moved = 0
   const failures: string[] = []
   try {
+    await store.persistDraft()
     const target = findEntry(destinationPath)
     for (const source of sources) {
       if (!directoryDropTarget(source, target, rootPath.value)) continue
       try {
         const newPath = await invoke<string>('paste_workspace_entry', { sourcePath: source.path, destinationPath, cut: true })
         store.workspacePathChanged(source.path, newPath)
+        workbench.workspacePathChanged(source.path, newPath)
         if (source.isDirectory) replaceExpandedPath(source.path, newPath)
         moved++
       } catch (cause) { failures.push(`${source.name}：${String(cause)}`) }
@@ -214,10 +289,12 @@ async function pasteEntry(destination: WorkspaceEntry | null) {
   if (!fileClipboard.value) return
   const source = fileClipboard.value
   try {
+    if (source.cut) await store.persistDraft()
     const destinationPath = destination?.isDirectory ? destination.path : parentOf(destination)
     const newPath = await invoke<string>('paste_workspace_entry', { sourcePath: source.entry.path, destinationPath, cut: source.cut })
     if (source.cut) {
       store.workspacePathChanged(source.entry.path, newPath)
+      workbench.workspacePathChanged(source.entry.path, newPath)
       if (source.entry.isDirectory) replaceExpandedPath(source.entry.path, newPath)
       fileClipboard.value = null
     }
@@ -232,31 +309,36 @@ function fileUrl(path: string) {
   return encodeURI(`file:///${normalized.replace(/^\/+/, '')}`)
 }
 
-function dismissMenu() { contextMenu.value = null }
+function dismissMenu() { dismissMenus() }
 
 onMounted(() => {
   refresh()
+  refreshTimer = setInterval(() => { if (!document.hidden && !movingBusy.value && !dialog.open && !textFile.open) void refresh(true) }, 5000)
   window.addEventListener('click', dismissMenu)
   window.addEventListener('blur', dismissMenu)
+  window.addEventListener('keydown', handleEscape)
 })
 onBeforeUnmount(() => {
+  if (refreshTimer) clearInterval(refreshTimer)
   window.removeEventListener('click', dismissMenu)
   window.removeEventListener('blur', dismissMenu)
+  window.removeEventListener('keydown', handleEscape)
 })
 </script>
 
 <template>
   <div class="explorer" @dragover.prevent="holdMove.nativeOver" @drop.prevent="holdMove.nativeDrop" @dragend="holdMove.cancel" @dragleave="holdMove.nativeLeave" @click.capture="holdMove.suppressEvent" @contextmenu.prevent="openContext(null, $event)">
     <div class="explorer__toolbar">
-      <strong>本地代码</strong><button :aria-pressed="selectionMode" title="多选文件和文件夹" @click.stop="toggleSelectionMode">{{ selectionMode ? '完成' : '多选' }}</button>
-      <button title="新建文件" @click.stop="openDialog('file', null)">📄＋</button>
-      <button title="新建文件夹" @click.stop="openDialog('folder', null)">📁＋</button>
-      <button title="刷新" :disabled="loading" @click.stop="refresh">↻</button>
+      <strong>资源管理器</strong>
+      <button class="icon-button" title="新建文件" aria-label="新建文件" @click.stop="openDialog('file', null)"><i class="codicon codicon-new-file" aria-hidden="true" /></button>
+      <button class="icon-button" title="新建文件夹" aria-label="新建文件夹" @click.stop="openDialog('folder', null)"><i class="codicon codicon-new-folder" aria-hidden="true" /></button>
+      <button class="icon-button" :title="selectionMode ? '退出多选' : '多选文件和文件夹'" aria-label="多选文件和文件夹" :aria-pressed="selectionMode" @click.stop="toggleSelectionMode"><i class="codicon" :class="selectionMode ? 'codicon-check' : 'codicon-checklist'" aria-hidden="true" /></button>
     </div>
-    <div v-if="selectionMode" class="tree-selection-bar"><button :disabled="!selection.scope.length || movingBusy" @click="selection.toggleAll()">{{ selection.allSelected ? '取消全选' : '全选' }}</button><span>已选 {{ selection.selected.size }} 项</span><button :disabled="!selection.selected.size || movingBusy" @click="selection.clear()">清空</button></div>
-    <div :data-workspace-path="rootPath" :class="{ target: holdMove.targetPath.value === rootPath && !!rootPath }" class="explorer__root" :title="rootPath">{{ rootPath || 'solutions' }}</div>
+    <div class="workspace-selector" :data-workspace-path="rootPath" :class="{ target: holdMove.targetPath.value === rootPath && !!rootPath }"><select v-model="rootPath" aria-label="当前工作区" :title="rootPath" :disabled="loading || movingBusy" @change="selectRoot"><option v-for="root in roots" :key="root.path" :value="root.path">{{ root.name }}</option></select></div>
+    <div v-if="selectionMode" class="tree-selection-bar"><button :disabled="!selection.scope.length || movingBusy" @click="selection.toggleAll()">{{ selection.allSelected ? '取消全选' : '全选' }}</button><span>已选 {{ selection.selected.size }} 项</span></div>
     <div v-if="notice" class="explorer__notice">{{ notice }}</div>
     <div v-if="error" class="explorer__error">{{ error }}</div>
+    <div v-if="allEntries.length >= 10000" class="explorer__notice">目录较大，仅显示前 10000 项。可单独添加子文件夹。</div>
     <div v-if="loading && !entries.length" class="explorer__empty">正在读取本地文件…</div>
     <div v-else-if="!entries.length" class="explorer__empty">尚无本地代码。右键空白处即可新建。</div>
     <div class="explorer__tree" data-directory-drop-area>
@@ -266,6 +348,8 @@ onBeforeUnmount(() => {
 
     <div v-if="contextMenu" class="context-menu" :style="{ left: `${contextMenu.x}px`, top: `${contextMenu.y}px` }" @click.stop>
       <button v-if="contextMenu.entry && !contextMenu.entry.isDirectory" @click="openEntry(contextMenu.entry); contextMenu = null">打开</button>
+      <button v-if="contextMenu.entry && !contextMenu.entry.isDirectory" @click="openSystem(contextMenu.entry)">使用系统应用打开</button>
+      <button @click="addRoot(); contextMenu = null">添加工作区文件夹…</button>
       <button @click="openDialog('file')">新建文件…</button>
       <button @click="openDialog('folder')">新建文件夹…</button>
       <div v-if="contextMenu.entry" class="context-menu__line" />
@@ -280,28 +364,36 @@ onBeforeUnmount(() => {
       <button @click="copyText(fileUrl(contextMenu.entry?.path || rootPath), '文件链接已复制')">复制文件链接</button>
       <button @click="revealItemInDir(contextMenu.entry?.path || rootPath); contextMenu = null">在文件资源管理器中显示</button>
       <button @click="refresh(); contextMenu = null">刷新</button>
+      <button @click="collapseFolders(); contextMenu = null">全部折叠</button>
+      <button :disabled="loading" @click="showHidden = !showHidden; persistTreeState(); contextMenu = null; refresh()">{{ showHidden ? '隐藏系统文件及编译产物' : '显示隐藏文件及编译产物' }}</button>
+      <button v-if="currentRoot && !currentRoot.builtin" @click="contextMenu = null; removeRoot()">移出当前工作区（保留文件）</button>
+      <button @click="contextMenu = null; workbench.toggleSidebar()">收起侧边栏</button>
     </div>
 
     <div v-if="dialog.open" class="entry-dialog" @click.self="closeDialog">
       <form @submit.prevent="submitDialog">
-        <h3>{{ dialog.mode === 'file' ? '新建代码文件' : dialog.mode === 'folder' ? '新建文件夹' : dialog.mode === 'rename' ? '重命名' : '确认删除' }}</h3>
+        <h3>{{ dialog.mode === 'file' ? '新建文件' : dialog.mode === 'folder' ? '新建文件夹' : dialog.mode === 'rename' ? '重命名' : '确认删除' }}</h3>
         <template v-if="dialog.mode !== 'delete'">
           <label>名称<input v-model="dialog.name" autofocus :placeholder="dialog.mode === 'file' ? '例如 solution 或 solution.cpp' : '输入名称'" /></label>
-          <label v-if="dialog.mode === 'file'">语言<select v-model="dialog.language"><option value="cpp">C++</option><option value="python">Python</option><option value="java">Java</option></select></label>
+          <label v-if="dialog.mode === 'file'">类型<select v-model="dialog.language"><option value="cpp">C++</option><option value="python">Python</option><option value="java">Java</option><option value="text">文本 / 配置文件（保留输入的文件名）</option></select></label>
           <p v-if="dialog.mode === 'file' || dialog.mode === 'folder'">建立位置：{{ dialog.parentPath || (dialog.mode === 'file' ? '今天的日期文件夹' : rootPath) }}</p>
         </template>
-        <p v-else class="delete-warning">将永久删除“{{ dialog.target?.name }}”<template v-if="dialog.target?.isDirectory">及其中的全部文件</template>。此操作无法在应用内撤销。</p>
+        <p v-else class="delete-warning">将“{{ dialog.target?.name }}”<template v-if="dialog.target?.isDirectory">及其中的全部文件</template>移到系统回收站，可通过系统回收站恢复。</p>
         <div class="entry-dialog__actions"><button type="button" @click="closeDialog">取消</button><button type="submit" :class="{ danger: dialog.mode === 'delete' }" :disabled="dialog.mode !== 'delete' && !dialog.name.trim()">{{ dialog.mode === 'delete' ? '确认删除' : '确定' }}</button></div>
       </form>
+    </div>
+    <div v-if="textFile.open" class="text-file-dialog" @keydown.ctrl.s.prevent="saveTextFile" @keydown.meta.s.prevent="saveTextFile">
+      <section><header><strong :title="textFile.path">{{ textFile.path.split(/[\\/]/).pop() }}{{ textFile.text !== textFile.original ? ' ●' : '' }}</strong><button :disabled="textFile.busy" @click="saveTextFile">保存</button><button :disabled="textFile.busy" @click="closeTextFile">关闭</button></header><p v-if="textFile.error" class="explorer__error">{{ textFile.error }}</p><textarea v-model="textFile.text" :readonly="textFile.busy" spellcheck="false" aria-label="文件内容" /><footer>{{ textFile.path }} · UTF-8 · 此文件不绑定题目或测试点</footer></section>
     </div>
   </div>
 </template>
 
 <style scoped lang="scss">
 .explorer { position: relative; height: 100%; display: flex; flex-direction: column; min-height: 0; color: var(--color-tone-ccc); }
-.explorer__toolbar { display: flex; align-items: center; gap: 4px; padding: 8px 9px; border-bottom: 1px solid var(--color-bg-subtle); strong { flex: 1; font-size: 13px; } button { padding: 4px 6px; border: 0; border-radius: 3px; background: transparent; color: var(--color-text-soft); font-size: 12px; cursor: pointer; &:hover { background: var(--color-bg-selected); color: var(--color-text-on-subtle-selection); } } }
-.explorer__root { overflow: hidden; padding: 5px 9px; border-bottom: 1px solid var(--color-bg-raised); color: var(--color-text-disabled); font: 8px Consolas, monospace; text-overflow: ellipsis; white-space: nowrap; }
-.explorer__tree { flex: 1; overflow: auto; padding: 8px 8px 18px; }
+.workspace-selector { padding:0 8px 7px; select { display:block; box-sizing:border-box; width:100%; height:28px; min-width:0; padding:0 7px; border:1px solid var(--color-border-control); border-radius:3px; background:var(--color-bg-panel-alt); color:var(--color-text-secondary); font:12px var(--font-ui); outline:none; &:focus-visible { border-color:var(--color-accent); } } }
+.text-file-dialog { position:fixed; inset:0; z-index:1950; display:flex; align-items:center; justify-content:center; background:var(--color-overlay); section { width:min(900px,85vw); height:75vh; display:flex; flex-direction:column; background:var(--color-bg-panel); border:1px solid var(--color-border-strong); border-radius:6px; overflow:hidden; } header { display:flex; gap:10px; padding:10px; strong { flex:1; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; } button { background:var(--color-bg-control); color:var(--color-text-primary); border:1px solid var(--color-border); padding:4px 12px; cursor:pointer; } } textarea { flex:1; min-height:0; resize:none; padding:12px; background:var(--color-bg-deep); color:var(--color-text-primary); border:0; outline:none; font:14px/1.6 Consolas,monospace; tab-size:4; white-space:pre; } footer { padding:8px; font-size:11px; color:var(--color-text-muted); overflow-wrap:anywhere; } }
+.explorer__toolbar { display:flex; flex:0 0 36px; align-items:center; gap:3px; padding:0 8px 0 12px; strong { flex:1; font-size:12px; font-weight:500; color:var(--color-text-secondary); } .icon-button { display:grid; place-items:center; width:26px; height:26px; padding:0; border:0; border-radius:3px; background:transparent; color:var(--color-text-soft); cursor:pointer; .codicon { font-size:17px; } &:hover { background:var(--color-bg-hover); color:var(--color-text-primary); } &[aria-pressed="true"] { background:var(--color-bg-selected); color:var(--color-accent-text); } &:focus-visible { outline:1px solid var(--color-accent); } } }
+.explorer__tree { flex:1; min-height:0; overflow:auto; padding:2px 0 14px; scrollbar-width:thin; }
 .explorer__move-hint { position: absolute; right: 7px; bottom: 7px; left: 7px; z-index: 5; padding: 6px; border: 1px solid var(--color-accent); border-radius: 4px; background: var(--color-accent-surface-hover); color: var(--color-accent-text); text-align: center; font-size: 9px; }
 .explorer__error, .explorer__notice { padding: 6px 9px; font-size: 10px; line-height: 1.4; }.explorer__error { color: var(--color-danger); background: var(--color-danger-surface); }.explorer__notice { color: var(--color-tone-76c99b); background: var(--color-tone-1d3025); }
 .explorer__empty { padding: 30px 12px; text-align: center; color: var(--color-text-disabled); font-size: 12px; }
@@ -310,7 +402,7 @@ onBeforeUnmount(() => {
 </style>
 
 <style scoped>
-.explorer__root.target { background: var(--color-accent-surface-hover); box-shadow: inset 0 0 0 1px var(--color-accent); color: var(--color-accent-text); }
+.workspace-selector.target { background: var(--color-accent-surface-hover); box-shadow: inset 0 0 0 1px var(--color-accent); color: var(--color-accent-text); }
 </style>
 
 <style scoped>

@@ -8,7 +8,7 @@ const store = useProblemStore()
 const collapsed = ref(new Set<string>())
 const copied = ref('')
 const passedCount = computed(() => store.testCases.filter(test => test.status === 'passed').length)
-const statuses = { idle: '未运行', running: '运行中…', passed: '通过', failed: '答案不同', completed: '已运行', error: '运行错误' }
+const statuses = { idle: '未运行', running: '运行中…', passed: '通过', failed: '答案错误', completed: '已运行', error: '运行错误' }
 
 function toggle(testId: string) {
   const next = new Set(collapsed.value)
@@ -88,7 +88,10 @@ function diffTitle(segment: OutputDiffSegment) {
           <div class="case-title">
             <button class="collapse" :title="collapsed.has(test.id) ? '展开' : '收起'" @click.stop="toggle(test.id)"><i class="codicon" :class="collapsed.has(test.id) ? 'codicon-chevron-right' : 'codicon-chevron-down'" /></button>
             <strong>TC {{ index + 1 }}</strong>
-            <span :class="test.status">{{ statuses[test.status] }}</span>
+            <div class="case-result">
+              <span class="case-status" :class="test.status">{{ test.compileFailed ? '编译失败' : statuses[test.status] }}</span>
+              <span v-if="test.durationMs != null && !test.compileFailed && test.status !== 'idle' && test.status !== 'running'" class="case-duration" title="程序运行耗时">{{ test.durationMs }}ms</span>
+            </div>
             <button class="case-run" title="运行当前测试点" :disabled="store.isRunning || !store.currentCode.trim()" @click.stop="runTestCase(test.id)"><i class="codicon codicon-play" /></button>
             <button class="case-delete" title="删除测试点" @click.stop="store.removeTestCase(test.id)"><i class="codicon codicon-trash" /></button>
           </div>
@@ -112,7 +115,9 @@ function diffTitle(segment: OutputDiffSegment) {
 .batch-actions { display: grid; grid-template-columns: minmax(0, 1fr) 44px; gap: 8px; margin: 0 18px 12px; button { height: 40px; border: 0; border-radius: 6px; color: var(--color-text-on-accent); cursor: pointer; &:hover:not(:disabled) { filter: brightness(1.1); } &:disabled { opacity: .4; cursor: not-allowed; } } .run-all { display: flex; align-items: center; justify-content: center; gap: 7px; background: var(--color-accent-strong); font-size: 13px; font-weight: 700; } .delete-all { display: grid; place-items: center; background: var(--color-danger-strong); } .codicon { font-size: 18px; } }
 .cases { min-height: 0; overflow-y: auto; padding: 0 10px 22px; }
 .cases article { margin-bottom: 10px; overflow: hidden; border: 1px solid var(--color-border-control); border-radius: 5px; background: var(--color-bg-panel); &.active { border-color: var(--color-accent); } }
-.case-title { height: 48px; display: flex; align-items: center; gap: 7px; padding: 0 10px; strong { flex: 1; color: var(--color-accent-text); font-size: 15px; } > span { color: var(--color-text-faint); font-size: 12px; &.passed { color: var(--color-success); } &.failed, &.error { color: var(--color-danger); } &.running { color: var(--color-accent-text); } } button { display: grid; place-items: center; border: 0; cursor: pointer; &:disabled { opacity: .4; cursor: not-allowed; } } .collapse { width: 22px; padding: 0; background: transparent; color: var(--color-accent-text); font-size: 17px; } .case-run, .case-delete { width: 36px; height: 36px; border-radius: 6px; color: white; font-size: 20px; } .case-run { background: var(--color-tone-2e7d32); &:hover:not(:disabled) { background: var(--color-tone-388e3c); } } .case-delete { background: var(--color-danger-strong); } }
+.case-title { min-height: 48px; flex-wrap: wrap; display: flex; align-items: center; gap: 5px; padding: 5px 8px; strong { flex: 1; color: var(--color-accent-text); font-size: 15px; } .case-status { color: var(--color-text-faint); font-size: 14px; font-weight: 700; white-space: nowrap; &.passed { color: var(--color-success); } &.failed, &.error { color: var(--color-danger); } &.running { color: var(--color-accent-text); } } button { display: grid; place-items: center; border: 0; cursor: pointer; &:disabled { opacity: .4; cursor: not-allowed; } } .collapse { width: 22px; padding: 0; background: transparent; color: var(--color-accent-text); font-size: 17px; } .case-run, .case-delete { width: 30px; height: 32px; border-radius: 6px; color: white; font-size: 20px; } .case-run { background: var(--color-tone-2e7d32); &:hover:not(:disabled) { background: var(--color-tone-388e3c); } } .case-delete { background: var(--color-danger-strong); } }
+.case-result { display: flex; align-items: center; gap: 6px; }
+.case-duration { padding: 3px 6px; border-radius: 4px; background: var(--color-bg-control); color: var(--color-text-primary); font-size: 12px; font-weight: 600; white-space: nowrap; }
 .case-body { padding: 0 10px 10px; border-top: 1px solid var(--color-border-soft); }
 label { display: grid; grid-template-columns: 1fr auto; align-items: center; margin-top: 9px; color: var(--color-text-soft); font-size: 13px; > button { padding: 2px 3px; border: 0; background: transparent; color: var(--color-text-faint); font-size: 10px; cursor: pointer; &:hover { color: var(--color-accent-text); } } }
 textarea { grid-column: 1 / -1; box-sizing: border-box; width: 100%; min-height: 140px; margin-top: 4px; resize: vertical; padding: 7px 9px; border: 1px solid var(--color-border); border-radius: 2px; outline: none; background: var(--color-bg-deep); color: var(--color-text-strong); font: 13px/1.45 Consolas, monospace; &:focus { border-color: var(--color-accent); } }

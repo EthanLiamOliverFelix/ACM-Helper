@@ -86,7 +86,7 @@ const testStatusInfo = {
   idle: { text: '未运行', className: '' },
   running: { text: '运行中…', className: 'test-status--running' },
   passed: { text: '✓ 通过', className: 'test-status--passed' },
-  failed: { text: '✕ 答案不同', className: 'test-status--failed' },
+  failed: { text: '✕ 答案错误', className: 'test-status--failed' },
   completed: { text: '运行完成', className: 'test-status--completed' },
   error: { text: '运行错误', className: 'test-status--error' },
 } as const
@@ -139,10 +139,8 @@ function formatMem(bytes?: number): string {
         >
           <div class="test-case__heading">
             <strong>测试点 {{ index + 1 }}</strong>
-            <span class="test-status" :class="testStatusInfo[test.status].className">{{ testStatusInfo[test.status].text }}</span>
-            <span v-if="test.durationMs != null" class="test-case__time">
-              <template v-if="test.compileDurationMs">编译 {{ test.compileDurationMs }} ms · </template>运行 {{ test.durationMs }} ms
-            </span>
+            <span class="test-status" :class="testStatusInfo[test.status].className">{{ test.compileFailed ? '编译失败' : testStatusInfo[test.status].text }}</span>
+            <span v-if="test.durationMs != null && !test.compileFailed && test.status !== 'idle' && test.status !== 'running'" class="test-case__time" title="程序运行耗时">{{ test.durationMs }}ms</span>
             <button class="test-case__run" :disabled="store.isRunning || !store.currentCode.trim()" @click.stop="store.runTestCase(test.id)">▶</button>
             <button class="test-case__delete" title="删除测试点" @click.stop="store.removeTestCase(test.id)">×</button>
           </div>
@@ -399,10 +397,10 @@ function formatMem(bytes?: number): string {
 
 .test-case { padding: 8px; border: 1px solid var(--color-tone-353535); border-radius: 6px; background: var(--color-tone-232323); cursor: default; &--active { border-color: var(--color-accent-border); } }
 .test-case__heading { display: flex; align-items: center; gap: 6px; margin-bottom: 7px; color: var(--color-tone-ccc); font-size: 11px; strong { white-space: nowrap; } }
-.test-case__time { margin-left: auto; color: var(--color-text-faint); font-size: 9px; white-space: nowrap; }
+.test-case__time { padding: 3px 6px; border-radius: 4px; background: var(--color-bg-control); color: var(--color-text-primary); font-size: 11px; font-weight: 600; white-space: nowrap; }
 .test-case__run, .test-case__delete { width: 24px; height: 22px; padding: 0; border: 1px solid var(--color-border-control); border-radius: 3px; background: var(--color-bg-subtle); color: var(--color-text-secondary); cursor: pointer; &:disabled { opacity: .4; cursor: not-allowed; } }
 .test-case__run { color: var(--color-tone-80c783); }.test-case__delete:hover { border-color: var(--color-tone-8b4242); color: var(--color-danger); }
-.test-status { padding: 1px 5px; border-radius: 3px; background: var(--color-bg-subtle); color: var(--color-tone-888); font-size: 9px; white-space: nowrap; &--running { color: var(--color-accent-text); } &--passed { background: var(--color-tone-193428); color: var(--color-success); } &--failed, &--error { background: var(--color-tone-3a2020); color: var(--color-danger); } &--completed { color: var(--color-warning); } }
+.test-status { padding: 1px 5px; border-radius: 3px; background: var(--color-bg-subtle); color: var(--color-tone-888); font-size: 12px; font-weight: 700; white-space: nowrap; &--running { color: var(--color-accent-text); } &--passed { background: var(--color-tone-193428); color: var(--color-success); } &--failed, &--error { background: var(--color-tone-3a2020); color: var(--color-danger); } &--completed { color: var(--color-warning); } }
 .io-box { margin-top: 6px; border: 1px solid var(--color-border-soft); border-radius: 4px; overflow: hidden; background: var(--color-bg-deep); &--passed { border-color: var(--color-tone-315b4c); } &--failed { border-color: var(--color-tone-6b3636); } textarea { display: block; width: 100%; min-height: 58px; max-height: 180px; resize: vertical; box-sizing: border-box; padding: 7px; border: 0; outline: none; background: var(--color-bg-deep); color: var(--color-text-primary); font: 11px/1.4 Consolas, monospace; overflow: auto; } textarea:focus { box-shadow: inset 0 0 0 1px var(--color-accent-border); } }
 .io-box__heading { display: flex; align-items: center; justify-content: space-between; padding: 4px 6px; border-bottom: 1px solid var(--color-bg-subtle); background: var(--color-bg-control-alt); color: var(--color-tone-999); font-size: 9px; button { padding: 1px 5px; border: 0; background: transparent; color: var(--color-tone-75a9cf); font-size: 9px; cursor: pointer; } }
 .io-box__stderr { max-height: 90px; overflow: auto; margin: 0; padding: 6px 7px; border-top: 1px solid var(--color-danger-border); color: var(--color-danger) !important; background: var(--color-tone-261b1b); white-space: pre-wrap !important; }

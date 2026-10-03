@@ -6,9 +6,10 @@ import { FitAddon } from '@xterm/addon-fit'
 import '@xterm/xterm/css/xterm.css'
 import { useProblemStore } from '../stores/problemStore'
 import { useWorkbenchStore } from '../stores/workbenchStore'
+import type { RunDiagnostic } from '../utils/runDiagnostics'
 import { usePointerResize } from '../composables/usePointerResize'
 
-const props = defineProps<{ visible: boolean }>()
+const props = defineProps<{ visible: boolean; diagnostic?: RunDiagnostic | null }>()
 const store = useProblemStore()
 const workbench = useWorkbenchStore()
 const { startPointerResize } = usePointerResize()
@@ -23,6 +24,9 @@ let nextKey = 0
 let disposed = false
 let lastRequest = 0
 let themeObserver: MutationObserver | undefined
+let initialized = false
+let lastDiagnostic: RunDiagnostic | null | undefined
+let diagnosticQueue = Promise.resolve()
 
 function updateTheme(session: Session) {
   if (!session.host) return
@@ -123,15 +127,34 @@ async function handleRequest() {
   if (active.value?.starting) await active.value.starting
   if (disposed) return
   if (request.action !== 'show') await run(request.action === 'run' ? 'compile-run' : request.action === 'run-existing' ? 'run' : 'compile')
-  else { if (!active.value) await createSession(); resize(); active.value?.terminal.focus() }
+  else { if (!active.value) await createSession(); await nextTick(); resize(); active.value?.terminal.focus() }
 }
+function appendDiagnostic(diagnostic = props.diagnostic) {
+  if (!initialized || diagnostic === lastDiagnostic) return
+  lastDiagnostic = diagnostic
+  if (!diagnostic) return
+  diagnosticQueue = diagnosticQueue.then(async () => {
+    if (disposed) return
+    const session = active.value ?? await createSession()
+    await nextTick()
+    resize(session)
+    if (session.disposed || disposed) return
+    // Display CPH output directly; never send diagnostic text to the shell.
+    session.terminal.writeln(`\r\n\x1b[33m[CPH · ${diagnostic.title}]\x1b[0m`)
+    session.terminal.writeln(diagnostic.message.replace(/\r?\n/g, '\r\n'))
+    session.terminal.writeln('\r\n\x1b[90m[本次 CPH 运行已结束；终端可继续输入命令]\x1b[0m')
+    session.terminal.scrollToBottom()
+  }).catch(cause => { if (!disposed) error.value = String(cause) })
+}
+watch(() => props.diagnostic, value => appendDiagnostic(value))
 watch(() => workbench.terminalRequest.sequence, () => { void handleRequest() })
 watch([selected, () => props.visible, () => sessions.value.length], async () => { await nextTick(); resize(); if (props.visible) active.value?.terminal.focus() })
 onMounted(async () => {
   themeObserver = new MutationObserver(() => sessions.value.forEach(updateTheme))
   themeObserver.observe(document.documentElement, { attributes: true, attributeFilter: ['data-theme'] })
   await createSession()
-  if (!disposed) await handleRequest()
+  initialized = true
+  if (!disposed) { appendDiagnostic(); await handleRequest() }
 })
 onBeforeUnmount(() => {
   disposed = true

@@ -22,6 +22,7 @@ export interface ProblemSetEntry {
 
 export interface ProblemSet {
   id: string
+  parentId?: string | null
   name: string
   createdAt: number
   problems: ProblemSetEntry[]
@@ -32,6 +33,12 @@ export interface ProblemSet {
     providerName: string
     syncedAt: number
   }
+}
+
+export interface ProblemSetGroup {
+  id: string
+  name: string
+  parentId: string | null
 }
 
 function makeId() {
@@ -46,21 +53,128 @@ function loadSets(): ProblemSet[] {
 
 export const useProblemSetStore = defineStore('problemSets', () => {
   const initial = loadSets()
+  const groups = ref<ProblemSetGroup[]>(getDataCenterValue('problem-set-groups', []))
   const sets = ref<ProblemSet[]>(initial.length ? initial : [{ id: makeId(), name: '我的题单', createdAt: Date.now(), problems: [] }])
   const activeSetId = ref(sets.value[0].id)
   const activeSet = computed(() => sets.value.find((set) => set.id === activeSetId.value) ?? sets.value[0] ?? null)
 
   function save() {
     void saveDataCenterValue('problem-sets', sets.value)
+    void saveDataCenterValue('problem-set-groups', groups.value)
   }
 
-  function createSet(name: string) {
+  function createSet(name: string, parentId: string | null = null) {
     const trimmed = name.trim()
     if (!trimmed) return
-    const set = { id: makeId(), name: trimmed, createdAt: Date.now(), problems: [] }
+    const set = { id: makeId(), name: trimmed, parentId, createdAt: Date.now(), problems: [] }
     sets.value.push(set)
     activeSetId.value = set.id
     save()
+  }
+
+  function createGroup(name: string, parentId: string | null = null) {
+    if (!name.trim() || (parentId && !groups.value.some(group => group.id === parentId))) return
+    const group = { id: makeId(), name: name.trim(), parentId }
+    groups.value.push(group)
+    save()
+    return group.id
+  }
+
+  function renameItem(id: string, name: string) {
+    const item = groups.value.find(group => group.id === id) ?? sets.value.find(set => set.id === id)
+    if (!item || !name.trim()) return
+    item.name = name.trim()
+    save()
+  }
+
+  function canMoveItem(id: string, parentId: string | null) {
+    if (!groups.value.some(group => group.id === id) && !sets.value.some(set => set.id === id)) return false
+    const visited = new Set<string>([id])
+    let parent = parentId
+    while (parent) {
+      if (visited.has(parent)) return false
+      visited.add(parent)
+      const group = groups.value.find(group => group.id === parent)
+      if (!group) return false
+      parent = group.parentId
+    }
+    return true
+  }
+
+  function moveItem(id: string, parentId: string | null) {
+    if (!canMoveItem(id, parentId)) return false
+    const item = groups.value.find(group => group.id === id) ?? sets.value.find(set => set.id === id)!
+    item.parentId = parentId
+    save()
+    return true
+  }
+
+  function topLevelItemIds(ids: string[]) {
+    const selected = new Set(ids)
+    const items = new Map([...groups.value, ...sets.value].map(item => [item.id, item]))
+    return ids.filter(id => {
+      const visited = new Set<string>()
+      let parent = items.get(id)?.parentId
+      if (!items.has(id)) return false
+      while (parent && !visited.has(parent)) {
+        if (selected.has(parent)) return false
+        visited.add(parent)
+        parent = items.get(parent)?.parentId
+      }
+      return true
+    })
+  }
+
+  function moveItems(ids: string[], parentId: string | null) {
+    const roots = topLevelItemIds(ids)
+    if (!roots.length || !roots.every(id => canMoveItem(id, parentId))) return false
+    const selected = new Set(roots)
+    for (const item of [...groups.value, ...sets.value]) if (selected.has(item.id)) item.parentId = parentId
+    save()
+    return true
+  }
+
+  function reorderItems(ids: string[], targetId: string, side: 'before' | 'after') {
+    const selected = new Set(ids)
+    if (selected.has(targetId)) return false
+    const groupTarget = groups.value.find(item => item.id === targetId)
+    function reorder<T extends { id: string; parentId?: string | null }>(list: T[]) {
+      const target = list.find(item => item.id === targetId)
+      const moved = list.filter(item => selected.has(item.id))
+      if (!target || !moved.length || moved.length !== selected.size || moved.some(item => (item.parentId ?? null) !== (target.parentId ?? null))) return false
+      const remaining = list.filter(item => !selected.has(item.id))
+      const insertion = remaining.findIndex(item => item.id === targetId) + Number(side === 'after')
+      list.splice(0, list.length, ...remaining.slice(0, insertion), ...moved, ...remaining.slice(insertion))
+      save()
+      return true
+    }
+    return groupTarget ? reorder(groups.value) : reorder(sets.value)
+  }
+
+  function reorderGroup(id: string, targetId: string, side?: 'before' | 'after') {
+    const from = groups.value.findIndex(group => group.id === id)
+    const to = groups.value.findIndex(group => group.id === targetId)
+    if (from < 0 || to < 0 || from === to || groups.value[from].parentId !== groups.value[to].parentId) return
+    const [group] = groups.value.splice(from, 1)
+    const insertion = side ? groups.value.findIndex(item => item.id === targetId) + (side === 'after' ? 1 : 0) : to
+    groups.value.splice(insertion, 0, group)
+    save()
+  }
+
+  // 删除容器时将内容移到上一级，保留题单及子组。
+  function deleteGroup(id: string) {
+    const group = groups.value.find(group => group.id === id)
+    if (!group) return
+    for (const item of [...groups.value, ...sets.value]) {
+      if (item.parentId === id) item.parentId = group.parentId
+    }
+    groups.value = groups.value.filter(group => group.id !== id)
+    save()
+  }
+
+  function exportSetText(setId = activeSetId.value) {
+    const set = sets.value.find(set => set.id === setId)
+    return set ? set.problems.map(problem => `${problem.title || problem.id}\r\n${problemUrl(problem)}`).join('\r\n\r\n') : ''
   }
 
   function deleteSet(id: string) {
@@ -82,12 +196,13 @@ export const useProblemSetStore = defineStore('problemSets', () => {
     save()
   }
 
-  function reorderSet(sourceId: string, targetId: string) {
+  function reorderSet(sourceId: string, targetId: string, side?: 'before' | 'after') {
     const from = sets.value.findIndex((set) => set.id === sourceId)
     const to = sets.value.findIndex((set) => set.id === targetId)
-    if (from < 0 || to < 0 || from === to) return
+    if (from < 0 || to < 0 || from === to || (sets.value[from].parentId ?? null) !== (sets.value[to].parentId ?? null)) return
     const [moved] = sets.value.splice(from, 1)
-    sets.value.splice(to, 0, moved)
+    const insertion = side ? sets.value.findIndex(item => item.id === targetId) + (side === 'after' ? 1 : 0) : to
+    sets.value.splice(insertion, 0, moved)
     save()
   }
 
@@ -341,5 +456,5 @@ export const useProblemSetStore = defineStore('problemSets', () => {
   }
 
   save()
-  return { sets, activeSetId, activeSet, createSet, deleteSet, deleteSets, reorderSet, addProblem, addProblemUrl, addProblemsBatch, importPlan, importLuoguTraining, enrichSetMetadata, removeProblem, contains, openProblem }
+  return { sets, groups, activeSetId, activeSet, createSet, createGroup, renameItem, canMoveItem, moveItem, moveItems, topLevelItemIds, reorderItems, reorderGroup, deleteGroup, exportSetText, deleteSet, deleteSets, reorderSet, addProblem, addProblemUrl, addProblemsBatch, importPlan, importLuoguTraining, enrichSetMetadata, removeProblem, contains, openProblem }
 })

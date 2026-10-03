@@ -8,6 +8,7 @@ src-tauri/gen/
 # Generated documents and temporary work
 output/
 tmp/
+.codex-tmp/
 
 # Machine-local assistant/editor configuration
 .claude/

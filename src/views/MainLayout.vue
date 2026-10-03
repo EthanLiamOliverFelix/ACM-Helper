@@ -52,7 +52,7 @@ onBeforeUnmount(() => window.removeEventListener('keydown', handleWorkbenchShort
     <TopBar />
     <div class="main-layout__body">
       <ActivityBar />
-      <PrimarySidebar v-if="workbench.sidebarVisible" :style="{ width: `${workbench.sidebarWidth}px`, minWidth: `${workbench.sidebarWidth}px` }" />
+      <PrimarySidebar v-show="workbench.sidebarVisible" :style="{ width: `${workbench.sidebarWidth}px`, minWidth: `${workbench.sidebarWidth}px` }" />
       <div v-if="workbench.sidebarVisible" class="resize-handle resize-handle--x" @pointerdown="startResize($event)" />
       <div class="workbench-column">
         <main class="workbench-area">

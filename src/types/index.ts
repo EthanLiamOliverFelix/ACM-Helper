@@ -362,6 +362,7 @@ export interface LuoguRecordDetail {
   problemId: string
   problemTitle: string
   status: number
+  verdict?: string
   score?: number
   submitTime?: number
   language?: string | number

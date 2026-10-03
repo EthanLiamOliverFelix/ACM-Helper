@@ -84,8 +84,8 @@ async function importProblem() {
       <button v-if="showFiles" :class="{ active: panelMode === 'files' }" @click="panelMode = 'files'">资源管理器</button>
     </div>
     <ResourceExplorer v-if="activePanelMode === 'files'" />
-    <ProblemSets v-else-if="activePanelMode === 'sets'" />
-    <template v-else>
+    <ProblemSets v-show="activePanelMode === 'sets'" />
+    <div v-show="activePanelMode === 'problems'" class="problem-list__catalog">
     <div class="problem-list__sources">
       <span>来源</span>
       <button v-for="source in sourceOptions" :key="source.key" :class="{ active: store.currentPlatform === source.key }" @click="store.setPlatform(source.key)">{{ source.label }}</button>
@@ -232,11 +232,12 @@ async function importProblem() {
         下一页 ›
       </button>
     </div>
-    </template>
+    </div>
   </div>
 </template>
 
 <style scoped lang="scss">
+.problem-list__catalog { flex: 1; min-height: 0; display: flex; flex-direction: column; overflow: hidden; }
 .problem-list {
   display: flex;
   flex-direction: column;

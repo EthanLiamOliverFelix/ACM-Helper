@@ -45,6 +45,7 @@ pub fn run() {
             diagnostics::record_oj_diagnostic,
             diagnostics::get_oj_diagnostics,
             diagnostics::export_oj_diagnostics,
+            commands::problem_sets::export_problem_set_text,
             diagnostics::clear_oj_diagnostics,
             codeforces::fetch_problem_detail_cf,
             codeforces::analyze_contest_cf,

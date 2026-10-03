@@ -1,10 +1,13 @@
 <script setup lang="ts">
 import { invoke } from '@tauri-apps/api/core'
 import { revealItemInDir } from '@tauri-apps/plugin-opener'
-import { onBeforeUnmount, onMounted, reactive, ref } from 'vue'
+import { computed, onBeforeUnmount, onMounted, reactive, ref } from 'vue'
 import { useProblemStore } from '../stores/problemStore'
 import type { DraftFileInfo, Language, WorkspaceEntry } from '../types'
 import ResourceTreeNode from './ResourceTreeNode.vue'
+import { flattenTree, topLevelEntries } from '../utils/multiSelection'
+import { useMultiSelection } from '../composables/useMultiSelection'
+import { batchDirectoryDropTarget, directoryDropTarget } from '../utils/directoryDrop'
 import { useLongPressMove } from '../composables/useLongPressMove'
 import { useWorkbenchStore } from '../stores/workbenchStore'
 import { getDataCenterValue, saveDataCenterValue } from '../dataCenter'
@@ -19,6 +22,11 @@ const notice = ref('')
 const savedTreeState = getDataCenterValue<{ version: 1; expandedPaths: string[] } | null>('workspace-tree-state', null)
 const expandedPaths = ref(new Set(savedTreeState?.version === 1 ? savedTreeState.expandedPaths : []))
 let treeStateInitialized = savedTreeState?.version === 1
+const selectionMode = ref(false)
+const movingBusy = ref(false)
+const allEntries = computed(() => flattenTree(entries.value))
+const visibleEntries = computed(() => flattenTree(entries.value, expandedPaths.value))
+const selection = useMultiSelection(() => visibleEntries.value.map(entry => entry.path), () => allEntries.value.map(entry => entry.path))
 const contextMenu = ref<{ x: number; y: number; entry: WorkspaceEntry | null } | null>(null)
 const fileClipboard = ref<{ entry: WorkspaceEntry; cut: boolean } | null>(null)
 const dialog = reactive({ open: false, mode: '' as 'file' | 'folder' | 'rename' | 'delete' | '', target: null as WorkspaceEntry | null, parentPath: '', name: '', language: 'cpp' as Language })
@@ -138,24 +146,56 @@ async function submitDialog() {
   } catch (cause) { error.value = String(cause) }
 }
 
-async function openEntry(entry: WorkspaceEntry) {
-  if (holdMove.shouldSuppressClick()) return
+function selectEntry(entry: WorkspaceEntry, event?: MouseEvent, checkbox = false) {
+  if (holdMove.shouldSuppressClick()) { event?.preventDefault(); return true }
+  const selecting = checkbox || selectionMode.value || !!(event?.ctrlKey || event?.metaKey || event?.shiftKey)
+  selection.click(entry.path, event, checkbox || selectionMode.value)
+  if (selecting) { selectionMode.value = true; event?.preventDefault() }
+  return selecting
+}
+function toggleSelectionMode() { selectionMode.value = !selectionMode.value; selection.clear() }
+function beginEntryMove(entry: WorkspaceEntry, event: PointerEvent) {
+  if (!movingBusy.value && !event.ctrlKey && !event.metaKey && !event.shiftKey) holdMove.begin(entry, event)
+}
+async function openEntry(entry: WorkspaceEntry, event?: MouseEvent) {
+  if (event && selectEntry(entry, event)) return
+  if (holdMove.shouldSuppressClick() || entry.isDirectory) return
   if (entry.draft) await workbench.openDraftFile(entry.draft).catch((cause) => { error.value = String(cause) })
 }
 
-async function moveEntry(source: WorkspaceEntry, targetPath: string | null) {
-  const target = targetPath ? findEntry(targetPath) : null
-  const destinationPath = target?.isDirectory ? target.path : target ? parentOf(target) : rootPath.value
+async function moveEntries(sources: WorkspaceEntry[], destinationPath: string) {
+  if (movingBusy.value) return
+  movingBusy.value = true
+  error.value = ''
+  let moved = 0
+  const failures: string[] = []
   try {
-    const newPath = await invoke<string>('paste_workspace_entry', { sourcePath: source.path, destinationPath, cut: true })
-    store.workspacePathChanged(source.path, newPath)
-    if (source.isDirectory) replaceExpandedPath(source.path, newPath)
-    notice.value = `已移动：${source.name}`
+    const target = findEntry(destinationPath)
+    for (const source of sources) {
+      if (!directoryDropTarget(source, target, rootPath.value)) continue
+      try {
+        const newPath = await invoke<string>('paste_workspace_entry', { sourcePath: source.path, destinationPath, cut: true })
+        store.workspacePathChanged(source.path, newPath)
+        if (source.isDirectory) replaceExpandedPath(source.path, newPath)
+        moved++
+      } catch (cause) { failures.push(`${source.name}：${String(cause)}`) }
+    }
     await refresh()
-  } catch (cause) { error.value = String(cause) }
+    notice.value = `已移动 ${moved} 项`
+    if (failures.length) error.value = failures.join('；')
+  } finally { movingBusy.value = false }
 }
-
-const holdMove = useLongPressMove<WorkspaceEntry>({ targetAttribute: 'data-workspace-path', onMove: moveEntry })
+const holdMove = useLongPressMove<WorkspaceEntry>({
+  targetAttribute: 'data-workspace-path', rootSelector: '.explorer',
+  getSources: source => {
+    if (!selection.selected.has(source.path)) selection.replace([source.path])
+    return topLevelEntries(allEntries.value.filter(entry => selection.selected.has(entry.path)))
+  },
+  resolveTarget: (source, path) => directoryDropTarget(source, path ? findEntry(path) : null, rootPath.value),
+  resolveTargets: (sources, path) => batchDirectoryDropTarget(sources, path ? findEntry(path) : null, rootPath.value),
+  onMove: (source, destination) => moveEntries([source], destination || rootPath.value),
+  onMoveMany: moveEntries,
+})
 
 async function copyText(value: string, message: string) {
   await navigator.clipboard.writeText(value)
@@ -206,22 +246,23 @@ onBeforeUnmount(() => {
 </script>
 
 <template>
-  <div class="explorer" @contextmenu.prevent="openContext(null, $event)">
+  <div class="explorer" @dragover.prevent="holdMove.nativeOver" @drop.prevent="holdMove.nativeDrop" @dragend="holdMove.cancel" @dragleave="holdMove.nativeLeave" @click.capture="holdMove.suppressEvent" @contextmenu.prevent="openContext(null, $event)">
     <div class="explorer__toolbar">
-      <strong>本地代码</strong>
+      <strong>本地代码</strong><button :aria-pressed="selectionMode" title="多选文件和文件夹" @click.stop="toggleSelectionMode">{{ selectionMode ? '完成' : '多选' }}</button>
       <button title="新建文件" @click.stop="openDialog('file', null)">📄＋</button>
       <button title="新建文件夹" @click.stop="openDialog('folder', null)">📁＋</button>
       <button title="刷新" :disabled="loading" @click.stop="refresh">↻</button>
     </div>
-    <div class="explorer__root" :title="rootPath">{{ rootPath || 'solutions' }}</div>
+    <div v-if="selectionMode" class="tree-selection-bar"><button :disabled="!selection.scope.length || movingBusy" @click="selection.toggleAll()">{{ selection.allSelected ? '取消全选' : '全选' }}</button><span>已选 {{ selection.selected.size }} 项</span><button :disabled="!selection.selected.size || movingBusy" @click="selection.clear()">清空</button></div>
+    <div :data-workspace-path="rootPath" :class="{ target: holdMove.targetPath.value === rootPath && !!rootPath }" class="explorer__root" :title="rootPath">{{ rootPath || 'solutions' }}</div>
     <div v-if="notice" class="explorer__notice">{{ notice }}</div>
     <div v-if="error" class="explorer__error">{{ error }}</div>
     <div v-if="loading && !entries.length" class="explorer__empty">正在读取本地文件…</div>
     <div v-else-if="!entries.length" class="explorer__empty">尚无本地代码。右键空白处即可新建。</div>
-    <div class="explorer__tree">
-      <ResourceTreeNode v-for="entry in entries" :key="entry.path" :entry="entry" :active-path="store.draftPath" :moving-path="holdMove.movingPath.value" :target-path="holdMove.targetPath.value" :expanded-paths="expandedPaths" @open="openEntry" @context="openContext" @hold="holdMove.begin" @toggle="setFolderExpanded" />
+    <div class="explorer__tree" data-directory-drop-area>
+      <ResourceTreeNode v-for="entry in entries" :key="entry.path" :entry="entry" :active-path="store.draftPath" :moving-path="holdMove.movingPath.value" :moving-paths="holdMove.movingPaths.value" :selected-paths="selection.selected" :selection-mode="selectionMode" :target-path="holdMove.targetPath.value" :expanded-paths="expandedPaths" @open="openEntry" @context="openContext" @select="(entry, event) => selectEntry(entry, event, true)" @hold="beginEntryMove" @drag="holdMove.startNative" @toggle="setFolderExpanded" />
     </div>
-    <div v-if="holdMove.movingPath.value" class="explorer__move-hint">移动到目标文件夹后松开</div>
+    <div v-if="holdMove.movingPath.value" class="explorer__move-hint">移动 {{ holdMove.movingCount.value }} 项到目标文件夹后松开</div>
 
     <div v-if="contextMenu" class="context-menu" :style="{ left: `${contextMenu.x}px`, top: `${contextMenu.y}px` }" @click.stop>
       <button v-if="contextMenu.entry && !contextMenu.entry.isDirectory" @click="openEntry(contextMenu.entry); contextMenu = null">打开</button>
@@ -266,4 +307,14 @@ onBeforeUnmount(() => {
 .explorer__empty { padding: 30px 12px; text-align: center; color: var(--color-text-disabled); font-size: 12px; }
 .context-menu { position: fixed; z-index: 1900; width: 220px; padding: 6px; border: 1px solid var(--color-border-strong); border-radius: 6px; background: var(--color-bg-panel); box-shadow: 0 8px 24px var(--color-overlay); font-family: var(--font-ui); button { display: block; width: 100%; min-height: 32px; padding: 7px 11px; border: 0; border-radius: 4px; background: transparent; color: var(--color-text-strong); text-align: left; font-size: 13px; cursor: pointer; span { display: block; overflow: hidden; color: var(--color-text-faint); font-size: 11px; text-overflow: ellipsis; white-space: nowrap; } &:hover:not(:disabled) { background: var(--color-tone-094771); color: var(--color-text-on-accent); } &:disabled { color: var(--color-text-disabled); cursor: default; } &.danger { color: var(--color-danger); &:hover { background: var(--color-tone-6b2525); color: var(--color-text-on-accent); } } } &__line { height: 1px; margin: 4px 6px; background: var(--color-border-control); } }
 .entry-dialog { position: fixed; inset: 0; z-index: 1950; display: flex; align-items: center; justify-content: center; background: var(--color-tone-0008); form { width: min(360px, 86vw); padding: 16px; border: 1px solid var(--color-border-strong); border-radius: 7px; background: var(--color-bg-panel); box-shadow: 0 15px 40px var(--color-overlay); } h3 { margin: 0 0 13px; font-size: 14px; } label { display: block; margin-bottom: 9px; color: var(--color-text-soft); font-size: 10px; } input, select { box-sizing: border-box; width: 100%; margin-top: 4px; padding: 7px; border: 1px solid var(--color-border-input); border-radius: 4px; outline: none; background: var(--color-bg-deep); color: var(--color-text-strong); &:focus { border-color: var(--color-accent); } } p { overflow-wrap: anywhere; color: var(--color-text-faint); font-size: 9px; line-height: 1.5; } &__actions { display: flex; justify-content: space-between; gap: 7px; margin-top: 14px; button { padding: 6px 13px; border: 0; border-radius: 4px; background: var(--color-border-control); color: var(--color-text-on-accent); cursor: pointer; &[type='submit'] { background: var(--color-accent-strong); } &.danger { background: var(--color-tone-9a3535); } &:disabled { opacity: .4; } } } .delete-warning { color: var(--color-tone-e6b1a8); font-size: 11px; } }
+</style>
+
+<style scoped>
+.explorer__root.target { background: var(--color-accent-surface-hover); box-shadow: inset 0 0 0 1px var(--color-accent); color: var(--color-accent-text); }
+</style>
+
+<style scoped>
+.tree-selection-bar { display: flex; align-items: center; gap: 6px; padding: 5px 9px; font-size: 11px; border-bottom: 1px solid var(--color-border); }
+.tree-selection-bar span { flex: 1; color: var(--color-text-muted); }
+.tree-selection-bar button { border: 0; border-radius: 3px; padding: 4px 6px; background: var(--color-bg-control); color: var(--color-text-secondary); cursor: pointer; }
 </style>

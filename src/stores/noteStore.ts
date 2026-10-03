@@ -133,6 +133,21 @@ export const useNoteStore = defineStore('notes', () => {
     return newPath
   }
 
+  async function moveEntries(paths: string[], destinationPath: string) {
+    await saveActive()
+    const moved: { source: string; target: string }[] = []
+    const failed: { path: string; error: string }[] = []
+    for (const path of paths) {
+      try {
+        const target = await invoke<string>('paste_note_entry', { sourcePath: path, destinationPath, cut: true })
+        replaceActivePath(path, target)
+        moved.push({ source: path, target })
+      } catch (cause) { failed.push({ path, error: String(cause) }) }
+    }
+    await refresh()
+    return { moved, failed }
+  }
+
   function closeActive() {
     saveActive().catch(() => undefined)
     activeNote.value = null
@@ -157,6 +172,7 @@ export const useNoteStore = defineStore('notes', () => {
     renameEntry,
     deleteEntry,
     pasteEntry,
+    moveEntries,
     closeActive,
   }
 })

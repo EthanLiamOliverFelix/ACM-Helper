@@ -536,27 +536,22 @@ pub async fn submit_luogu(
   function report(value) {{
     if (window.__acmLuoguReported) return;
     window.__acmLuoguReported=true;
-    new Image().src='http://127.0.0.1:'+port+'/result?'+encodeURIComponent(JSON.stringify(value));
+    clearTimeout(deadlineTimer);
+    var payload=JSON.stringify(value), attempts=0;
+    function deliver() {{
+      attempts++;
+      var image=new Image();
+      window.__acmLuoguCallbackImage=image;
+      image.src='http://127.0.0.1:'+port+'/result?'+encodeURIComponent(payload);
+      fetch('http://127.0.0.1:'+port+'/result',{{method:'POST',headers:{{'Content-Type':'text/plain'}},body:payload,keepalive:true}})
+        .catch(function(){{if(attempts<3)setTimeout(deliver,700);}});
+    }}
+    deliver();
   }}
   function readError(data) {{ return data && (data.errorMessage || data.message || (data.data && data.data.errorMessage)); }}
-  function values(value) {{ return Array.isArray(value)?value:Object.values(value||{{}}); }}
-  function concreteVerdict(record,status) {{
-    if (status!==14 && status!==22 && status!==23) return verdicts[status]||'UKE';
-    var detail=record.detail||{{}};
-    for (var depth=0;depth<3 && typeof detail==='string';depth++) {{ try {{detail=JSON.parse(detail);}} catch (_) {{detail={{}};break;}} }}
-    var judge=detail.judgeResult||detail.judge||record.judgeResult||{{}};
-    var subtasks=values(judge.subtasks);
-    for (var i=0;i<subtasks.length;i++) {{
-      var cases=values(subtasks[i].testCases||subtasks[i].cases);
-      for (var j=0;j<cases.length;j++) {{
-        var caseStatus=Number(cases[j].status);
-        if ([2,3,4,5,6,7,11].indexOf(caseStatus)>=0) return verdicts[caseStatus]||'UKE';
-      }}
-    }}
-    return verdicts[status]||'WA';
-  }}
   var rid=0, pollCount=0;
-  var verdicts={{0:'WJ',1:'Judging',2:'CE',3:'OLE',4:'MLE',5:'TLE',6:'WA',7:'RE',11:'UKE',12:'AC',14:'WA',21:'AC',22:'WA',23:'WA'}};
+  var reader=window.__acmLuoguRecord;
+  var deadlineTimer=setTimeout(function(){{report(rid?{{rid:rid,pending:true,message:'暂未捕获最终结果，正在重新查询记录'}}:{{error:'提交请求超时，请到洛谷确认是否已提交，避免重复提交'}});}},175000);
   async function captchaImage() {{
     var response=await fetch('/api/verify/captcha?_t='+Date.now(),{{credentials:'include',cache:'no-store'}});
     if (!response.ok) throw new Error('验证码 HTTP '+response.status);
@@ -579,31 +574,27 @@ pub async fn submit_luogu(
         if (String(error||'').indexOf('未登录')>=0 || response.status===401 || response.status===403) {{ report({{error:'洛谷会话未登录或已过期，请重新登录'}}); return; }}
         report({{error:'洛谷拒绝提交：'+(error||('HTTP '+response.status))}}); return;
       }}
-      rid=data.rid || (data.data && data.data.rid);
+      rid=Number(data.rid || (data.data && data.data.rid));
       if (!rid) {{ report({{error:'洛谷已响应，但未返回有效评测记录号'}}); return; }}
       setTimeout(pollRecord,700);
     }} catch(error) {{ report({{error:'洛谷提交请求失败：'+error.message}}); }}
   }}
   async function pollRecord() {{
+    if (window.__acmLuoguReported) return;
     pollCount++;
     try {{
-      var response=await fetch('/record/'+rid+'?_contentOnly=1&_t='+Date.now(),{{
-        credentials:'include',cache:'no-store',headers:{{'X-Requested-With':'XMLHttpRequest','x-lentille-request':'content-only'}}
-      }});
-      var body=await response.json().catch(function(){{return {{}}}});
-      var data=body.data || body.currentData || {{}};
-      var record=data.record || (data.data && data.data.record);
-      if (!response.ok || !record) {{
-        if (pollCount<110) {{setTimeout(pollRecord,1500);return;}}
-        report({{error:'无法读取洛谷评测记录 '+rid}});return;
+      var record=await reader.request(rid,pollCount%4===0);
+      if (!record) record=await reader.request(rid,true);
+      var verdict=record&&reader.verdict(record);
+      if (!verdict || verdict==='WJ' || verdict==='Judging') {{
+        if (pollCount<80) {{setTimeout(pollRecord,1500);return;}}
+        report({{rid:rid,pending:true,message:'评测结果暂未同步，正在重新查询记录'}});return;
       }}
-      var status=Number(record.status);
-      if ((status===0 || status===1) && pollCount<110) {{setTimeout(pollRecord,1500);return;}}
       // 洛谷记录接口的 memory 单位为 KiB；前端 Submission 统一使用字节。
-      report({{status:concreteVerdict(record,status),rid:rid,time:Number(record.time)||0,memory:(Number(record.memory)||0)*1024,score:Number(record.score)||0}});
+      report({{status:verdict,rid:rid,time:Number(record.time)||0,memory:(Number(record.memory)||0)*1024,score:record.score==null?undefined:Number(record.score)}});
     }} catch(error) {{
-      if (pollCount<110) {{setTimeout(pollRecord,1800);return;}}
-      report({{error:'轮询洛谷评测失败：'+error.message}});
+      if (pollCount<80) {{setTimeout(pollRecord,1800);return;}}
+      report({{rid:rid,pending:true,message:'轮询暂时失败，正在重新查询记录：'+error.message}});
     }}
   }}
   if (document.readyState==='loading') document.addEventListener('DOMContentLoaded',submit); else submit();
@@ -616,6 +607,7 @@ pub async fn submit_luogu(
         captcha_json = captcha_json,
         port = port
     );
+    let script = format!("{}\n{}", include_str!("luogu_record.js"), script);
     if let Some(window) = app.get_webview_window("luogu_submit") {
         let _ = window.destroy();
     }
@@ -639,11 +631,11 @@ pub async fn submit_luogu(
         tauri::async_runtime::spawn_blocking(move || rx.recv_timeout(Duration::from_secs(240)))
             .await
             .map_err(|e| format!("等待洛谷结果失败: {}", e))?
-            .map_err(|_| "洛谷提交或评测超时（240 秒），请到洛谷评测记录确认状态".to_string())?;
+            .map_err(|_| "洛谷提交或评测超时（240 秒），请到洛谷评测记录确认状态".to_string());
     if let Some(window) = app.get_webview_window("luogu_submit") {
         let _ = window.destroy();
     }
-    Ok(result)
+    result
 }
 
 fn validate_luogu_language_id(language: &str, language_id: u8) -> Result<(), String> {
@@ -689,21 +681,15 @@ pub async fn fetch_luogu_record_detail(app: AppHandle, rid: u64) -> Result<Strin
   async function read() {{
     attempts++;
     try {{
-      var response=await fetch('/record/'+expectedRid+'?_contentOnly=1&_t='+Date.now(),{{credentials:'include',cache:'no-store',headers:{{'X-Requested-With':'XMLHttpRequest','x-lentille-request':'content-only'}}}});
-      if (response.status===401 || response.status===403 || (response.redirected && /\/auth\//.test(response.url))) {{ report({{error:'洛谷会话未登录或已过期，请先在设置中登录'}}); return; }}
-      var root=await response.json().catch(function(){{return null;}});
-      if (!response.ok || !root) {{
-        if (attempts<8) {{ setTimeout(read,700); return; }}
-        report({{error:'洛谷记录接口返回异常（HTTP '+response.status+'）'}}); return;
-      }}
-      var data=root.currentData||(root.data&&root.data.currentData)||root.data||root;
-      var record=data.record||(data.data&&data.data.record);
+      var reader=window.__acmLuoguRecord;
+      var record=null;
+      try {{ record=await reader.request(expectedRid,false); }} catch(_) {{}}
+      if (!record) record=await reader.request(expectedRid,true);
       if (!record) {{
-        var message=root.errorMessage||root.message||(root.data&&root.data.errorMessage);
-        report({{error:message?String(message):'无法读取洛谷记录，记录可能无权访问'}}); return;
+        if (attempts<2) {{setTimeout(read,700);return;}}
+        report({{error:'无法读取洛谷记录，记录可能尚未同步或无权访问'}}); return;
       }}
-      var detail=record.detail||{{}};
-      for (var depth=0; depth<3 && typeof detail==='string'; depth++) {{ try {{ detail=JSON.parse(detail); }} catch (_) {{ detail={{}}; break; }} }}
+      var detail=reader.detail(record);
       var judge=detail.judgeResult||detail.judge||record.judgeResult||{{}};
       var subtasks=values(judge.subtasks).map(function(subtask, subtaskIndex) {{
         var cases=subtask.testCases||subtask.cases||{{}};
@@ -715,9 +701,9 @@ pub async fn fetch_luogu_record_detail(app: AppHandle, rid: u64) -> Result<Strin
           }})
         }};
       }});
-      var problem=record.problem||data.problem||{{}};
+      var problem=record.problem||{{}};
       var compile=detail.compileResult||detail.compile||null;
-      report({{recordId:num(record.id,expectedRid),problemId:String(problem.pid||record.pid||''),problemTitle:String(problem.name||record.problemName||''),status:num(record.status),score:record.score==null?undefined:num(record.score),submitTime:record.submitTime==null?undefined:num(record.submitTime)*1000,language:record.language,sourceCodeLength:record.sourceCodeLength==null?undefined:num(record.sourceCodeLength),timeMs:record.time==null?undefined:num(record.time),memoryBytes:record.memory==null?undefined:num(record.memory)*1024,compileSuccess:compile==null?undefined:!!compile.success,compileMessage:compile&&compile.message?String(compile.message):undefined,subtasks:subtasks}});
+      report({{recordId:num(record.id,expectedRid),problemId:String(problem.pid||record.pid||''),problemTitle:String(problem.name||record.problemName||''),status:num(reader.effectiveStatus(record)),verdict:reader.verdict(record),score:record.score==null?undefined:num(record.score),submitTime:record.submitTime==null?undefined:num(record.submitTime)*1000,language:record.language,sourceCodeLength:record.sourceCodeLength==null?undefined:num(record.sourceCodeLength),timeMs:record.time==null?undefined:num(record.time),memoryBytes:record.memory==null?undefined:num(record.memory)*1024,compileSuccess:compile==null||compile.success==null?undefined:!!compile.success,compileMessage:compile&&compile.message?String(compile.message):undefined,subtasks:subtasks}});
     }} catch(error) {{ report({{error:'解析洛谷记录失败：'+error.message}}); }}
   }}
   if (document.readyState==='loading') document.addEventListener('DOMContentLoaded',read); else read();
@@ -726,6 +712,7 @@ pub async fn fetch_luogu_record_detail(app: AppHandle, rid: u64) -> Result<Strin
         port = port,
         rid = rid
     );
+    let script = format!("{}\n{}", include_str!("luogu_record.js"), script);
     WebviewWindowBuilder::new(
         &app,
         "luogu_record_detail",

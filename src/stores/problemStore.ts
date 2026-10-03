@@ -11,6 +11,7 @@ import { getDataCenterValue, saveDataCenterValue } from '../dataCenter'
 import { withOjDiagnostic } from '../diagnostics'
 import { normalizeOutput } from '../utils/outputDiff'
 import { compareCodeforcesProblems } from '../utils/problemSort'
+import { isLuoguJudging, luoguSubmissionVerdicts as luoguVerdicts, resolveLuoguRecordVerdict } from '../utils/luoguSubmission'
 
 export const useProblemStore = defineStore('problem', () => {
   type CatalogCache = { version: 1; updatedAt: number; cf: Problem[]; luogu: Problem[]; atcoder?: Problem[]; luoguTotal: number; luoguPerPage: number; luoguTags: LuoguTag[] }
@@ -332,21 +333,20 @@ export const useProblemStore = defineStore('problem', () => {
     return Boolean(currentProblem.value && problemKey(currentProblem.value) === problemKey(problem))
   }
 
-  const luoguVerdicts: Record<string, Verdict> = {
-    AC: 'Accepted', WA: 'Wrong Answer', TLE: 'Time Limit Exceeded', RE: 'Runtime Error',
-    MLE: 'Memory Limit Exceeded', CE: 'Compilation Error', OLE: 'Failed', UKE: 'Failed',
-    IE: 'Failed', WJ: 'Pending', Judging: 'Running',
-  }
+  let luoguRecordQueue: Promise<unknown> = Promise.resolve()
 
-  function concreteLuoguRecordVerdict(detail: LuoguRecordDetail): Verdict | undefined {
-    const statusNames: Record<number, string> = { 2: 'CE', 3: 'OLE', 4: 'MLE', 5: 'TLE', 6: 'WA', 7: 'RE', 11: 'UKE' }
-    for (const subtask of detail.subtasks) {
-      for (const testCase of subtask.testCases) {
-        const verdict = luoguVerdicts[statusNames[testCase.status]]
-        if (verdict) return verdict
-      }
+  async function recoverLuoguSubmission(submission: Submission) {
+    let lastError = ''
+    for (let attempt = 0; attempt < 3; attempt++) {
+      try {
+        await fetchLuoguRecordDetail(submission)
+        if (!isLuoguJudging(submission.status)) return
+      } catch (reason) { lastError = String(reason) }
+      if (attempt < 2) await new Promise(resolve => setTimeout(resolve, 1500))
     }
-    return undefined
+    submission.status = 'Interrupted'
+    submission.message = `尚未确认最终结果，点击记录可重新查询洛谷 R${submission.remoteId}${lastError ? `：${lastError}` : ''}`
+    lastSubmitError.value = submission.message
   }
 
   // ── 筛选 & 翻页 ──
@@ -582,7 +582,7 @@ export const useProblemStore = defineStore('problem', () => {
   }
 
   async function submitLuogu() {
-    if (!currentProblem.value || currentProblem.value.platform !== 'luogu' || !currentCode.value.trim()) return
+    if (isSubmitting.value || !currentProblem.value || currentProblem.value.platform !== 'luogu' || !currentCode.value.trim()) return
     isSubmitting.value = true
     lastSubmitError.value = null
     const retryingCaptcha = Boolean(
@@ -607,6 +607,9 @@ export const useProblemStore = defineStore('problem', () => {
     if (!sub) {
       sub = { id: `SUB-${Date.now()}`, problemId: payload.problemId, platform: 'luogu', status: 'Pending', language: payload.language, timestamp: Date.now() }
       submissions.value.unshift(sub)
+      // Mutate the array's reactive proxy, not the raw object passed to unshift.
+      // Otherwise result updates can bypass watchers and leave Queue on screen.
+      sub = submissions.value[0]
     }
     isSubmitting.value = true
     lastSubmitError.value = null
@@ -632,16 +635,27 @@ export const useProblemStore = defineStore('problem', () => {
         isSubmitting.value = false
         return
       }
-      if (result.error) throw new Error(result.error)
+      sub.remoteId = Number(result.rid) || undefined
+      if (result.error && !sub.remoteId) throw new Error(result.error)
       // A successful submission is stronger evidence than the optional account
       // preflight, whose home-page selectors may lag behind Luogu UI changes.
       luoguLoggedIn.value = true
-      sub.status = luoguVerdicts[result.status] ?? 'Failed'
+      sub.status = result.pending || result.error ? 'Running' : (luoguVerdicts[result.status] ?? 'Failed')
       sub.message = undefined
       sub.timeMs = typeof result.time === 'number' ? result.time : undefined
       sub.memoryBytes = typeof result.memory === 'number' ? result.memory : undefined
-      sub.remoteId = typeof result.rid === 'number' ? result.rid : Number(result.rid) || undefined
       sub.score = typeof result.score === 'number' ? result.score : undefined
+      if (isLuoguJudging(sub.status)) {
+        if (sub.remoteId) {
+          sub.message = '正在重新查询洛谷评测结果…'
+          await persistSubmissions().catch(() => undefined)
+          await recoverLuoguSubmission(sub)
+        } else {
+          sub.status = 'Interrupted'
+          sub.message = '未取得评测记录号，请到洛谷确认提交结果'
+          lastSubmitError.value = sub.message
+        }
+      }
       luoguCaptchaImage.value = ''
       luoguCaptcha.value = ''
       luoguCaptchaProblemId.value = ''
@@ -778,8 +792,6 @@ export const useProblemStore = defineStore('problem', () => {
       }
     }
     activeView.value = 'workspace'
-    currentPlatform.value = problem.platform
-    clearFilters()
     await selectProblem(problem)
   }
 
@@ -1051,7 +1063,6 @@ export const useProblemStore = defineStore('problem', () => {
         url: fallbackUrl,
       }
       currentLanguage.value = file.language
-      currentPlatform.value = file.platform
       currentCode.value = await invoke<string>('read_workspace_file', { path: file.path })
       draftPath.value = file.path
       draftDirty.value = false
@@ -1536,13 +1547,30 @@ export const useProblemStore = defineStore('problem', () => {
       })
       await persistSubmissions().catch(() => undefined)
     }
-    const raw = await withOjDiagnostic('luogu', 'fetch-record-detail', () => invoke<string>('fetch_luogu_record_detail', { rid: submission.remoteId }))
+    // The backend uses one record-reader window. Serialize manual reads and
+    // automatic recovery so they cannot destroy each other's window.
+    const request = luoguRecordQueue.catch(() => undefined).then(() => withOjDiagnostic('luogu', 'fetch-record-detail', () => invoke<string>('fetch_luogu_record_detail', { rid: submission.remoteId })))
+    luoguRecordQueue = request
+    const raw = await request
     const detail = JSON.parse(raw) as LuoguRecordDetail & { error?: string }
     if (detail.error) throw new Error(detail.error)
-    const concreteVerdict = concreteLuoguRecordVerdict(detail)
-    if (concreteVerdict && submission.status !== concreteVerdict) {
+    if (Number(detail.recordId) !== submission.remoteId) throw new Error('返回的洛谷记录号不匹配，请重新查询')
+    const concreteVerdict = resolveLuoguRecordVerdict(detail)
+    if (concreteVerdict) {
+      const newlyAccepted = concreteVerdict === 'Accepted' && submission.status !== 'Accepted'
+      if (lastSubmitError.value === submission.message) lastSubmitError.value = null
       submission.status = concreteVerdict
+      submission.message = undefined
+      submission.score = detail.score ?? submission.score
+      submission.timeMs = detail.timeMs ?? submission.timeMs
+      submission.memoryBytes = detail.memoryBytes ?? submission.memoryBytes
       await persistSubmissions().catch(() => undefined)
+      if (newlyAccepted) {
+        const problem = [...problems.value, ...importedProblems.value, ...(currentProblem.value ? [currentProblem.value] : [])]
+          .find(problem => problem.platform === 'luogu' && problem.id === submission.problemId)
+        await useLearningStore().recordAccepted(`luogu:${submission.problemId}`, problem?.tags ?? [])
+          .catch(cause => { error.value = `评测结果已更新，但学习进度保存失败：${String(cause)}` })
+      }
     }
     return detail
   }

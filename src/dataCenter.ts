@@ -34,6 +34,7 @@ export type DataCenterKey =
   | 'ai-config'
   | 'practice-review'
   | 'problem-sets'
+  | 'problem-set-groups'
   | 'contest-favorites'
   | 'local-test-cases'
   | 'ui-layout'
@@ -49,6 +50,7 @@ const legacyKeys: Record<DataCenterKey, string> = {
   'ai-config': 'acm-helper-ai-config',
   'practice-review': 'acm-helper-practice-review-v1',
   'problem-sets': 'acm-helper-problem-sets-v1',
+  'problem-set-groups': 'acm-helper-problem-set-groups-v1',
   'contest-favorites': 'acm-helper-contest-favorites-v1',
   'local-test-cases': 'acm-helper-local-test-cases-v1',
   'ui-layout': 'acm-helper-layout',

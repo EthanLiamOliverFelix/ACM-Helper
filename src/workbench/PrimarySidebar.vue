@@ -12,10 +12,10 @@ const titles = { problems: '题库与题单', files: '资源管理器', learning
   <aside class="primary-sidebar">
     <header v-if="workbench.activity !== 'runner'"><strong>{{ titles[workbench.activity] }}</strong><button title="收起侧边栏" @click="workbench.toggleSidebar">×</button></header>
     <div class="primary-sidebar__content">
-      <ProblemList v-if="workbench.activity === 'problems'" :show-files="false" />
-      <ResourceExplorer v-else-if="workbench.activity === 'files'" />
+      <ProblemList v-show="workbench.activity === 'problems'" :show-files="false" />
+      <ResourceExplorer v-if="workbench.activity === 'files'" />
       <RunnerSidebar v-else-if="workbench.activity === 'runner'" />
-      <div v-else class="activity-summary">
+      <div v-else-if="workbench.activity !== 'problems'" class="activity-summary">
         <i class="codicon" :class="workbench.activity === 'learning' ? 'codicon-type-hierarchy' : workbench.activity === 'ai' ? 'codicon-sparkle' : 'codicon-notebook'" />
         <strong>{{ titles[workbench.activity] }}</strong>
         <p>完整功能已在编辑器标签中打开，可与代码并排使用。</p>

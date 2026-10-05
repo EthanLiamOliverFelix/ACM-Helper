@@ -531,8 +531,8 @@ export const useWorkbenchStore = defineStore('workbench', () => {
     source.tabs.splice(sourceIndex, 1)
     if (source.activeTabId === tabId) source.activeTabId = source.tabs[Math.min(sourceIndex, source.tabs.length - 1)]?.id ?? null
     if (edge === 'center' && targetIndex != null) {
-      let insertionIndex = Math.max(0, Math.min(target.tabs.length, targetIndex))
-      if (source === target && sourceIndex < targetIndex) insertionIndex--
+      const adjustedIndex = targetIndex - (source === target && sourceIndex < targetIndex ? 1 : 0)
+      const insertionIndex = Math.max(0, Math.min(target.tabs.length, adjustedIndex))
       target.tabs.splice(Math.max(0, insertionIndex), 0, tab)
       target.activeTabId = tab.id
       activeGroupId.value = target.id

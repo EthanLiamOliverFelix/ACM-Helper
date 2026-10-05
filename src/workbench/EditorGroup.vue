@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import { computed, defineAsyncComponent, ref, watch } from 'vue'
 import '@vscode/codicons/dist/codicon.css'
+import { useWorkbenchTabDrag } from '../composables/useWorkbenchTabDrag'
 import { useWorkbenchStore } from '../stores/workbenchStore'
 import { useProblemStore } from '../stores/problemStore'
 import WorkspaceMarkdownTab from './WorkspaceMarkdownTab.vue'
@@ -13,9 +14,15 @@ import ProblemNoteTab from './ProblemNoteTab.vue'
 const props = defineProps<{ groupId: string }>()
 const workbench = useWorkbenchStore()
 const problems = useProblemStore()
-const dropZone = ref<'center' | 'left' | 'right' | 'top' | 'bottom' | null>(null)
-const draggingTabId = ref('')
-const tabDrop = ref<{ tabId: string; side: 'before' | 'after' } | null>(null)
+const tabGesture = useWorkbenchTabDrag((source, target) => {
+  workbench.moveTab(source.groupId, source.tabId, target.groupId, target.edge, target.index)
+  const destination = workbench.groups.find(item => item.id === workbench.activeGroupId)
+  if (destination?.tabs.some(item => item.id === source.tabId)) void workbench.activateTab(destination.id, source.tabId)
+})
+const dropTarget = computed(() => tabGesture.drag.value?.target?.groupId === props.groupId ? tabGesture.drag.value.target : undefined)
+const dropZone = computed(() => dropTarget.value && !dropTarget.value.tabId ? dropTarget.value.edge : undefined)
+const draggingTabId = computed(() => tabGesture.drag.value?.source.groupId === props.groupId ? tabGesture.drag.value.source.tabId : '')
+const tabDrop = computed(() => dropTarget.value?.tabId ? dropTarget.value : undefined)
 const AiAssistant = defineAsyncComponent(() => import('../components/AiAssistant.vue'))
 const LearningPanel = defineAsyncComponent(() => import('../components/LearningPanel.vue'))
 const NoteManager = defineAsyncComponent(() => import('../components/NoteManager.vue'))
@@ -35,67 +42,19 @@ function isDirty(item: typeof group.value.tabs[number]) {
   const samePath = !item.context.path || item.context.path.toLowerCase() === problems.draftPath.toLowerCase()
   return sameProblem && samePath && item.context.language === problems.currentLanguage
 }
-function startTabDrag(event: DragEvent, tabId: string) {
-  draggingTabId.value = tabId
-  event.dataTransfer?.setData('application/x-acm-workbench-tab', JSON.stringify({ groupId: props.groupId, tabId }))
-  if (event.dataTransfer) event.dataTransfer.effectAllowed = 'move'
+function activateTab(tabId: string) {
+  if (!tabGesture.shouldSuppressClick()) void workbench.activateTab(props.groupId, tabId)
 }
-function finishTabDrag() {
-  draggingTabId.value = ''
-  tabDrop.value = null
-  dropZone.value = null
-}
-function updateTabDrop(event: DragEvent, tabId: string) {
-  const element = event.currentTarget as HTMLElement
-  const bounds = element.getBoundingClientRect()
-  tabDrop.value = { tabId, side: event.clientX < bounds.left + bounds.width / 2 ? 'before' : 'after' }
-  dropZone.value = null
-  if (event.dataTransfer) event.dataTransfer.dropEffect = 'move'
-  const strip = element.parentElement
-  if (strip && event.clientX < bounds.left + 24) strip.scrollLeft -= 14
-  else if (strip && event.clientX > bounds.right - 24) strip.scrollLeft += 14
-}
-function dropOnTab(event: DragEvent, index: number) {
-  const raw = event.dataTransfer?.getData('application/x-acm-workbench-tab')
-  const placement = tabDrop.value
-  finishTabDrag()
-  if (!raw || !placement) return
-  try {
-    const source = JSON.parse(raw) as { groupId: string; tabId: string }
-    workbench.moveTab(source.groupId, source.tabId, props.groupId, 'center', index + (placement.side === 'after' ? 1 : 0))
-  } catch { /* Ignore drags from outside the workbench. */ }
-}
-function updateDropZone(event: DragEvent) {
-  const bounds = (event.currentTarget as HTMLElement).getBoundingClientRect()
-  const localY = event.clientY - bounds.top
-  const x = (event.clientX - bounds.left) / bounds.width
-  const y = localY / bounds.height
-  const edge = .24
-  dropZone.value = localY <= 45 ? 'center' : x < edge ? 'left' : x > 1 - edge ? 'right' : y < edge ? 'top' : y > 1 - edge ? 'bottom' : 'center'
-  if (event.dataTransfer) event.dataTransfer.dropEffect = 'move'
-}
-function dropTab(event: DragEvent) {
-  const raw = event.dataTransfer?.getData('application/x-acm-workbench-tab')
-  const zone = dropZone.value
-  dropZone.value = null
-  if (!raw || !zone) return
-  try {
-    const source = JSON.parse(raw) as { groupId: string; tabId: string }
-    workbench.moveTab(source.groupId, source.tabId, props.groupId, zone)
-  } catch { /* Ignore drags from outside the workbench. */ }
-}
-function leaveDropZone(event: DragEvent) {
-  const current = event.currentTarget as HTMLElement
-  const next = event.relatedTarget as Node | null
-  if (!next || !current.contains(next)) dropZone.value = null
+function closeTab(tabId: string) {
+  if (!tabGesture.shouldSuppressClick()) workbench.closeTab(props.groupId, tabId)
 }
 </script>
 <template>
-  <section class="editor-group" :class="[{ active: workbench.activeGroupId === groupId }, dropZone ? `drop-${dropZone}` : '']" @pointerdown.capture="workbench.activeGroupId = groupId" @dragover.prevent="updateDropZone" @dragleave="leaveDropZone" @drop.prevent="dropTab">
+  <section class="editor-group" :data-editor-group="groupId" :class="[{ active: workbench.activeGroupId === groupId }, dropZone ? `drop-${dropZone}` : '']" @pointerdown.capture="workbench.activeGroupId = groupId">
     <div class="editor-tabs">
-      <button v-for="(item, index) in group.tabs" :key="item.id" class="editor-tab" :class="{ active: item.id === group.activeTabId, dirty: isDirty(item), dragging: item.id === draggingTabId, 'drop-before': tabDrop?.tabId === item.id && tabDrop.side === 'before', 'drop-after': tabDrop?.tabId === item.id && tabDrop.side === 'after' }" :title="item.title" draggable="true" @dragstart="startTabDrag($event, item.id)" @dragover.stop.prevent="updateTabDrop($event, item.id)" @drop.stop.prevent="dropOnTab($event, index)" @dragend="finishTabDrag" @click="workbench.activateTab(groupId, item.id)">
+      <button v-for="(item, index) in group.tabs" :key="item.id" class="editor-tab" :data-editor-tab="item.id" :data-tab-index="index" :class="{ active: item.id === group.activeTabId, dirty: isDirty(item), dragging: item.id === draggingTabId, 'drop-before': tabDrop?.tabId === item.id && tabDrop.side === 'before', 'drop-after': tabDrop?.tabId === item.id && tabDrop.side === 'after' }" :title="item.title" draggable="false" @dragstart.prevent @pointerdown="tabGesture.begin($event, groupId, item.id)" @click="activateTab(item.id)">
         <span class="codicon" :class="tabIcon(item)" aria-hidden="true" /><b>{{ item.title }}</b>
-        <i :title="isDirty(item) ? '尚未保存' : '关闭'" @click.stop="workbench.closeTab(groupId, item.id)">{{ isDirty(item) ? '●' : '×' }}</i>
+        <i data-tab-close :title="isDirty(item) ? '尚未保存' : '关闭'" @click.stop="closeTab(item.id)">{{ isDirty(item) ? '●' : '×' }}</i>
       </button>
       <div class="editor-tabs__spacer" />
       <button v-if="tab?.context" class="companion" title="在侧边打开题面" @click="workbench.openStatement">▤</button>
@@ -117,7 +76,7 @@ function leaveDropZone(event: DragEvent) {
   </section>
 </template>
 <style scoped lang="scss">
-.editor-group { position: relative; width: 100%; height: 100%; min-width: 0; min-height: 0; display: flex; flex-direction: column; border: 1px solid transparent; background: var(--color-bg-app); overflow: hidden; &.active { border-color: var(--color-border-control); } &__content { min-width: 0; min-height: 0; flex: 1; overflow: hidden; } }.editor-tabs { height: 39px; flex: 0 0 39px; display: flex; align-items: stretch; overflow-x: auto; overflow-y: hidden; border-bottom: 1px solid var(--color-border); background: var(--color-bg-deep); scrollbar-width: thin; scroll-behavior: smooth; &__spacer { flex: 1; } }.editor-tab { position: relative; min-width: 130px; max-width: 260px; display: flex; align-items: center; gap: 7px; padding: 0 9px; border: 0; border-right: 1px solid var(--color-border); background: var(--color-bg-panel-alt); color: var(--color-text-muted); cursor: grab; transition: opacity .12s ease, background-color .12s ease, transform .12s ease; &.active { background: var(--color-bg-app); color: var(--color-text-strong); box-shadow: inset 0 2px var(--color-accent); } &.dragging { opacity: .38; transform: scale(.98); } &.drop-before::before, &.drop-after::after { position: absolute; z-index: 3; top: 4px; bottom: 4px; width: 3px; border-radius: 2px; background: var(--color-accent); box-shadow: 0 0 8px color-mix(in srgb, var(--color-accent) 70%, transparent); content: ''; } &.drop-before::before { left: -2px; } &.drop-after::after { right: -2px; } &:active { cursor: grabbing; } span { color: var(--color-accent-text); } b { min-width: 0; flex: 1; overflow: hidden; font-size: 13px; font-weight: 500; text-overflow: ellipsis; white-space: nowrap; } i { flex: 0 0 auto; display: grid; place-items: center; width: 18px; height: 18px; border-radius: 4px; color: var(--color-text-faint); font-size: 15px; font-style: normal; &:hover { color: var(--color-text-strong); background: var(--color-bg-hover); } } &.dirty i { color: var(--color-text-soft); font-size: 10px; } }.companion { width: 38px; flex: 0 0 38px; border: 0; background: transparent; color: var(--color-text-soft); cursor: pointer; }.code-stack { height: 100%; min-height: 0; display: flex; flex-direction: column; &__editor { min-height: 0; flex: 1; } }.empty-group { height: 100%; display: grid; place-content: center; justify-items: center; color: var(--color-text-faint); text-align: center; strong { color: var(--color-text-secondary); font-size: 22px; } p { font-size: 13px; } div { display: flex; gap: 6px; } button { padding: 7px 11px; border: 1px solid var(--color-border-control); border-radius: 4px; background: var(--color-bg-panel); color: var(--color-text-soft); cursor: pointer; } }.tab-loading { height: 100%; display: grid; place-content: center; justify-items: center; gap: 9px; color: var(--color-text-faint); text-align: center; strong { color: var(--color-text-secondary); font-size: 14px; font-weight: 500; } span { max-width: 440px; font-size: 11px; } &__spinner { width: 24px; height: 24px; border: 2px solid var(--color-border-control); border-top-color: var(--color-accent); border-radius: 50%; animation: tab-loading-spin .8s linear infinite; } &__skeleton { width: min(420px, 60vw); display: grid; gap: 7px; margin-top: 9px; i { height: 7px; border-radius: 5px; background: linear-gradient(90deg, var(--color-bg-panel-alt), var(--color-bg-hover), var(--color-bg-panel-alt)); background-size: 200% 100%; animation: tab-loading-shimmer 1.3s ease-in-out infinite; &:nth-child(2) { width: 82%; } &:nth-child(3) { width: 92%; } &:nth-child(4) { width: 64%; } } } &--error strong { color: var(--color-danger); } }.drop-preview { position: absolute; z-index: 100; inset: 6px; pointer-events: none; border: 2px solid var(--color-accent); border-radius: 5px; background: color-mix(in srgb, var(--color-accent) 22%, transparent); span { position: absolute; top: 50%; left: 50%; translate: -50% -50%; padding: 5px 9px; border-radius: 4px; background: var(--color-accent-strong); color: white; font-size: 12px; } }.drop-left .drop-preview { right: 50%; }.drop-right .drop-preview { left: 50%; }.drop-top .drop-preview { bottom: 50%; }.drop-bottom .drop-preview { top: 50%; }.drop-center .drop-preview { inset: 38px 6px 6px; }
+.editor-group { position: relative; width: 100%; height: 100%; min-width: 0; min-height: 0; display: flex; flex-direction: column; border: 1px solid transparent; background: var(--color-bg-app); overflow: hidden; &.active { border-color: var(--color-border-control); } &__content { min-width: 0; min-height: 0; flex: 1; overflow: hidden; } }.editor-tabs { height: 39px; flex: 0 0 39px; display: flex; align-items: stretch; overflow-x: auto; overflow-y: hidden; border-bottom: 1px solid var(--color-border); background: var(--color-bg-deep); scrollbar-width: thin; scroll-behavior: smooth; &__spacer { flex: 1; } }.editor-tab { position: relative; min-width: 130px; max-width: 260px; display: flex; align-items: center; gap: 7px; padding: 0 9px; border: 0; border-right: 1px solid var(--color-border); background: var(--color-bg-panel-alt); color: var(--color-text-muted); cursor: grab; touch-action: none; user-select: none; transition: opacity .12s ease, background-color .12s ease, transform .12s ease; &.active { background: var(--color-bg-app); color: var(--color-text-strong); box-shadow: inset 0 2px var(--color-accent); } &.dragging { opacity: .38; transform: scale(.98); } &.drop-before::before, &.drop-after::after { position: absolute; z-index: 3; top: 4px; bottom: 4px; width: 3px; border-radius: 2px; background: var(--color-accent); box-shadow: 0 0 8px color-mix(in srgb, var(--color-accent) 70%, transparent); content: ''; } &.drop-before::before { left: -2px; } &.drop-after::after { right: -2px; } &:active { cursor: grabbing; } span { color: var(--color-accent-text); } b { min-width: 0; flex: 1; overflow: hidden; font-size: 13px; font-weight: 500; text-overflow: ellipsis; white-space: nowrap; } i { flex: 0 0 auto; display: grid; place-items: center; width: 18px; height: 18px; border-radius: 4px; color: var(--color-text-faint); font-size: 15px; font-style: normal; &:hover { color: var(--color-text-strong); background: var(--color-bg-hover); } } &.dirty i { color: var(--color-text-soft); font-size: 10px; } }.companion { width: 38px; flex: 0 0 38px; border: 0; background: transparent; color: var(--color-text-soft); cursor: pointer; }.code-stack { height: 100%; min-height: 0; display: flex; flex-direction: column; &__editor { min-height: 0; flex: 1; } }.empty-group { height: 100%; display: grid; place-content: center; justify-items: center; color: var(--color-text-faint); text-align: center; strong { color: var(--color-text-secondary); font-size: 22px; } p { font-size: 13px; } div { display: flex; gap: 6px; } button { padding: 7px 11px; border: 1px solid var(--color-border-control); border-radius: 4px; background: var(--color-bg-panel); color: var(--color-text-soft); cursor: pointer; } }.tab-loading { height: 100%; display: grid; place-content: center; justify-items: center; gap: 9px; color: var(--color-text-faint); text-align: center; strong { color: var(--color-text-secondary); font-size: 14px; font-weight: 500; } span { max-width: 440px; font-size: 11px; } &__spinner { width: 24px; height: 24px; border: 2px solid var(--color-border-control); border-top-color: var(--color-accent); border-radius: 50%; animation: tab-loading-spin .8s linear infinite; } &__skeleton { width: min(420px, 60vw); display: grid; gap: 7px; margin-top: 9px; i { height: 7px; border-radius: 5px; background: linear-gradient(90deg, var(--color-bg-panel-alt), var(--color-bg-hover), var(--color-bg-panel-alt)); background-size: 200% 100%; animation: tab-loading-shimmer 1.3s ease-in-out infinite; &:nth-child(2) { width: 82%; } &:nth-child(3) { width: 92%; } &:nth-child(4) { width: 64%; } } } &--error strong { color: var(--color-danger); } }.drop-preview { position: absolute; z-index: 100; inset: 6px; pointer-events: none; border: 2px solid var(--color-accent); border-radius: 5px; background: color-mix(in srgb, var(--color-accent) 22%, transparent); span { position: absolute; top: 50%; left: 50%; translate: -50% -50%; padding: 5px 9px; border-radius: 4px; background: var(--color-accent-strong); color: white; font-size: 12px; } }.drop-left .drop-preview { right: 50%; }.drop-right .drop-preview { left: 50%; }.drop-top .drop-preview { bottom: 50%; }.drop-bottom .drop-preview { top: 50%; }.drop-center .drop-preview { inset: 38px 6px 6px; }
 @keyframes tab-loading-spin { to { rotate: 360deg; } }
 @keyframes tab-loading-shimmer { from { background-position: 100% 0; } to { background-position: -100% 0; } }
 </style>

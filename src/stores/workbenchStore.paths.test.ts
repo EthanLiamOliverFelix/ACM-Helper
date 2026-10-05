@@ -25,3 +25,27 @@ describe('workspace tab paths', () => {
     expect(store.groups[0].tabs[0].title).toBe('a.cpp')
   })
 })
+
+
+describe('tab sorting', () => {
+  it('moves the first tab all the way to the end and back to the beginning', () => {
+    const store = useWorkbenchStore()
+    const group = store.groups[0]!
+    group.tabs = ['a', 'b', 'c', 'd'].map(id => ({ id, kind: 'text', title: id, path: `F:/${id}.txt` }))
+    group.activeTabId = 'a'
+    store.moveTab(group.id, 'a', group.id, 'center', 4)
+    expect(group.tabs.map(tab => tab.id)).toEqual(['b', 'c', 'd', 'a'])
+    expect(group.activeTabId).toBe('a')
+    store.moveTab(group.id, 'a', group.id, 'center', 0)
+    expect(group.tabs.map(tab => tab.id)).toEqual(['a', 'b', 'c', 'd'])
+  })
+  it('keeps the same position when dropped on either half of itself', () => {
+    const store = useWorkbenchStore()
+    const group = store.groups[0]!
+    group.tabs = ['a', 'b', 'c'].map(id => ({ id, kind: 'text', title: id }))
+    store.moveTab(group.id, 'b', group.id, 'center', 1)
+    expect(group.tabs.map(tab => tab.id)).toEqual(['a', 'b', 'c'])
+    store.moveTab(group.id, 'b', group.id, 'center', 2)
+    expect(group.tabs.map(tab => tab.id)).toEqual(['a', 'b', 'c'])
+  })
+})

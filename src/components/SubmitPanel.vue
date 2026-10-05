@@ -115,21 +115,22 @@ function formatMem(bytes?: number): string {
     <section v-if="!submissionOnly" class="submit-pane submit-pane--runner" :style="{ height: `${runnerHeight}px` }"><div class="runner">
       <div class="runner__heading">
         <div class="runner__heading-title">
-          <span>本地测试 · {{ store.testCases.length }} 组</span>
+          <span>{{ store.isLoadingTests ? '测试点加载中…' : `本地测试 · ${store.testCases.length} 组` }}</span>
           <span
             v-if="store.allTestRunSummary"
             class="all-tests-status"
             :class="`all-tests-status--${store.allTestRunSummary.status}`"
           >{{ store.allTestRunSummary.text }}</span>
         </div>
-        <button class="runner__add" title="新建一组空测试数据" @click="store.addTestCase()">＋ 新建</button>
+        <button class="runner__add" :disabled="store.isLoadingTests" title="新建一组空测试数据" @click="store.addTestCase()">＋ 新建</button>
       </div>
       <div class="runner__toolbar">
-        <button class="run-btn" :disabled="store.isRunning || !store.currentCode.trim() || !store.testCases.length" @click="store.runAllTestCases">
+        <button class="run-btn" :disabled="store.isLoadingTests || store.isRunning || !store.currentCode.trim() || !store.testCases.length" @click="store.runAllTestCases">
           {{ store.isRunning ? '运行中…' : '▶ 运行全部' }}
         </button>
       </div>
-      <div class="runner__cases">
+      <div v-if="store.isLoadingTests" class="runner__cases" role="status">正在加载测试点…</div>
+      <div v-else class="runner__cases">
         <section
           v-for="(test, index) in store.testCases"
           :key="test.id"

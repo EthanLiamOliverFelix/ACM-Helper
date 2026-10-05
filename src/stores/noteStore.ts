@@ -1,10 +1,28 @@
 import { ref } from 'vue'
+import { getDataCenterValue, saveDataCenterValue } from '../dataCenter'
+import { orderNotes, reorderNotes, notePathKey, type NoteOrder } from '../utils/noteOrder'
 import { defineStore } from 'pinia'
 import { invoke } from '@tauri-apps/api/core'
 import type { NoteDocument, NoteEntry, Problem } from '../types'
 
 export const useNoteStore = defineStore('notes', () => {
   const entries = ref<NoteEntry[]>([])
+  const order = getDataCenterValue<NoteOrder>('note-tree-order', {})
+  function applyOrder() {
+    entries.value = orderNotes(entries.value, order, rootPath.value)
+    void saveDataCenterValue('note-tree-order', order).catch(cause => { error.value = `保存笔记顺序失败：${String(cause)}` })
+  }
+  function reorder(paths: string[], target: string) { if (reorderNotes(order, paths, target)) applyOrder() }
+  function shift(path: string, direction: -1 | 1) {
+    const key = notePathKey(path)
+    const siblings = Object.values(order).find(paths => paths.includes(key))
+    if (!siblings) return
+    const index = siblings.indexOf(key)
+    const next = index + direction
+    if (next < 0 || next >= siblings.length) return
+    ;[siblings[index], siblings[next]] = [siblings[next]!, siblings[index]!]
+    applyOrder()
+  }
   const rootPath = ref('')
   const activeNote = ref<NoteDocument | null>(null)
   const loading = ref(false)
@@ -26,6 +44,7 @@ export const useNoteStore = defineStore('notes', () => {
         invoke<NoteEntry[]>('list_note_entries'),
         invoke<string>('notes_root_path'),
       ])
+      applyOrder()
     } catch (cause) { error.value = String(cause) }
     finally { loading.value = false }
   }
@@ -97,6 +116,11 @@ export const useNoteStore = defineStore('notes', () => {
   }
 
   function replaceActivePath(oldPath: string, newPath: string) {
+    const old = notePathKey(oldPath)
+    const remap = (path: string) => path === old || path.startsWith(`${old}/`) ? `${notePathKey(newPath)}${path.slice(old.length)}` : path
+    const updated = Object.fromEntries(Object.entries(order).map(([parent, paths]) => [remap(parent), paths.map(remap)]))
+    for (const key of Object.keys(order)) delete order[key]
+    Object.assign(order, updated)
     if (!activeNote.value) return
     const active = activeNote.value.path.toLowerCase()
     const source = oldPath.toLowerCase()
@@ -156,6 +180,8 @@ export const useNoteStore = defineStore('notes', () => {
 
   return {
     entries,
+    reorder,
+    shift,
     rootPath,
     activeNote,
     loading,

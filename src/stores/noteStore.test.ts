@@ -4,6 +4,7 @@ import { useNoteStore } from './noteStore'
 
 const invoke = vi.hoisted(() => vi.fn())
 vi.mock('@tauri-apps/api/core', () => ({ invoke }))
+vi.mock('../dataCenter', () => ({ getDataCenterValue: (_key: string, fallback: unknown) => fallback, saveDataCenterValue: vi.fn(async () => {}) }))
 
 beforeEach(() => {
   setActivePinia(createPinia())

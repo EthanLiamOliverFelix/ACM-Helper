@@ -1,6 +1,7 @@
 import { defineStore } from 'pinia'
+import { afterPaint, waitForPaint } from '../utils/afterPaint'
 import { qojProblemUrl } from '../utils/qoj'
-import { ref, computed } from 'vue'
+import { ref, computed, onScopeDispose } from 'vue'
 import { invoke } from '@tauri-apps/api/core'
 import { listen } from '@tauri-apps/api/event'
 import type { Problem, Language, Platform, Submission, Verdict, RunResult, DebugResult, DebugSessionState, ToolchainInfo, DraftFileInfo, LuoguProblemPage, LuoguTag, LocalTestCase, LuoguRecordDetail, QojArchivePage, QojArchiveEntry, QojArchiveProblem } from '../types'
@@ -71,6 +72,12 @@ export const useProblemStore = defineStore('problem', () => {
   const toolchains = ref<ToolchainInfo[]>([])
   const runInput = ref('')
   const testCases = ref<LocalTestCase[]>([])
+  const isLoadingTests = ref(false)
+  const isPreparingStatement = ref(false)
+  let testsReady = true
+  let secondarySequence = 0
+  let cancelSecondary: (() => void) | undefined
+  onScopeDispose(() => cancelSecondary?.())
   const allTestRunSummary = ref<null | { status: 'running' | 'passed' | 'failed'; text: string }>(null)
   const activeTestCaseId = ref('')
   const draftPath = ref('')
@@ -96,6 +103,80 @@ export const useProblemStore = defineStore('problem', () => {
   // 切题、打开本地文件和切换语言都涉及“保存旧草稿 → 更换标识 →
   // 读取新草稿”。串行执行可避免快速点击时较慢的旧读取覆盖新题代码。
   let workspaceTransition: Promise<void> = Promise.resolve()
+  let workspaceTransitionCount = 0
+  type CachedWorkspace = {
+    problem: Problem; code: string; language: Language; path: string; dirty: boolean;
+    status: typeof draftSaveStatus.value; statement: string; tests: LocalTestCase[];
+    activeTest: string; input: string; result: RunResult | null; debug: DebugResult | null; breakpoints: number[];
+    summary: typeof allTestRunSummary.value;
+    testsReady: boolean;
+  }
+  const workspaceBuffers = new Map<string, CachedWorkspace>()
+  const workspaceSaves = new Map<string, Promise<void>>()
+  const normalizeWorkspacePath = (path: string) => path.replace(/\\/g, '/').toLowerCase()
+  function workspaceBufferKey(platform: Platform, id: string, language: Language, path = '') {
+    return path ? `file:${normalizeWorkspacePath(path)}:${language}` : `problem:${platform}:${id.toUpperCase()}:${language}`
+  }
+  function captureWorkspace() {
+    if (!currentProblem.value) return
+    const state: CachedWorkspace = {
+      problem: currentProblem.value, code: currentCode.value, language: currentLanguage.value,
+      path: draftPath.value, dirty: draftDirty.value, status: draftSaveStatus.value,
+      statement: localStatement.value, tests: testCases.value, activeTest: activeTestCaseId.value,
+      input: runInput.value, result: runResult.value, debug: debugResult.value, breakpoints: breakpoints.value,
+      summary: allTestRunSummary.value,
+      testsReady,
+    }
+    workspaceBuffers.set(workspaceBufferKey(state.problem.platform, state.problem.id, state.language, state.path), state)
+    workspaceBuffers.set(workspaceBufferKey(state.problem.platform, state.problem.id, state.language), state)
+    return state
+  }
+  function tryActivateCachedWorkspace(context: { platform: Platform; problemId: string; language: Language; path?: string }) {
+    if (workspaceTransitionCount || debugSession.value?.sessionId || isRunning.value || isDebugging.value) return false
+    if (currentProblem.value?.platform === context.platform && currentProblem.value.id === context.problemId
+      && currentLanguage.value === context.language && (!context.path || normalizeWorkspacePath(draftPath.value) === normalizeWorkspacePath(context.path))) return true
+    const state = workspaceBuffers.get(workspaceBufferKey(context.platform, context.problemId, context.language, context.path))
+    if (!state) return false
+    if (saveTimer) clearTimeout(saveTimer)
+    captureWorkspace()
+    // persistDraft captures the source identity before its first await.
+    void persistDraft(true).catch(e => { error.value = String(e) })
+    currentProblem.value = state.problem
+    prepareWorkspaceDetails(state.testsReady)
+    currentCode.value = state.code
+    currentLanguage.value = state.language
+    draftPath.value = state.path
+    draftDirty.value = state.dirty
+    draftSaveStatus.value = state.status
+    localStatement.value = state.statement
+    testCases.value = state.tests
+    activeTestCaseId.value = state.activeTest
+    runInput.value = state.input
+    runResult.value = state.result
+    debugResult.value = state.debug
+    breakpoints.value = state.breakpoints
+    allTestRunSummary.value = state.summary
+    scheduleWorkspaceDetails(state.problem)
+    // Check clean buffers against disk after painting, without delaying navigation.
+    if (state.path && !state.dirty) {
+      const expected = state.code
+      const path = state.path
+      const key = workspaceBufferKey(state.problem.platform, state.problem.id, state.language, path)
+      afterPaint(() => {
+        const before = workspaceBuffers.get(key)
+        if (!before || before.dirty || before.path !== path || before.code !== expected) return
+        void invoke<string>('read_workspace_file', { path }).then(code => {
+        const latest = workspaceBuffers.get(key)
+        if (!latest || latest.path !== path || latest.dirty || latest.code !== expected) return
+        const active = normalizeWorkspacePath(draftPath.value) === normalizeWorkspacePath(latest.path) && currentLanguage.value === latest.language
+        if (active && (draftDirty.value || currentCode.value !== expected)) return
+        latest.code = code
+        if (active) currentCode.value = code
+        }).catch(e => { error.value = String(e) })
+      })
+    }
+    return true
+  }
   let catalogCache = getDataCenterValue<CatalogCache | null>('problem-catalog', null)
   const savedQojArchiveCache = getDataCenterValue<QojArchiveCache | null>('qoj-archive', null)
   let qojArchiveCache: QojArchiveCache = savedQojArchiveCache?.version === 3 ? savedQojArchiveCache : { version: 3, pages: {} }
@@ -252,6 +333,49 @@ export const useProblemStore = defineStore('problem', () => {
     activeTestCaseId.value = testCases.value[0]?.id ?? ''
     runInput.value = testCases.value[0]?.input ?? ''
     allTestRunSummary.value = null
+    testsReady = true
+  }
+
+  // Keep code navigation separate from test restoration and remote statements.
+  function prepareWorkspaceDetails(ready = false) {
+    cancelSecondary?.()
+    secondarySequence++
+    testsReady = ready
+    isLoadingTests.value = true
+    isPreparingStatement.value = true
+  }
+
+  function failWorkspaceDetails(cause: unknown): never {
+    cancelSecondary?.()
+    secondarySequence++
+    isLoadingTests.value = false
+    isPreparingStatement.value = false
+    error.value = String(cause)
+    throw cause
+  }
+
+  function scheduleWorkspaceDetails(problem: Problem) {
+    const sequence = secondarySequence
+    const path = draftPath.value
+    const language = currentLanguage.value
+    const stillCurrent = () => sequence === secondarySequence && isCurrentProblem(problem)
+      && draftPath.value === path && currentLanguage.value === language
+    cancelSecondary = afterPaint(() => {
+      if (!stillCurrent()) return
+      if (!testsReady) loadTestCases(problem)
+      isLoadingTests.value = false
+      isPreparingStatement.value = false
+      captureWorkspace()
+      const hadSamples = Boolean(problem.samples?.length)
+      const hasSavedTests = Object.prototype.hasOwnProperty.call(readStoredTestCases(), testStorageKey(problem))
+      const activeProblem = currentProblem.value!
+      void fetchProblemDetail(activeProblem).then(() => {
+        if (!stillCurrent() || hadSamples || hasSavedTests || !activeProblem.samples?.length) return
+        const untouched = testCases.value.length === 1 && !testCases.value[0].input
+          && !testCases.value[0].expectedOutput && testCases.value[0].status === 'idle'
+        if (untouched) { loadTestCases(activeProblem, true); captureWorkspace() }
+      })
+    })
   }
 
   function addTestCase(input = '', expectedOutput = '') {
@@ -310,7 +434,8 @@ export const useProblemStore = defineStore('problem', () => {
   }
 
   function queueWorkspaceTransition(operation: () => Promise<void>) {
-    const next = workspaceTransition.then(operation, operation)
+    workspaceTransitionCount++
+    const next = workspaceTransition.then(operation, operation).finally(() => { workspaceTransitionCount-- })
     workspaceTransition = next.catch(() => undefined)
     return next
   }
@@ -999,27 +1124,46 @@ export const useProblemStore = defineStore('problem', () => {
     draftSaveStatus.value = draft ? 'saved' : 'template'
   }
 
-  async function persistDraft() {
-    // 只查看题目或运行未经修改的默认模板时不创建本地文件。
+  async function persistDraft(deferUntilPaint = false) {
     if (!currentProblem.value || !draftDirty.value) return
+    const problem = currentProblem.value
+    const language = currentLanguage.value
+    const code = currentCode.value
+    const originalPath = draftPath.value
+    const state = captureWorkspace()!
+    const key = workspaceBufferKey(problem.platform, problem.id, language, originalPath)
+    const previous = workspaceSaves.get(key)
+    let finish!: () => void
+    const pending = new Promise<void>(resolve => { finish = resolve })
+    workspaceSaves.set(key, pending)
+    const stillCurrent = () => currentProblem.value === problem && currentLanguage.value === language
+      && normalizeWorkspacePath(draftPath.value) === normalizeWorkspacePath(originalPath)
     draftSaveStatus.value = 'saving'
     try {
-      if (draftPath.value) {
-        await invoke('save_workspace_file', { path: draftPath.value, code: currentCode.value })
-      } else {
-        draftPath.value = await invoke<string>('save_draft', {
-          platform: currentProblem.value.platform,
-          problemId: currentProblem.value.id,
-          problemTitle: currentProblem.value.title,
-          language: currentLanguage.value,
-          code: currentCode.value,
-        })
+      if (deferUntilPaint && typeof requestAnimationFrame === 'function') await waitForPaint()
+      if (previous) await previous
+      let path = originalPath
+      if (path) await invoke('save_workspace_file', { path, code })
+      else path = await invoke<string>('save_draft', {
+        platform: problem.platform, problemId: problem.id, problemTitle: problem.title, language, code,
+      })
+      const latest = workspaceBuffers.get(workspaceBufferKey(problem.platform, problem.id, language, originalPath)) ?? state
+      latest.path = path
+      if (latest.code === code) { latest.dirty = false; latest.status = 'saved' }
+      workspaceBuffers.set(workspaceBufferKey(problem.platform, problem.id, language, path), latest)
+      if (stillCurrent()) {
+        draftPath.value = path
+        if (currentCode.value === code) { draftDirty.value = false; draftSaveStatus.value = 'saved' }
       }
-      draftDirty.value = false
-      draftSaveStatus.value = 'saved'
     } catch (e) {
-      draftSaveStatus.value = 'error'
+      state.status = 'error'
+      const latest = workspaceBuffers.get(key)
+      if (latest) latest.status = 'error'
+      if (stillCurrent()) draftSaveStatus.value = 'error'
       throw e
+    } finally {
+      finish()
+      if (workspaceSaves.get(key) === pending) workspaceSaves.delete(key)
     }
   }
 
@@ -1030,10 +1174,11 @@ export const useProblemStore = defineStore('problem', () => {
 
   async function openDraftFile(file: DraftFileInfo) {
     if (debugSession.value?.sessionId) await stopDebugSession()
-    let detailProblem: Problem | null = null
     await queueWorkspaceTransition(async () => {
       if (saveTimer) clearTimeout(saveTimer)
-      if (currentProblem.value) await persistDraft().catch(() => undefined)
+      if (currentProblem.value) void persistDraft(true).catch(e => { error.value = String(e) })
+      captureWorkspace()
+      prepareWorkspaceDetails()
       const boundProblem = [...problems.value, ...importedProblems.value]
         .find((item) => item.platform === file.platform && item.id === file.problemId)
       const fallbackUrl = file.platform === 'codeforces'
@@ -1061,21 +1206,22 @@ export const useProblemStore = defineStore('problem', () => {
         url: fallbackUrl,
       }
       currentLanguage.value = file.language
-      currentCode.value = await invoke<string>('read_workspace_file', { path: file.path })
+      const pendingSave = workspaceSaves.get(workspaceBufferKey(file.platform, file.problemId, file.language, file.path))
+      if (pendingSave) await pendingSave
+      currentCode.value = await invoke<string>('read_workspace_file', { path: file.path }).catch(failWorkspaceDetails)
       draftPath.value = file.path
       draftDirty.value = false
       runResult.value = null
       debugResult.value = null
       breakpoints.value = []
       draftSaveStatus.value = 'saved'
-      if (!boundProblem && !file.unbound) {
-        detailProblem = currentProblem.value
-      }
-      loadTestCases(currentProblem.value)
+      testCases.value = []
+      activeTestCaseId.value = ''
+      runInput.value = ''
+      allTestRunSummary.value = null
+      captureWorkspace()
+      scheduleWorkspaceDetails(currentProblem.value)
     })
-    // Restoring remote metadata must not keep the code workspace locked. The
-    // statement updates in place when its independent request completes.
-    if (detailProblem) void fetchProblemDetail(detailProblem)
   }
 
   async function createEmptyDraft(name: string, language: Language) {
@@ -1104,6 +1250,15 @@ export const useProblemStore = defineStore('problem', () => {
   }
 
   function workspacePathChanged(oldPath: string, newPath: string) {
+    const old = normalizeWorkspacePath(oldPath)
+    for (const [key, state] of [...workspaceBuffers]) {
+      const path = normalizeWorkspacePath(state.path)
+      if (path !== old && !path.startsWith(`${old}/`)) continue
+      workspaceBuffers.delete(key)
+      if (path === old || path.startsWith(`${old}/`)) state.path = `${newPath}${state.path.slice(oldPath.length)}`
+      workspaceBuffers.set(workspaceBufferKey(state.problem.platform, state.problem.id, state.language, state.path), state)
+      workspaceBuffers.set(workspaceBufferKey(state.problem.platform, state.problem.id, state.language), state)
+    }
     if (!draftPath.value) return
     const oldNormalized = oldPath.replace(/\\/g, '/').toLowerCase()
     const currentNormalized = draftPath.value.replace(/\\/g, '/').toLowerCase()
@@ -1119,6 +1274,11 @@ export const useProblemStore = defineStore('problem', () => {
   }
 
   async function workspacePathDeleted(path: string) {
+    const removed = normalizeWorkspacePath(path)
+    for (const [key, state] of workspaceBuffers) {
+      const cached = normalizeWorkspacePath(state.path)
+      if (cached === removed || cached.startsWith(`${removed}/`)) workspaceBuffers.delete(key)
+    }
     if (!draftPath.value) return
     const deleted = path.replace(/\\/g, '/').toLowerCase()
     const current = draftPath.value.replace(/\\/g, '/').toLowerCase()
@@ -1191,36 +1351,32 @@ export const useProblemStore = defineStore('problem', () => {
   }
 
   async function selectProblem(problem: Problem, options: { waitForDetail?: boolean } = {}) {
+    if (options.waitForDetail === false && tryActivateCachedWorkspace({ platform: problem.platform, problemId: problem.id, language: currentLanguage.value })) return
     if (debugSession.value?.sessionId) await stopDebugSession()
     await queueWorkspaceTransition(async () => {
       if (saveTimer) clearTimeout(saveTimer)
-      if (currentProblem.value) await persistDraft().catch(() => undefined)
+      if (currentProblem.value) void persistDraft(true).catch(e => { error.value = String(e) })
+      captureWorkspace()
+      prepareWorkspaceDetails()
       currentProblem.value = problem
       runResult.value = null
       debugResult.value = null
       breakpoints.value = []
       testCases.value = []
       activeTestCaseId.value = ''
-      await loadCurrentDraft()
-      loadTestCases(problem)
+      runInput.value = ''
+      allTestRunSummary.value = null
+      await loadCurrentDraft().catch(failWorkspaceDetails)
+      if (options.waitForDetail !== false) {
+        loadTestCases(problem)
+        isLoadingTests.value = false
+        isPreparingStatement.value = false
+      }
+      captureWorkspace()
+      if (options.waitForDetail === false) scheduleWorkspaceDetails(problem)
     })
-    const hadSamples = Boolean(problem.samples?.length)
-    const hasSavedTests = Object.prototype.hasOwnProperty.call(readStoredTestCases(), testStorageKey(problem))
-    const detailPromise = fetchProblemDetail(problem)
-    if (options.waitForDetail === false) {
-      void detailPromise.then(() => {
-        // Populate samples that arrived with the background statement only if
-        // the untouched empty test case is still visible for this problem.
-        if (hadSamples || hasSavedTests || !isCurrentProblem(problem) || !problem.samples?.length) return
-        const untouched = testCases.value.length === 1
-          && !testCases.value[0].input
-          && !testCases.value[0].expectedOutput
-          && testCases.value[0].status === 'idle'
-        if (untouched) loadTestCases(problem, true)
-      })
-      return
-    }
-    await detailPromise
+    if (options.waitForDetail === false) return
+    await fetchProblemDetail(problem)
     if (isCurrentProblem(problem)) loadTestCases(problem)
   }
 
@@ -1229,6 +1385,7 @@ export const useProblemStore = defineStore('problem', () => {
     currentCode.value = code
     draftDirty.value = true
     draftSaveStatus.value = 'saving'
+    captureWorkspace()
     if (saveTimer) clearTimeout(saveTimer)
     saveTimer = setTimeout(() => persistDraft().catch((e) => { error.value = String(e) }), 500)
   }
@@ -1244,11 +1401,14 @@ export const useProblemStore = defineStore('problem', () => {
       if (lang === currentLanguage.value) return
       if (saveTimer) clearTimeout(saveTimer)
       await persistDraft().catch(() => undefined)
+      captureWorkspace()
+      prepareWorkspaceDetails(testsReady)
       currentLanguage.value = lang
       runResult.value = null
       debugResult.value = null
       breakpoints.value = []
       await loadCurrentDraft()
+      scheduleWorkspaceDetails(currentProblem.value!)
     })
   }
 
@@ -1592,6 +1752,8 @@ export const useProblemStore = defineStore('problem', () => {
     isLoading,
     isSubmitting,
     isLoadingDetail,
+    isLoadingTests,
+    isPreparingStatement,
     isRunning,
     runResult,
     debugResult,
@@ -1701,6 +1863,7 @@ export const useProblemStore = defineStore('problem', () => {
     openDraftFile,
     createEmptyDraft,
     saveLocalStatement,
+    tryActivateCachedWorkspace,
     workspacePathChanged,
     workspacePathDeleted,
     submitCode,

@@ -9,7 +9,7 @@ const items: Array<{ id: ActivityId; icon: string; label: string }> = [
   { id: 'learning', icon: 'codicon-type-hierarchy', label: '技能树与 VP' },
   { id: 'ai', icon: 'codicon-sparkle', label: 'AI 辅助' },
   { id: 'runner', icon: 'codicon-run-all', label: '评测、提交与调试' },
-  { id: 'notes', icon: 'codicon-notebook', label: '算法笔记' },
+  { id: 'notes', icon: 'codicon-book', label: '算法笔记' },
 ]
 </script>
 

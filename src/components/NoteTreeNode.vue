@@ -3,7 +3,7 @@ import { computed } from 'vue'
 import type { NoteEntry } from '../types'
 
 defineOptions({ name: 'NoteTreeNode' })
-const props = defineProps<{ entry: NoteEntry; activePath?: string; movingPath?: string; targetPath?: string; expandedPaths?: Set<string>; selectedPaths?: Set<string>; selectionMode?: boolean; movingPaths?: Set<string> }>()
+const props = defineProps<{ entry: NoteEntry; createParent?: string; activePath?: string; movingPath?: string; targetPath?: string; expandedPaths?: Set<string>; selectedPaths?: Set<string>; selectionMode?: boolean; movingPaths?: Set<string> }>()
 const expanded = computed(() => props.expandedPaths?.has(props.entry.path) ?? true)
 const emit = defineEmits<{
   open: [entry: NoteEntry, event: MouseEvent]
@@ -23,20 +23,21 @@ function reportToggle(event: Event) { emit('toggle', props.entry.path, (event.cu
       :class="{ selected: selectedPaths?.has(entry.path), moving: movingPaths?.has(entry.path) || movingPath === entry.path, target: targetPath === entry.path }"
       draggable="true" @dragstart.stop="emit('drag', entry, $event)" @pointerdown="emit('hold', entry, $event)"
       @contextmenu.stop.prevent="emit('context', entry, $event)"
-    ><input v-if="selectionMode" class="selection-checkbox" type="checkbox" :checked="selectedPaths?.has(entry.path)" :aria-label="`选择 ${entry.name}`" @pointerdown.stop @dragstart.stop.prevent @click.stop="emit('select', entry, $event)" /><span class="arrow" @pointerdown.stop @click.stop.prevent="emit('toggle', entry.path, !expanded)">▾</span><span>📁</span><span class="name">{{ entry.name }}</span></summary>
-    <div class="note-folder__children">
+    ><input v-if="selectionMode" class="selection-checkbox" type="checkbox" :checked="selectedPaths?.has(entry.path)" :aria-label="`选择 ${entry.name}`" @pointerdown.stop @dragstart.stop.prevent @click.stop="emit('select', entry, $event)" /><span class="arrow codicon codicon-chevron-down" @pointerdown.stop @click.stop.prevent="emit('toggle', entry.path, !expanded)" aria-hidden="true"></span><span class="codicon codicon-folder" aria-hidden="true"></span><span class="name">{{ entry.name }}</span></summary>
+    <div class="note-folder__children" :data-note-path="entry.path">
+      <slot v-if="createParent === entry.path" name="create" />
       <NoteTreeNode
         v-for="child in entry.children"
         :key="child.path"
-        :entry="child"
+        :entry="child" :create-parent="createParent"
         :active-path="activePath"
         :moving-path="movingPath" :moving-paths="movingPaths" :selected-paths="selectedPaths" :selection-mode="selectionMode"
         :target-path="targetPath" :expanded-paths="expandedPaths" @toggle="(path, open) => emit('toggle', path, open)"
         @open="(item, event) => emit('open', item, event)" @select="(item, event) => emit('select', item, event)"
         @context="(item, event) => emit('context', item, event)"
         @hold="(item, event) => emit('hold', item, event)" @drag="(item, event) => emit('drag', item, event)"
-      />
-      <div v-if="!entry.children.length" class="empty">空文件夹</div>
+      ><template #create><slot name="create" /></template></NoteTreeNode>
+      <div v-if="!entry.children.length && createParent !== entry.path" class="empty">空文件夹</div>
     </div>
   </details>
   <div role="button" tabindex="0" @keydown.enter.self.prevent="($event.currentTarget as HTMLElement).click()" @keydown.space.self.prevent="($event.currentTarget as HTMLElement).click()"
@@ -48,7 +49,7 @@ function reportToggle(event: Event) { emit('toggle', props.entry.path, (event.cu
     draggable="true" @dragstart.stop="emit('drag', entry, $event)" @pointerdown="emit('hold', entry, $event)"
     @click="emit('open', entry, $event)"
     @contextmenu.stop.prevent="emit('context', entry, $event)"
-  ><input v-if="selectionMode" class="selection-checkbox" type="checkbox" :checked="selectedPaths?.has(entry.path)" :aria-label="`选择 ${entry.name}`" @pointerdown.stop @dragstart.stop.prevent @click.stop="emit('select', entry, $event)" /><span class="icon">M↓</span><span class="name">{{ entry.name.replace(/\.md$/i, '') }}</span></div>
+  ><input v-if="selectionMode" class="selection-checkbox" type="checkbox" :checked="selectedPaths?.has(entry.path)" :aria-label="`选择 ${entry.name}`" @pointerdown.stop @dragstart.stop.prevent @click.stop="emit('select', entry, $event)" /><span class="icon codicon codicon-markdown" aria-hidden="true" /><span class="name">{{ entry.name.replace(/\.md$/i, '') }}</span></div>
 </template>
 
 <style scoped lang="scss">
@@ -60,4 +61,14 @@ function reportToggle(event: Event) { emit('toggle', props.entry.path, (event.cu
 <style scoped>
 .selected { background: var(--color-accent-surface) !important; outline: 1px solid var(--color-accent-border); }
 .selection-checkbox { flex: 0 0 14px; width: 14px; height: 14px; margin: 0 2px 0 0; accent-color: var(--color-accent); cursor: pointer; }
+</style>
+
+<style scoped>
+.note-folder { margin:0; }
+.note-folder > summary, .note-file { box-sizing:border-box; display:flex; align-items:center; gap:5px; height:24px; width:100%; min-width:0; padding:0 8px; border-radius:0; font:13px/24px var(--font-ui); }
+.note-folder__children { margin-left:15px; padding-left:0; }
+.arrow { flex:0 0 16px; width:16px; font-size:16px; }
+.icon { flex:0 0 16px; font-size:16px; font-family:codicon; }
+.note-file.active, .note-file.selected, .note-folder > summary.selected { outline:none; background:var(--color-bg-selected); color:var(--color-text-on-subtle-selection); }
+.empty { padding:1px 8px 1px 29px; font-size:11px; line-height:24px; }
 </style>

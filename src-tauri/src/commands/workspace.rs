@@ -1785,7 +1785,7 @@ pub async fn save_local_statement(
     write_source_metadata(&target, &metadata)
 }
 
-/// Image ownership is limited to editable, unbound source files inside the workspace.
+/// Images belong to Markdown documents or editable, unbound source files in the workspace.
 pub(crate) fn validate_statement_image_owner(app: &AppHandle, path: &str) -> Result<(), String> {
     let root = root_for_path(app, Some(path))?;
     validate_statement_image_path(&root, Path::new(path))
@@ -1793,6 +1793,9 @@ pub(crate) fn validate_statement_image_owner(app: &AppHandle, path: &str) -> Res
 
 fn validate_statement_image_path(root: &Path, path: &Path) -> Result<(), String> {
     let target = canonical_workspace_target(root, path)?;
+    if target.is_file() && target.extension().is_some_and(|ext| ext.eq_ignore_ascii_case("md")) {
+        return Ok(());
+    }
     if target.is_file() && draft_info_for_path(&target).is_some_and(|info| info.unbound) {
         Ok(())
     } else {
@@ -1970,6 +1973,133 @@ fn copy_directory_recursive(source: &Path, target: &Path) -> Result<(), String> 
         }
     }
     Ok(())
+}
+
+#[derive(Serialize, Default)]
+#[serde(rename_all = "camelCase")]
+pub struct WorkspaceImportResult {
+    paths: Vec<String>,
+    errors: Vec<String>,
+}
+
+fn import_metadata(path: &Path) -> Result<std::fs::Metadata, String> {
+    let metadata = std::fs::symlink_metadata(path).map_err(|e| e.to_string())?;
+    #[cfg(windows)]
+    {
+        use std::os::windows::fs::MetadataExt;
+        if metadata.file_attributes() & 0x400 != 0 {
+            return Err(format!("不支持导入链接或联接目录：{}", path.display()));
+        }
+    }
+    if metadata.file_type().is_symlink() || !(metadata.is_dir() || metadata.is_file()) {
+        return Err(format!("不支持导入此文件类型：{}", path.display()));
+    }
+    Ok(metadata)
+}
+
+fn copy_external_entry(source: &Path, target: &Path) -> Result<(), String> {
+    let metadata = import_metadata(source)?;
+    if metadata.is_dir() {
+        std::fs::create_dir(target).map_err(|e| e.to_string())?;
+        for entry in std::fs::read_dir(source).map_err(|e| e.to_string())? {
+            let entry = entry.map_err(|e| e.to_string())?;
+            copy_external_entry(&entry.path(), &target.join(entry.file_name()))?;
+        }
+    } else {
+        let mut input = std::fs::File::open(source).map_err(|e| e.to_string())?;
+        // Never truncate an existing file, including one created during the drop.
+        let mut output = std::fs::OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .open(target)
+            .map_err(|e| e.to_string())?;
+        std::io::copy(&mut input, &mut output).map_err(|e| e.to_string())?;
+    }
+    Ok(())
+}
+
+fn import_external_entries(sources: Vec<String>, destination: &Path) -> WorkspaceImportResult {
+    let mut result = WorkspaceImportResult::default();
+    let mut paths = Vec::new();
+    for source in sources {
+        let path = Path::new(&source);
+        match import_metadata(path)
+            .and_then(|_| std::fs::canonicalize(path).map_err(|e| e.to_string()))
+        {
+            Ok(path) => {
+                if !paths.contains(&path) {
+                    paths.push(path);
+                }
+            }
+            Err(e) => result.errors.push(format!("{}：{}", source, e)),
+        }
+    }
+    let destination = match std::fs::canonicalize(destination) {
+        Ok(path) => path,
+        Err(e) => {
+            result.errors.push(format!("目标文件夹无法访问：{}", e));
+            return result;
+        }
+    };
+    for source in &paths {
+        if paths
+            .iter()
+            .any(|other| other != source && source.starts_with(other))
+        {
+            continue;
+        }
+        if source.is_dir() && destination.starts_with(source) {
+            result.errors.push(format!(
+                "不能将文件夹导入自身或其子目录：{}",
+                source.display()
+            ));
+            continue;
+        }
+        let Some(name) = source.file_name() else {
+            result.errors.push("不能导入磁盘根目录".into());
+            continue;
+        };
+        let mut target = destination.join(name);
+        if target.try_exists().unwrap_or(true) {
+            target = available_copy_target(&destination, source);
+        }
+        match copy_external_entry(source, &target) {
+            Ok(()) => result.paths.push(
+                data_center::portable_path(&target)
+                    .to_string_lossy()
+                    .into_owned(),
+            ),
+            Err(e) => result.errors.push(format!(
+                "导入 {} 失败（目标中可能保留部分文件）：{}",
+                source.display(),
+                e
+            )),
+        }
+    }
+    result
+}
+
+#[tauri::command]
+pub async fn import_workspace_entries(
+    app: AppHandle,
+    window: tauri::Window,
+    source_paths: Vec<String>,
+    destination_path: String,
+) -> Result<WorkspaceImportResult, String> {
+    if window.label() != "main" {
+        return Err("只能从主窗口导入文件".into());
+    }
+    let root = root_for_path(&app, Some(&destination_path))?;
+    let destination = canonical_workspace_parent(&root, Some(&destination_path))?;
+    let result = tauri::async_runtime::spawn_blocking(move || {
+        import_external_entries(source_paths, &destination)
+    })
+    .await
+    .map_err(|e| format!("导入任务失败：{}", e))?;
+    if let Ok(mut cache) = draft_cache().lock() {
+        cache.clear();
+    }
+    Ok(result)
 }
 
 #[tauri::command]
@@ -3001,6 +3131,137 @@ mod debug_tests {
     }
 
     #[test]
+    fn external_import_copies_mixed_files_and_empty_folders_without_moving_sources() {
+        let root = temp_test_dir("external-import-mixed");
+        let source = root.join("source");
+        let destination = root.join("workspace");
+        fs::create_dir_all(source.join("资料/empty")).unwrap();
+        fs::create_dir(&destination).unwrap();
+        fs::write(source.join("资料/data.bin"), [0, 255, 1, 128]).unwrap();
+        fs::write(source.join("solution.cpp"), "int main() {}\n").unwrap();
+        let result = import_external_entries(
+            vec![
+                source.join("资料").to_string_lossy().into_owned(),
+                source.join("solution.cpp").to_string_lossy().into_owned(),
+            ],
+            &destination,
+        );
+        assert!(result.errors.is_empty(), "{:?}", result.errors);
+        assert_eq!(result.paths.len(), 2);
+        assert!(destination.join("资料/empty").is_dir());
+        assert_eq!(
+            fs::read(destination.join("资料/data.bin")).unwrap(),
+            [0, 255, 1, 128]
+        );
+        assert_eq!(
+            fs::read(destination.join("solution.cpp")).unwrap(),
+            fs::read(source.join("solution.cpp")).unwrap()
+        );
+        assert!(source.join("资料/data.bin").is_file());
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn external_import_renames_collisions_and_deduplicates_nested_sources() {
+        let root = temp_test_dir("external-import-collisions");
+        let source = root.join("source");
+        let destination = root.join("workspace");
+        fs::create_dir_all(source.join("folder")).unwrap();
+        fs::create_dir(&destination).unwrap();
+        fs::write(source.join("folder/a.txt"), "nested").unwrap();
+        fs::write(source.join("a.txt"), "new").unwrap();
+        fs::write(destination.join("a.txt"), "original").unwrap();
+        let result = import_external_entries(
+            vec![
+                source.join("folder/a.txt").to_string_lossy().into_owned(),
+                source.join("folder").to_string_lossy().into_owned(),
+                source.join("a.txt").to_string_lossy().into_owned(),
+                source.join("a.txt").to_string_lossy().into_owned(),
+            ],
+            &destination,
+        );
+        assert!(result.errors.is_empty());
+        assert_eq!(result.paths.len(), 2);
+        assert_eq!(
+            fs::read_to_string(destination.join("a.txt")).unwrap(),
+            "original"
+        );
+        assert_eq!(
+            fs::read_to_string(destination.join("a - 副本.txt")).unwrap(),
+            "new"
+        );
+        assert_eq!(
+            fs::read_to_string(destination.join("folder/a.txt")).unwrap(),
+            "nested"
+        );
+        // Copying a file into its own parent must also preserve the original.
+        let result = import_external_entries(
+            vec![source.join("a.txt").to_string_lossy().into_owned()],
+            &source,
+        );
+        assert!(result.errors.is_empty());
+        assert_eq!(
+            fs::read_to_string(source.join("a - 副本.txt")).unwrap(),
+            "new"
+        );
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn external_import_rejects_recursive_destination_and_continues_after_missing_file() {
+        let root = temp_test_dir("external-import-errors");
+        let destination = root.join("workspace");
+        fs::create_dir(&destination).unwrap();
+        fs::write(root.join("a.txt"), "keep").unwrap();
+        let result =
+            import_external_entries(vec![root.to_string_lossy().into_owned()], &destination);
+        assert!(result.paths.is_empty());
+        assert_eq!(result.errors.len(), 1);
+        assert!(!destination.join(root.file_name().unwrap()).exists());
+        let result = import_external_entries(
+            vec![
+                root.join("missing").to_string_lossy().into_owned(),
+                root.join("a.txt").to_string_lossy().into_owned(),
+            ],
+            &destination,
+        );
+        assert_eq!(result.paths.len(), 1);
+        assert_eq!(result.errors.len(), 1);
+        assert_eq!(
+            fs::read_to_string(destination.join("a.txt")).unwrap(),
+            "keep"
+        );
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn external_import_rejects_junction_cycles() {
+        let root = temp_test_dir("external-import-junction");
+        let source = root.join("source");
+        let destination = root.join("workspace");
+        fs::create_dir(&source).unwrap();
+        fs::create_dir(&destination).unwrap();
+        let status = std::process::Command::new("cmd")
+            .args(["/C", "mklink", "/J"])
+            .arg(source.join("cycle"))
+            .arg(&source)
+            .output()
+            .unwrap();
+        assert!(
+            status.status.success(),
+            "{}",
+            String::from_utf8_lossy(&status.stderr)
+        );
+        let result =
+            import_external_entries(vec![source.to_string_lossy().into_owned()], &destination);
+        assert!(result.paths.is_empty());
+        assert_eq!(result.errors.len(), 1);
+        assert!(!destination.join("source/cycle").exists());
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
     fn safe_segment_keeps_unicode_and_replaces_windows_forbidden_characters() {
         assert_eq!(safe_segment("中文题目"), "中文题目");
         assert_eq!(safe_segment("A/B:C*D?"), "A_B_C_D_");
@@ -3345,6 +3606,9 @@ mod debug_tests {
             "# 题目\n\n求 $a+b$。\n![图](acm-note-image://123.png#x=24,y=24,w=360)"
         );
         assert!(validate_statement_image_path(&root, &source).is_ok());
+        let markdown = root.join("note.MD");
+        fs::write(&markdown, "# Markdown").unwrap();
+        assert!(validate_statement_image_path(&root, &markdown).is_ok());
         assert!(validate_statement_image_path(&root, &root).is_err());
         let unsupported = root.join("other.txt");
         fs::write(&unsupported, "not a source file").unwrap();

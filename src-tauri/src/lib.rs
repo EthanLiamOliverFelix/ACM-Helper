@@ -86,6 +86,7 @@ pub fn run() {
             workspace::rename_workspace_entry,
             workspace::delete_workspace_entry,
             workspace::paste_workspace_entry,
+            workspace::import_workspace_entries,
             workspace::run_code,
             workspace::run_test_suite,
             workspace::debug_code,

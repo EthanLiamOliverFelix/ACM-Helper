@@ -47,10 +47,16 @@ async function runAllTestCases() {
   syncCollapsedResults()
 }
 
-function outputSegments(expected: string, actual: string): OutputDiffSegment[] {
-  return expected.trim()
+const diffCache = new Map<string, { expected: string; actual: string; segments: OutputDiffSegment[] }>()
+function outputSegments(id: string, expected: string, actual: string): OutputDiffSegment[] {
+  const cached = diffCache.get(id)
+  if (cached?.expected === expected && cached.actual === actual) return cached.segments
+  const segments = expected.trim()
     ? diffOutput(expected, actual)
     : actual ? [{ text: actual, kind: 'match' }] : []
+  if (diffCache.size >= 64) diffCache.delete(diffCache.keys().next().value!)
+  diffCache.set(id, { expected, actual, segments: segments as OutputDiffSegment[] })
+  return segments as OutputDiffSegment[]
 }
 
 function visibleDiffText(segment: OutputDiffSegment) {
@@ -73,10 +79,11 @@ function diffTitle(segment: OutputDiffSegment) {
   <section class="test-explorer">
     <div class="problem-summary">
       <strong>{{ store.currentProblem?.id || '未选择题目' }}</strong>
-      <span>{{ passedCount }} / {{ store.testCases.length }} 通过</span>
+      <span>{{ store.isLoadingTests ? '加载中…' : `${passedCount} / ${store.testCases.length} 通过` }}</span>
     </div>
 
     <div v-if="!store.currentProblem" class="empty">打开一个题目或本地代码标签后显示测试点。</div>
+    <div v-else-if="store.isLoadingTests" class="empty" role="status" aria-live="polite">正在加载测试点…</div>
     <template v-else>
       <div class="batch-actions">
         <button class="run-all" :disabled="store.isRunning || !store.currentCode.trim() || !store.testCases.length" @click="runAllTestCases"><i class="codicon codicon-run-all" />{{ store.isRunning ? '运行中…' : '运行全部' }}</button>
@@ -99,7 +106,7 @@ function diffTitle(segment: OutputDiffSegment) {
           <div v-if="!collapsed.has(test.id)" class="case-body">
             <label><span>输入:</span><button @click.stop="copy(test.input, `${test.id}:input`)">{{ copied === `${test.id}:input` ? '已复制' : '复制' }}</button><textarea v-model="test.input" spellcheck="false" @input="store.updateTestCase(test.id)" /></label>
             <label><span>预期输出:</span><button @click.stop="copy(test.expectedOutput, `${test.id}:expected`)">{{ copied === `${test.id}:expected` ? '已复制' : '复制' }}</button><textarea v-model="test.expectedOutput" spellcheck="false" @input="store.updateTestCase(test.id)" /></label>
-            <label v-if="test.status !== 'idle' && test.status !== 'running'" class="actual"><span>实际输出:</span><button @click.stop="copy(test.actualOutput, `${test.id}:actual`)">{{ copied === `${test.id}:actual` ? '已复制' : '复制' }}</button><div class="output-diff" role="textbox" aria-readonly="true" tabindex="0"><template v-if="test.actualOutput || test.expectedOutput.trim()"><span v-for="(segment, segmentIndex) in outputSegments(test.expectedOutput, test.actualOutput)" :key="segmentIndex" :class="`diff-${segment.kind}`" :title="diffTitle(segment)">{{ visibleDiffText(segment) }}</span></template><span v-else class="output-empty">程序没有输出</span></div></label>
+            <label v-if="test.status !== 'idle' && test.status !== 'running'" class="actual"><span>实际输出:</span><button @click.stop="copy(test.actualOutput, `${test.id}:actual`)">{{ copied === `${test.id}:actual` ? '已复制' : '复制' }}</button><div class="output-diff" role="textbox" aria-readonly="true" tabindex="0"><template v-if="test.actualOutput || test.expectedOutput.trim()"><span v-for="(segment, segmentIndex) in outputSegments(test.id, test.expectedOutput, test.actualOutput)" :key="segmentIndex" :class="`diff-${segment.kind}`" :title="diffTitle(segment)">{{ visibleDiffText(segment) }}</span></template><span v-else class="output-empty">程序没有输出</span></div></label>
           </div>
         </article>
 

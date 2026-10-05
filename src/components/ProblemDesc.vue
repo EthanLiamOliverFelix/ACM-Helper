@@ -1,6 +1,7 @@
 <script setup lang="ts">
+import { afterPaint } from '../utils/afterPaint'
 import { useProblemStore } from '../stores/problemStore'
-import { computed, ref, watch } from 'vue'
+import { computed, ref, watch, onBeforeUnmount } from 'vue'
 import { useLearningStore } from '../stores/learningStore'
 import { useAiStore } from '../stores/aiStore'
 import MarkdownNoteEditor from './MarkdownNoteEditor.vue'
@@ -148,10 +149,10 @@ function safeRichText(value = '', format: 'html' | 'markdown' | 'text' = 'text',
   return root.innerHTML
 }
 
-const renderedHtml = computed(() => {
+function renderStatementHtml() {
   const p = store.currentProblem
   if (!p) return '<p style="color:var(--color-text-muted)">请从左侧列表选择一道题目</p>'
-  if (store.isLoadingDetail) return '<div class="desc-placeholder">正在抓取题面和样例…</div>'
+  if (store.isPreparingStatement || store.isLoadingDetail) return '<div class="desc-placeholder desc-placeholder--loading">正在加载题面…<div class="statement-skeleton"><i></i><i></i><i></i></div></div>'
   const esc = (value = '') => value.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
   if (!p.description) return `<div class="desc-placeholder">题面抓取失败或暂不可用<br/><a href="${esc(p.url)}" target="_blank">在原 OJ 打开 →</a></div>`
   const translated = ai.translations[ojTranslationKey(p.platform, p.id)]
@@ -159,7 +160,30 @@ const renderedHtml = computed(() => {
   const format = p.contentFormat ?? 'text'
   const section = (title: string, value?: string) => value ? `<h2 class="desc-h2">${title}</h2><div>${safeRichText(value, format, p.url)}</div>` : ''
   return `<div>${safeRichText(p.description, format, p.url)}</div>${section('输入', p.input)}${section('输出', p.output)}${section('说明', p.note)}`
-})
+}
+
+const renderedHtml = ref('')
+const statementHtmlCache = new Map<string, string>()
+let cancelStatementRender: (() => void) | undefined
+watch(() => {
+  const p = store.currentProblem
+  return [p?.platform, p?.id, p?.description, p?.input, p?.output, p?.note, p?.contentFormat, p?.url,
+    store.isLoadingDetail, store.isPreparingStatement, p ? ai.translations[ojTranslationKey(p.platform, p.id)] : undefined]
+}, source => {
+  cancelStatementRender?.()
+  const key = JSON.stringify(source)
+  const cached = statementHtmlCache.get(key)
+  if (cached !== undefined) { cancelStatementRender = afterPaint(() => { renderedHtml.value = cached }); return }
+  renderedHtml.value = '<div class="desc-placeholder">正在显示题面…</div>'
+  cancelStatementRender = afterPaint(() => {
+    const html = renderStatementHtml()
+    if (statementHtmlCache.size >= 24) statementHtmlCache.delete(statementHtmlCache.keys().next().value!)
+    statementHtmlCache.set(key, html)
+    renderedHtml.value = html
+  })
+}, { immediate: true })
+onBeforeUnmount(() => cancelStatementRender?.())
+
 
 async function translate() {
   try { await ai.translateCurrentProblem() } catch (e) { ai.error = String(e) }
@@ -535,4 +559,13 @@ async function closeLocalStatement() {
 .local-title-field { display: flex; flex-direction: column; gap: 6px; padding: 12px 14px; border-bottom: 1px solid var(--color-border); color: var(--color-text-soft); font-size: 13px; font-weight: 600; input { width: 100%; box-sizing: border-box; padding: 8px 10px; border: 1px solid var(--color-border-control); border-radius: 4px; outline: none; background: var(--color-bg-deep); color: var(--color-text-strong); font: 13px/1.45 Consolas, monospace; &:focus { border-color: var(--color-accent); } } }
 @media (max-width: 760px) { .problem-desc__overview { grid-template-columns: 1fr; gap: 12px; } .problem-desc__facts { width: 100%; } }
 @media (max-width: 460px) { .problem-desc__facts { grid-template-columns: repeat(2, 1fr); row-gap: 10px; } }
+</style>
+
+<style scoped>
+:deep(.statement-skeleton) { display:grid; gap:12px; margin-top:20px; width:100%; }
+:deep(.statement-skeleton i) { display:block; height:10px; border-radius:3px; background:linear-gradient(90deg, var(--color-bg-panel-alt), var(--color-bg-hover), var(--color-bg-panel-alt)); background-size:200% 100%; animation:statement-loading 1.3s ease-in-out infinite; }
+:deep(.statement-skeleton i:nth-child(2)) { width:85%; }
+:deep(.statement-skeleton i:nth-child(3)) { width:65%; }
+@keyframes statement-loading { from { background-position:100% 0; } to { background-position:-100% 0; } }
+@media (prefers-reduced-motion:reduce) { :deep(.statement-skeleton i) { animation:none; } }
 </style>

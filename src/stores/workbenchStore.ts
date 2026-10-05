@@ -1,14 +1,16 @@
-import { computed, reactive, ref, watch } from 'vue'
+import { computed, reactive, ref, watch, onScopeDispose } from 'vue'
 import { defineStore } from 'pinia'
+import { afterPaint } from '../utils/afterPaint'
 import { invoke } from '@tauri-apps/api/core'
 import type { DraftFileInfo, Language, Platform, Problem } from '../types'
 import { getDataCenterValue, saveDataCenterValue } from '../dataCenter'
 import { useProblemStore } from './problemStore'
+import { useTextFileStore, textPathKey } from './textFileStore'
 import { useNoteStore } from './noteStore'
 
 export type ActivityId = 'problems' | 'files' | 'learning' | 'ai' | 'runner' | 'notes'
 export type RunnerTool = 'tests' | 'submission' | 'debugger'
-export type WorkbenchTabKind = 'code' | 'statement' | 'problem-note' | 'ai' | 'learning' | 'notes'
+export type WorkbenchTabKind = 'code' | 'text' | 'statement' | 'problem-note' | 'ai' | 'learning' | 'notes'
 
 export interface WorkbenchContextRef {
   kind: 'problem' | 'local-file'
@@ -26,6 +28,7 @@ export interface WorkbenchTab {
   kind: WorkbenchTabKind
   title: string
   context?: WorkbenchContextRef
+  path?: string
   preview?: boolean
   /** Transient UI state. It is deliberately cleared when a saved workspace is restored. */
   loading?: boolean
@@ -117,7 +120,7 @@ function normalizeLayout(value: unknown, groupIds: string[]): WorkbenchLayoutNod
 export function normalizeWorkbenchState(value: unknown): PersistedWorkbenchState {
   const saved = value as Partial<PersistedWorkbenchState> | null
   if (!saved || saved.version !== 1 || !Array.isArray(saved.groups)) return clone(DEFAULT_STATE)
-  const validTabKinds: WorkbenchTabKind[] = ['code', 'statement', 'problem-note', 'ai', 'learning', 'notes']
+  const validTabKinds: WorkbenchTabKind[] = ['code', 'text', 'statement', 'problem-note', 'ai', 'learning', 'notes']
   const groups: EditorGroupState[] = saved.groups.slice(0, 12).filter(group => group && Array.isArray(group.tabs)).map((group, index) => ({
     id: typeof group.id === 'string' ? group.id : `group-${index + 1}`,
     tabs: group.tabs
@@ -265,6 +268,13 @@ export const useWorkbenchStore = defineStore('workbench', () => {
     return mountedTab
   }
 
+  function openTextFile(path: string) {
+    const id = `text:${textPathKey(path)}`
+    const existing = groups.find(group => group.tabs.some(tab => tab.id === id))
+    if (existing) { void activateTab(existing.id, id); return }
+    addTab(groups[0], { id, kind: 'text', title: path.split(/[\\/]/).pop() || path, path })
+  }
+
   function openCurrentCode() {
     const context = contextFromCurrent()
     if (!context) return
@@ -320,6 +330,14 @@ export const useWorkbenchStore = defineStore('workbench', () => {
   }
 
   async function openDraftFile(file: DraftFileInfo) {
+    const existing = groups.find(group => group.tabs.some(tab => tab.kind === 'code'
+      && tab.context?.path?.replace(/\\/g, '/').toLowerCase() === file.path.replace(/\\/g, '/').toLowerCase()
+      && tab.context.language === file.language && !tab.loading && !tab.loadError))
+    if (existing) {
+      const tab = existing.tabs.find(tab => tab.kind === 'code' && tab.context?.path?.replace(/\\/g, '/').toLowerCase() === file.path.replace(/\\/g, '/').toLowerCase() && tab.context.language === file.language)!
+      await activateTab(existing.id, tab.id)
+      return
+    }
     const requestSequence = ++activationSequence
     const context: WorkbenchContextRef = {
       kind: 'local-file',
@@ -415,6 +433,17 @@ export const useWorkbenchStore = defineStore('workbench', () => {
     }
   }
 
+  let cancelFollowing: (() => void) | undefined
+  function queueFollowingTabs(context: WorkbenchContextRef) {
+    cancelFollowing?.()
+    const sequence = activationSequence
+    cancelFollowing = afterPaint(() => {
+      if (sequence !== activationSequence) return
+      void syncFollowingTabs(context).catch(cause => { useProblemStore().error = String(cause) })
+    })
+  }
+  onScopeDispose(() => cancelFollowing?.())
+
   async function activateContext(context?: WorkbenchContextRef) {
     if (!context) return true
     const sequence = ++activationSequence
@@ -422,6 +451,7 @@ export const useWorkbenchStore = defineStore('workbench', () => {
     const sameProblem = store.currentProblem?.platform === context.platform && store.currentProblem?.id === context.problemId
     const samePath = !context.path || store.draftPath.toLowerCase() === context.path.toLowerCase()
     if (sameProblem && samePath && store.currentLanguage === context.language) return true
+    if (store.tryActivateCachedWorkspace(context)) return true
     if (context.kind === 'local-file' && context.path) {
       if (!store.draftFiles.length) await store.loadDraftFiles()
       const file = store.draftFiles.find(item => item.path.toLowerCase() === context.path!.toLowerCase())
@@ -443,16 +473,19 @@ export const useWorkbenchStore = defineStore('workbench', () => {
     group.activeTabId = tabId
     activeGroupId.value = groupId
     const store = useProblemStore()
-    const needsHydration = Boolean(tab.context && (
+    const cached = tab.context && store.tryActivateCachedWorkspace(tab.context)
+    if (cached) { tab.loading = false; tab.loadError = undefined }
+    const needsHydration = !cached && Boolean(tab.context && (
       store.currentProblem?.platform !== tab.context.platform
       || store.currentProblem?.id !== tab.context.problemId
+      || (tab.context.path && store.draftPath.replace(/\\/g, '/').toLowerCase() !== tab.context.path.replace(/\\/g, '/').toLowerCase())
       || (tab.kind === 'code' && store.currentLanguage !== tab.context.language)
     ))
     if (needsHydration) { tab.loading = true; tab.loadError = undefined }
     try {
       const isCurrent = await activateContext(tab.context)
       if (!isCurrent) return
-      if (tab.kind === 'code' && tab.context) await syncFollowingTabs(tab.context)
+      if (tab.kind === 'code' && tab.context) queueFollowingTabs(tab.context)
       if (tab.kind === 'problem-note' && store.currentProblem) await useNoteStore().openProblemNote(store.currentProblem)
     } catch (cause) {
       tab.loadError = cause instanceof Error ? cause.message : String(cause)
@@ -461,11 +494,18 @@ export const useWorkbenchStore = defineStore('workbench', () => {
     }
   }
 
-  function closeTab(groupId: string, tabId: string) {
+  function closeTab(groupId: string, tabId: string, force = false) {
     const group = groups.find(item => item.id === groupId)
     if (!group) return
     const index = group.tabs.findIndex(tab => tab.id === tabId)
     if (index < 0) return
+    const closing = group.tabs[index]
+    if (closing.kind === 'text' && closing.path) {
+      const files = useTextFileStore()
+      if (!force && (files.document(closing.path).saving || files.document(closing.path).loading)) return
+      if (!force && files.isDirty(closing.path) && !window.confirm(`“${closing.title}”尚未保存，关闭并放弃修改？`)) return
+      files.forget(closing.path)
+    }
     const wasActive = group.activeTabId === tabId
     group.tabs.splice(index, 1)
     if (wasActive) group.activeTabId = group.tabs[Math.min(index, group.tabs.length - 1)]?.id ?? null
@@ -514,8 +554,18 @@ export const useWorkbenchStore = defineStore('workbench', () => {
   function workspacePathChanged(oldPath: string, newPath: string) {
     const normalize = (path: string) => path.replace(/\\/g, '/').toLowerCase()
     const old = normalize(oldPath)
+    useTextFileStore().move(oldPath, newPath)
     for (const group of groups) for (const tab of group.tabs) {
-      const path = tab.context?.path
+      const path = tab.kind === 'text' ? tab.path : tab.context?.path
+      if (tab.kind === 'text') {
+        if (!path || (normalize(path) !== old && !normalize(path).startsWith(`${old}/`))) continue
+        const wasActive = group.activeTabId === tab.id
+        tab.path = `${newPath}${path.slice(oldPath.length)}`
+        tab.id = `text:${textPathKey(tab.path)}`
+        tab.title = tab.path.split(/[\\/]/).pop() || tab.title
+        if (wasActive) group.activeTabId = tab.id
+        continue
+      }
       if (!path || (normalize(path) !== old && !normalize(path).startsWith(`${old}/`))) continue
       const next = `${newPath}${path.slice(oldPath.length)}`
       const wasActive = group.activeTabId === tab.id
@@ -532,8 +582,8 @@ export const useWorkbenchStore = defineStore('workbench', () => {
   function workspacePathRemoved(path: string) {
     const normalized = path.replace(/\\/g, '/').toLowerCase()
     for (const group of [...groups]) for (const tab of [...group.tabs]) {
-      const current = tab.context?.path?.replace(/\\/g, '/').toLowerCase()
-      if (current === normalized || current?.startsWith(`${normalized}/`)) closeTab(group.id, tab.id)
+      const current = (tab.kind === 'text' ? tab.path : tab.context?.path)?.replace(/\\/g, '/').toLowerCase()
+      if (current === normalized || current?.startsWith(`${normalized}/`)) closeTab(group.id, tab.id, true)
     }
   }
 
@@ -553,6 +603,6 @@ export const useWorkbenchStore = defineStore('workbench', () => {
   }
 
   return { terminalVisible, terminalRequest, terminalRunMode, terminalRunning, openTerminal, activity, runnerTool, sidebarVisible, sidebarWidth, noteSidebarWidth, bottomPanelHeight, splitRatio, activeGroupId, groups, activeGroup, activeTab, activeContext, layoutTree,
-    setActivity, toggleSidebar, setSidebarWidth, setNoteSidebarWidth, setBottomPanelHeight, setSplitRatio, openProblem, openDraftFile, openCurrentCode, setCurrentLanguage, openStatement, openProblemNote, openAi, openRunner, openTests, openSubmission, openDebugger, openLearning, openNotes,
+    setActivity, toggleSidebar, setSidebarWidth, setNoteSidebarWidth, setBottomPanelHeight, setSplitRatio, openProblem, openDraftFile, openTextFile, openCurrentCode, setCurrentLanguage, openStatement, openProblemNote, openAi, openRunner, openTests, openSubmission, openDebugger, openLearning, openNotes,
     activateTab, closeTab, moveTab, restore, snapshot, workspacePathChanged, workspacePathRemoved }
 })

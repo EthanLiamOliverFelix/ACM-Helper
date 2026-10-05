@@ -1,7 +1,11 @@
 <script setup lang="ts">
-import { computed, defineAsyncComponent, ref } from 'vue'
+import { computed, defineAsyncComponent, ref, watch } from 'vue'
+import '@vscode/codicons/dist/codicon.css'
 import { useWorkbenchStore } from '../stores/workbenchStore'
 import { useProblemStore } from '../stores/problemStore'
+import WorkspaceMarkdownTab from './WorkspaceMarkdownTab.vue'
+import PlainTextEditor from './PlainTextEditor.vue'
+import { useTextFileStore } from '../stores/textFileStore'
 import CodeEditor from '../components/CodeEditor.vue'
 import ProblemDesc from '../components/ProblemDesc.vue'
 import ProblemNoteTab from './ProblemNoteTab.vue'
@@ -17,8 +21,15 @@ const LearningPanel = defineAsyncComponent(() => import('../components/LearningP
 const NoteManager = defineAsyncComponent(() => import('../components/NoteManager.vue'))
 const group = computed(() => workbench.groups.find(item => item.id === props.groupId)!)
 const tab = computed(() => group.value.tabs.find(item => item.id === group.value.activeTabId) ?? null)
+const codeEditorCreated = ref(false)
+watch(() => group.value.tabs.some(item => item.kind === 'code'), hasCode => { if (hasCode) codeEditorCreated.value = true }, { immediate: true })
 
+function tabIcon(item: typeof group.value.tabs[number]) {
+  if (item.kind === 'text') return /\.md$/i.test(item.path ?? '') ? 'codicon-markdown' : 'codicon-file'
+  return { code: 'codicon-code', statement: 'codicon-preview', 'problem-note': 'codicon-book', notes: 'codicon-book', ai: 'codicon-sparkle', learning: 'codicon-type-hierarchy' }[item.kind] ?? 'codicon-file'
+}
 function isDirty(item: typeof group.value.tabs[number]) {
+  if (item.kind === 'text' && item.path) return useTextFileStore().isDirty(item.path)
   if (item.kind !== 'code' || !item.context || !problems.draftDirty || !problems.currentProblem) return false
   const sameProblem = item.context.platform === problems.currentProblem.platform && item.context.problemId === problems.currentProblem.id
   const samePath = !item.context.path || item.context.path.toLowerCase() === problems.draftPath.toLowerCase()
@@ -83,24 +94,24 @@ function leaveDropZone(event: DragEvent) {
   <section class="editor-group" :class="[{ active: workbench.activeGroupId === groupId }, dropZone ? `drop-${dropZone}` : '']" @pointerdown.capture="workbench.activeGroupId = groupId" @dragover.prevent="updateDropZone" @dragleave="leaveDropZone" @drop.prevent="dropTab">
     <div class="editor-tabs">
       <button v-for="(item, index) in group.tabs" :key="item.id" class="editor-tab" :class="{ active: item.id === group.activeTabId, dirty: isDirty(item), dragging: item.id === draggingTabId, 'drop-before': tabDrop?.tabId === item.id && tabDrop.side === 'before', 'drop-after': tabDrop?.tabId === item.id && tabDrop.side === 'after' }" :title="item.title" draggable="true" @dragstart="startTabDrag($event, item.id)" @dragover.stop.prevent="updateTabDrop($event, item.id)" @drop.stop.prevent="dropOnTab($event, index)" @dragend="finishTabDrag" @click="workbench.activateTab(groupId, item.id)">
-        <span>{{ item.kind === 'code' ? '⌨' : item.kind === 'statement' ? '▤' : item.kind === 'problem-note' || item.kind === 'notes' ? '▧' : item.kind === 'ai' ? '✦' : '◇' }}</span><b>{{ item.title }}</b>
+        <span class="codicon" :class="tabIcon(item)" aria-hidden="true" /><b>{{ item.title }}</b>
         <i :title="isDirty(item) ? '尚未保存' : '关闭'" @click.stop="workbench.closeTab(groupId, item.id)">{{ isDirty(item) ? '●' : '×' }}</i>
       </button>
       <div class="editor-tabs__spacer" />
       <button v-if="tab?.context" class="companion" title="在侧边打开题面" @click="workbench.openStatement">▤</button>
     </div>
     <div class="editor-group__content">
+      <CodeEditor v-if="codeEditorCreated" v-show="tab?.kind === 'code' && !tab.loading && !tab.loadError" :group-id="groupId" />
       <div v-if="tab?.loading" class="tab-loading" role="status" aria-live="polite"><div class="tab-loading__spinner" /><strong>{{ tab.kind === 'statement' ? '题面加载中…' : tab.kind === 'code' ? '代码加载中…' : '内容加载中…' }}</strong><span>标签页已就绪，正在读取内容</span><div class="tab-loading__skeleton"><i /><i /><i /><i /></div></div>
       <div v-else-if="tab?.loadError" class="tab-loading tab-loading--error"><strong>内容暂时无法加载</strong><span>{{ tab.loadError }}</span></div>
-      <template v-else-if="tab?.kind === 'code'">
-        <CodeEditor />
-      </template>
+      <WorkspaceMarkdownTab v-else-if="tab?.kind === 'text' && tab.path && /\.md$/i.test(tab.path)" :path="tab.path" />
+      <PlainTextEditor v-else-if="tab?.kind === 'text' && tab.path" :path="tab.path" />
       <ProblemDesc v-else-if="tab?.kind === 'statement'" />
       <ProblemNoteTab v-else-if="tab?.kind === 'problem-note'" />
       <AiAssistant v-else-if="tab?.kind === 'ai'" />
       <LearningPanel v-else-if="tab?.kind === 'learning'" />
       <NoteManager v-else-if="tab?.kind === 'notes'" />
-      <div v-else class="empty-group"><strong>ACM Helper</strong><p>从左侧题库或资源管理器打开代码。</p><div><button @click="workbench.openLearning">技能树</button><button @click="workbench.openAi">AI 辅助</button><button @click="workbench.openNotes">算法笔记</button></div></div>
+      <div v-else-if="!tab" class="empty-group"><strong>ACM Helper</strong><p>从左侧题库或资源管理器打开代码。</p><div><button @click="workbench.openLearning">技能树</button><button @click="workbench.openAi">AI 辅助</button><button @click="workbench.openNotes">算法笔记</button></div></div>
     </div>
     <div v-if="dropZone" class="drop-preview"><span>放置到{{ dropZone === 'center' ? '当前组' : dropZone === 'left' ? '左侧' : dropZone === 'right' ? '右侧' : dropZone === 'top' ? '上方' : '下方' }}</span></div>
   </section>

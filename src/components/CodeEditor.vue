@@ -1,5 +1,6 @@
 <script setup lang="ts">
-import { shallowRef, watch, onBeforeUnmount } from 'vue'
+import { computed, nextTick, shallowRef, watch, onBeforeUnmount } from 'vue'
+import { afterPaint } from '../utils/afterPaint'
 import { useProblemStore } from '../stores/problemStore'
 import { useSettingsStore } from '../stores/settingsStore'
 import type { Language } from '../types'
@@ -11,6 +12,7 @@ import CodeVersionManager from './CodeVersionManager.vue'
 import EditorRunControl from './EditorRunControl.vue'
 import { useWorkbenchStore } from '../stores/workbenchStore'
 
+const props = defineProps<{ groupId?: string }>()
 const store = useProblemStore()
 const settings = useSettingsStore()
 const workbench = useWorkbenchStore()
@@ -96,6 +98,7 @@ function renderDebugLine() {
 function handleMount(editor: any) {
   registerFormatters()
   editorRef.value = editor
+  ownedModels.add(editor.getModel())
   breakpointDecorations = editor.createDecorationsCollection([])
   breakpointHoverDecorations = editor.createDecorationsCollection([])
   debugLineDecorations = editor.createDecorationsCollection([])
@@ -138,19 +141,24 @@ function confirmResetCode() {
   store.resetCurrentCode()
 }
 
-// 当切换题目时清空编辑器内容由 store.selectProblem 处理，
-// 但需要同步编辑器 UI —— 用 key 强制重建
-const editorKey = shallowRef(0)
-watch(
-  () => [store.currentProblem?.id, store.currentLanguage, store.currentCode],
-  (_next, previous) => {
-    if (previous && (_next[0] === previous[0] && _next[1] === previous[1])) return
-    editorKey.value++
+// A stable editor switches Monaco models, preserving each file's undo and view state.
+const modelPath = computed(() => `acm-editor://${props.groupId || 'main'}/${encodeURIComponent(store.draftPath || `${store.currentProblem?.platform}:${store.currentProblem?.id}`)}/${store.currentLanguage}`)
+const ownedModels = new Set<any>()
+watch(modelPath, async () => {
+  const previous = editorRef.value?.getModel()
+  if (previous) ownedModels.add(previous)
+  await nextTick()
+  const current = editorRef.value?.getModel()
+  if (current) {
+    ownedModels.add(current)
+    // A cached model can predate an external disk update to its buffer.
+    if (current.getValue() !== store.currentCode) current.setValue(store.currentCode)
   }
-)
+  renderBreakpoints()
+  renderDebugLine()
+}, { flush: 'pre' })
 watch(() => store.breakpoints, renderBreakpoints, { deep: true })
 watch(() => store.debugSession?.line, renderDebugLine)
-watch(() => settings.resolvedTheme, () => { editorKey.value++ })
 
 const editorOptions = {
   automaticLayout: true,
@@ -173,6 +181,9 @@ onBeforeUnmount(() => {
   editorDisposables.forEach((item) => item.dispose())
   editorDisposables = []
   editorRef.value = null
+  const retired = [...ownedModels]
+  ownedModels.clear()
+  afterPaint(() => { for (const model of retired) if (!model.isDisposed()) model.dispose() })
 })
 </script>
 
@@ -204,7 +215,7 @@ onBeforeUnmount(() => {
     <!-- 编辑器主体 -->
     <div class="code-editor__editor">
       <VueMonacoEditor
-        :key="editorKey"
+        :path="modelPath"
         :language="LANGUAGE_MAP[store.currentLanguage]"
         :value="store.currentCode"
         :theme="settings.resolvedTheme === 'light' ? 'vs' : 'vs-dark'"

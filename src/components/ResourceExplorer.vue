@@ -1,13 +1,17 @@
 <script setup lang="ts">
-import { invoke } from '@tauri-apps/api/core'
+import { invoke, isTauri } from '@tauri-apps/api/core'
+import { getCurrentWebview, type DragDropEvent } from '@tauri-apps/api/webview'
+import type { UnlistenFn } from '@tauri-apps/api/event'
 import { revealItemInDir } from '@tauri-apps/plugin-opener'
 import { computed, onBeforeUnmount, onMounted, reactive, ref } from 'vue'
 import { useProblemStore } from '../stores/problemStore'
-import type { DraftFileInfo, Language, WorkspaceEntry } from '../types'
+import type { DraftFileInfo, WorkspaceEntry } from '../types'
 import ResourceTreeNode from './ResourceTreeNode.vue'
+import ResourceCreateInput from './ResourceCreateInput.vue'
 import { flattenTree, topLevelEntries } from '../utils/multiSelection'
 import { useMultiSelection } from '../composables/useMultiSelection'
 import { batchDirectoryDropTarget, directoryDropTarget } from '../utils/directoryDrop'
+import { externalWorkspaceDropPath } from '../utils/externalWorkspaceDrop'
 import { useLongPressMove } from '../composables/useLongPressMove'
 import { useWorkbenchStore } from '../stores/workbenchStore'
 import { getDataCenterValue, saveDataCenterValue } from '../dataCenter'
@@ -22,7 +26,6 @@ const roots = ref<WorkspaceRoot[]>([])
 const savedRoot = getDataCenterValue<string>('workspace-active-root', '')
 let activeRootInitialized = false
 const currentRoot = computed(() => roots.value.find(root => root.path === rootPath.value))
-const textFile = reactive({ open: false, path: '', text: '', original: '', busy: false, error: '' })
 let refreshTimer: ReturnType<typeof setInterval> | undefined
 const loading = ref(false)
 const error = ref('')
@@ -33,12 +36,18 @@ const expandedPaths = ref(new Set(savedTreeState?.version === 1 ? savedTreeState
 let treeStateInitialized = savedTreeState?.version === 1
 const selectionMode = ref(false)
 const movingBusy = ref(false)
+const explorerElement = ref<HTMLElement | null>(null)
+const externalTarget = ref('')
+const externalCount = ref(0)
+let unlistenExternalDrop: UnlistenFn | undefined
+let disposed = false
 const allEntries = computed(() => flattenTree(entries.value))
 const visibleEntries = computed(() => flattenTree(entries.value, expandedPaths.value))
 const selection = useMultiSelection(() => visibleEntries.value.map(entry => entry.path), () => allEntries.value.map(entry => entry.path))
 const contextMenu = ref<{ x: number; y: number; entry: WorkspaceEntry | null } | null>(null)
 const fileClipboard = ref<{ entry: WorkspaceEntry; cut: boolean } | null>(null)
-const dialog = reactive({ open: false, mode: '' as 'file' | 'folder' | 'rename' | 'delete' | '', target: null as WorkspaceEntry | null, parentPath: '', name: '', language: 'cpp' as Language | 'text' })
+const creating = reactive({ kind: '' as '' | 'file' | 'folder', parentPath: '', busy: false, error: '', sequence: 0 })
+const dialog = reactive({ open: false, mode: '' as 'rename' | 'delete' | '', target: null as WorkspaceEntry | null, name: '' })
 
 function findEntry(path: string, list = entries.value): WorkspaceEntry | null {
   for (const entry of list) {
@@ -97,6 +106,7 @@ async function refresh(quiet = false) {
 }
 
 async function selectRoot() {
+  cancelCreate()
   selection.clear()
   entries.value = []
   await saveDataCenterValue('workspace-active-root', rootPath.value)
@@ -127,27 +137,6 @@ async function removeRoot() {
     await selectRoot()
   } catch (cause) { error.value = String(cause) }
 }
-async function openTextFile(path: string) {
-  if (textFile.open && textFile.text !== textFile.original && !window.confirm('放弃当前文本文件的未保存修改？')) return
-  try {
-    const text = await invoke<string>('read_workspace_text', { path })
-    Object.assign(textFile, { open: true, path, text, original: text, error: '' })
-  } catch (cause) { error.value = String(cause) }
-}
-function closeTextFile() {
-  if (textFile.text !== textFile.original && !window.confirm('放弃未保存的修改？')) return
-  textFile.open = false
-}
-async function saveTextFile() {
-  if (textFile.busy) return
-  textFile.busy = true
-  textFile.error = ''
-  try {
-    await invoke('save_workspace_text', { path: textFile.path, text: textFile.text, expected: textFile.original })
-    textFile.original = textFile.text
-  } catch (cause) { textFile.error = String(cause) }
-  finally { textFile.busy = false }
-}
 async function openSystem(entry: WorkspaceEntry) {
   contextMenu.value = null
   try { await invoke('open_workspace_system', { path: entry.path }) }
@@ -165,35 +154,53 @@ function openContext(entry: WorkspaceEntry | null, event: MouseEvent) {
   contextMenu.value = { x: Math.min(event.clientX, window.innerWidth - 230), y: Math.max(4, Math.min(event.clientY, window.innerHeight - 430)), entry }
 }
 
+function cancelCreate() { if (!creating.busy) { creating.kind = ''; creating.error = '' } }
+function beginCreate(kind: 'file' | 'folder', entry?: WorkspaceEntry | null) {
+  if (loading.value || movingBusy.value || creating.busy || !rootPath.value) return
+  const selectedPaths = [...selection.selected]
+  const selected = selectedPaths[selectedPaths.length - 1]
+  const target = entry === undefined ? (selected ? findEntry(selected) : null) : entry
+  creating.parentPath = parentOf(target)
+  creating.kind = kind
+  creating.sequence++
+  creating.error = ''
+  contextMenu.value = null
+  setFolderExpanded(creating.parentPath, true)
+}
+async function submitCreate(name: string) {
+  if (creating.busy || !creating.kind) return
+  if (!name.trim()) { cancelCreate(); return }
+  creating.busy = true
+  creating.error = ''
+  const kind = creating.kind
+  try {
+    const path = await invoke<string>(kind === 'file' ? 'create_workspace_text' : 'create_workspace_folder', { parentPath: creating.parentPath, name })
+    creating.kind = ''
+    await refresh()
+    if (kind === 'file') {
+      const entry = findEntry(path)
+      if (entry) await openEntry(entry)
+      else workbench.openTextFile(path)
+    } else {
+      selection.replace([path])
+      setFolderExpanded(path, true)
+    }
+  } catch (cause) { creating.error = String(cause) }
+  finally { creating.busy = false }
+}
 function openDialog(mode: typeof dialog.mode, entry: WorkspaceEntry | null = contextMenu.value?.entry ?? null) {
+  cancelCreate()
   contextMenu.value = null
   dialog.open = true
   dialog.mode = mode
   dialog.target = entry
-  dialog.parentPath = mode === 'file' && !entry && currentRoot.value?.builtin ? '' : mode === 'file' || mode === 'folder' ? parentOf(entry) : ''
   dialog.name = mode === 'rename' && entry ? entry.name : ''
-  dialog.language = 'cpp'
 }
-
 function closeDialog() { dialog.open = false; dialog.mode = ''; dialog.target = null; dialog.name = '' }
-
 async function submitDialog() {
   error.value = ''
   try {
-    if (dialog.mode === 'file') {
-      if (dialog.language === 'text') {
-        const path = await invoke<string>('create_workspace_text', { parentPath: dialog.parentPath || rootPath.value, name: dialog.name })
-        closeDialog(); await refresh(); await openTextFile(path); return
-      }
-      const file = await invoke<DraftFileInfo>('create_workspace_file', { parentPath: dialog.parentPath || null, name: dialog.name, language: dialog.language })
-      closeDialog()
-      await refresh()
-      await workbench.openDraftFile(file)
-    } else if (dialog.mode === 'folder') {
-      await invoke('create_workspace_folder', { parentPath: dialog.parentPath || null, name: dialog.name })
-      closeDialog()
-      await refresh()
-    } else if (dialog.mode === 'rename' && dialog.target) {
+    if (dialog.mode === 'rename' && dialog.target) {
       await store.persistDraft()
       const oldPath = dialog.target.path
       const newPath = await invoke<string>('rename_workspace_entry', { path: oldPath, newName: dialog.name })
@@ -233,7 +240,7 @@ async function openEntry(entry: WorkspaceEntry, event?: MouseEvent) {
       const file = await invoke<DraftFileInfo>('get_workspace_draft_info', { path: entry.path })
       await workbench.openDraftFile(file)
     } catch (cause) { error.value = String(cause) }
-  } else await openTextFile(entry.path)
+  } else workbench.openTextFile(entry.path)
 }
 
 async function moveEntries(sources: WorkspaceEntry[], destinationPath: string) {
@@ -311,14 +318,61 @@ function fileUrl(path: string) {
 
 function dismissMenu() { dismissMenus() }
 
+function externalDestination(position: { x: number; y: number }): string {
+  if (movingBusy.value || loading.value || dialog.open || !!creating.kind || holdMove.movingPath.value || !rootPath.value) return ''
+  const path = externalWorkspaceDropPath(explorerElement.value, position, window.devicePixelRatio)
+  return path === null ? '' : parentOf(findEntry(path))
+}
+
+async function handleExternalDrop(event: DragDropEvent) {
+  if (event.type === 'leave') {
+    externalTarget.value = ''
+    externalCount.value = 0
+    return
+  }
+  if (event.type === 'enter' || event.type === 'drop') externalCount.value = event.paths.length
+  const destination = externalDestination(event.position)
+  externalTarget.value = destination
+  if (event.type !== 'drop') return
+  externalTarget.value = ''
+  externalCount.value = 0
+  if (!destination || !event.paths.length) return
+  movingBusy.value = true
+  dismissMenus()
+  error.value = ''
+  notice.value = '正在复制文件和文件夹…'
+  try {
+    const result = await invoke<{ paths: string[]; errors: string[] }>('import_workspace_entries', {
+      sourcePaths: event.paths, destinationPath: destination,
+    })
+    setFolderExpanded(destination, true)
+    await refresh()
+    selection.replace(result.paths)
+    notice.value = result.paths.length ? `已导入 ${result.paths.length} 项，系统中的原文件已保留` : ''
+    error.value = result.errors.join('\n')
+  } catch (e) {
+    notice.value = ''
+    error.value = String(e)
+  } finally {
+    movingBusy.value = false
+  }
+}
+
 onMounted(() => {
   refresh()
-  refreshTimer = setInterval(() => { if (!document.hidden && !movingBusy.value && !dialog.open && !textFile.open) void refresh(true) }, 5000)
+  refreshTimer = setInterval(() => { if (!document.hidden && !movingBusy.value && !dialog.open && !creating.kind) void refresh(true) }, 5000)
   window.addEventListener('click', dismissMenu)
   window.addEventListener('blur', dismissMenu)
   window.addEventListener('keydown', handleEscape)
+  if (isTauri()) {
+    void getCurrentWebview().onDragDropEvent(event => { void handleExternalDrop(event.payload) })
+      .then(unlisten => { if (disposed) unlisten(); else unlistenExternalDrop = unlisten })
+      .catch(e => { if (!disposed) error.value = `无法启用系统文件拖入：${String(e)}` })
+  }
 })
 onBeforeUnmount(() => {
+  disposed = true
+  unlistenExternalDrop?.()
   if (refreshTimer) clearInterval(refreshTimer)
   window.removeEventListener('click', dismissMenu)
   window.removeEventListener('blur', dismissMenu)
@@ -327,31 +381,33 @@ onBeforeUnmount(() => {
 </script>
 
 <template>
-  <div class="explorer" @dragover.prevent="holdMove.nativeOver" @drop.prevent="holdMove.nativeDrop" @dragend="holdMove.cancel" @dragleave="holdMove.nativeLeave" @click.capture="holdMove.suppressEvent" @contextmenu.prevent="openContext(null, $event)">
+  <div class="explorer" ref="explorerElement" @dragover.prevent="holdMove.nativeOver" @drop.prevent="holdMove.nativeDrop" @dragend="holdMove.cancel" @dragleave="holdMove.nativeLeave" @click.capture="holdMove.suppressEvent" @contextmenu.prevent="openContext(null, $event)">
     <div class="explorer__toolbar">
       <strong>资源管理器</strong>
-      <button class="icon-button" title="新建文件" aria-label="新建文件" @click.stop="openDialog('file', null)"><i class="codicon codicon-new-file" aria-hidden="true" /></button>
-      <button class="icon-button" title="新建文件夹" aria-label="新建文件夹" @click.stop="openDialog('folder', null)"><i class="codicon codicon-new-folder" aria-hidden="true" /></button>
+      <button class="icon-button" title="新建文件" aria-label="新建文件" @click.stop="beginCreate('file')"><i class="codicon codicon-new-file" aria-hidden="true" /></button>
+      <button class="icon-button" title="新建文件夹" aria-label="新建文件夹" @click.stop="beginCreate('folder')"><i class="codicon codicon-new-folder" aria-hidden="true" /></button>
       <button class="icon-button" :title="selectionMode ? '退出多选' : '多选文件和文件夹'" aria-label="多选文件和文件夹" :aria-pressed="selectionMode" @click.stop="toggleSelectionMode"><i class="codicon" :class="selectionMode ? 'codicon-check' : 'codicon-checklist'" aria-hidden="true" /></button>
     </div>
-    <div class="workspace-selector" :data-workspace-path="rootPath" :class="{ target: holdMove.targetPath.value === rootPath && !!rootPath }"><select v-model="rootPath" aria-label="当前工作区" :title="rootPath" :disabled="loading || movingBusy" @change="selectRoot"><option v-for="root in roots" :key="root.path" :value="root.path">{{ root.name }}</option></select></div>
+    <div class="workspace-selector" :data-workspace-path="rootPath" :class="{ target: (externalTarget || holdMove.targetPath.value) === rootPath && !!rootPath }"><select v-model="rootPath" aria-label="当前工作区" :title="rootPath" :disabled="loading || movingBusy || creating.busy" @change="selectRoot"><option v-for="root in roots" :key="root.path" :value="root.path">{{ root.name }}</option></select></div>
     <div v-if="selectionMode" class="tree-selection-bar"><button :disabled="!selection.scope.length || movingBusy" @click="selection.toggleAll()">{{ selection.allSelected ? '取消全选' : '全选' }}</button><span>已选 {{ selection.selected.size }} 项</span></div>
     <div v-if="notice" class="explorer__notice">{{ notice }}</div>
     <div v-if="error" class="explorer__error">{{ error }}</div>
     <div v-if="allEntries.length >= 10000" class="explorer__notice">目录较大，仅显示前 10000 项。可单独添加子文件夹。</div>
     <div v-if="loading && !entries.length" class="explorer__empty">正在读取本地文件…</div>
-    <div v-else-if="!entries.length" class="explorer__empty">尚无本地代码。右键空白处即可新建。</div>
+    <div v-else-if="!entries.length" class="explorer__empty">暂无文件。可从系统资源管理器拖入文件或文件夹，也可右键新建。</div>
     <div class="explorer__tree" data-directory-drop-area>
-      <ResourceTreeNode v-for="entry in entries" :key="entry.path" :entry="entry" :active-path="store.draftPath" :moving-path="holdMove.movingPath.value" :moving-paths="holdMove.movingPaths.value" :selected-paths="selection.selected" :selection-mode="selectionMode" :target-path="holdMove.targetPath.value" :expanded-paths="expandedPaths" @open="openEntry" @context="openContext" @select="(entry, event) => selectEntry(entry, event, true)" @hold="beginEntryMove" @drag="holdMove.startNative" @toggle="setFolderExpanded" />
+      <ResourceCreateInput :key="creating.sequence" v-if="creating.kind && creating.parentPath === rootPath" :kind="creating.kind" :busy="creating.busy" :error="creating.error" @submit="submitCreate" @cancel="cancelCreate" />
+      <ResourceTreeNode v-for="entry in entries" :key="entry.path" :entry="entry" :create-parent="creating.kind ? creating.parentPath : undefined" :active-path="workbench.activeTab?.kind === 'text' ? workbench.activeTab.path : store.draftPath" :moving-path="holdMove.movingPath.value" :moving-paths="holdMove.movingPaths.value" :selected-paths="selection.selected" :selection-mode="selectionMode" :target-path="externalTarget || holdMove.targetPath.value" :expanded-paths="expandedPaths" @open="openEntry" @context="openContext" @select="(entry, event) => selectEntry(entry, event, true)" @hold="beginEntryMove" @drag="holdMove.startNative" @toggle="setFolderExpanded"><template #create><ResourceCreateInput :key="creating.sequence" v-if="creating.kind" :kind="creating.kind" :busy="creating.busy" :error="creating.error" @submit="submitCreate" @cancel="cancelCreate" /></template></ResourceTreeNode>
     </div>
-    <div v-if="holdMove.movingPath.value" class="explorer__move-hint">移动 {{ holdMove.movingCount.value }} 项到目标文件夹后松开</div>
+    <div v-if="externalTarget" class="explorer__move-hint" style="pointer-events: none">松开即可复制 {{ externalCount }} 项到 {{ findEntry(externalTarget)?.name || currentRoot?.name || '当前工作区' }}</div>
+    <div v-else-if="holdMove.movingPath.value" class="explorer__move-hint">移动 {{ holdMove.movingCount.value }} 项到目标文件夹后松开</div>
 
     <div v-if="contextMenu" class="context-menu" :style="{ left: `${contextMenu.x}px`, top: `${contextMenu.y}px` }" @click.stop>
       <button v-if="contextMenu.entry && !contextMenu.entry.isDirectory" @click="openEntry(contextMenu.entry); contextMenu = null">打开</button>
       <button v-if="contextMenu.entry && !contextMenu.entry.isDirectory" @click="openSystem(contextMenu.entry)">使用系统应用打开</button>
       <button @click="addRoot(); contextMenu = null">添加工作区文件夹…</button>
-      <button @click="openDialog('file')">新建文件…</button>
-      <button @click="openDialog('folder')">新建文件夹…</button>
+      <button @click="beginCreate('file', contextMenu?.entry ?? null)">新建文件…</button>
+      <button @click="beginCreate('folder', contextMenu?.entry ?? null)">新建文件夹…</button>
       <div v-if="contextMenu.entry" class="context-menu__line" />
       <button v-if="contextMenu.entry" @click="openDialog('rename')">重命名…</button>
       <button v-if="contextMenu.entry" class="danger" @click="openDialog('delete')">删除…</button>
@@ -372,26 +428,23 @@ onBeforeUnmount(() => {
 
     <div v-if="dialog.open" class="entry-dialog" @click.self="closeDialog">
       <form @submit.prevent="submitDialog">
-        <h3>{{ dialog.mode === 'file' ? '新建文件' : dialog.mode === 'folder' ? '新建文件夹' : dialog.mode === 'rename' ? '重命名' : '确认删除' }}</h3>
+        <h3>{{ dialog.mode === 'rename' ? '重命名' : '确认删除' }}</h3>
         <template v-if="dialog.mode !== 'delete'">
-          <label>名称<input v-model="dialog.name" autofocus :placeholder="dialog.mode === 'file' ? '例如 solution 或 solution.cpp' : '输入名称'" /></label>
-          <label v-if="dialog.mode === 'file'">类型<select v-model="dialog.language"><option value="cpp">C++</option><option value="python">Python</option><option value="java">Java</option><option value="text">文本 / 配置文件（保留输入的文件名）</option></select></label>
-          <p v-if="dialog.mode === 'file' || dialog.mode === 'folder'">建立位置：{{ dialog.parentPath || (dialog.mode === 'file' ? '今天的日期文件夹' : rootPath) }}</p>
+          <label>名称<input v-model="dialog.name" autofocus placeholder="输入名称" /></label>
+
         </template>
         <p v-else class="delete-warning">将“{{ dialog.target?.name }}”<template v-if="dialog.target?.isDirectory">及其中的全部文件</template>移到系统回收站，可通过系统回收站恢复。</p>
         <div class="entry-dialog__actions"><button type="button" @click="closeDialog">取消</button><button type="submit" :class="{ danger: dialog.mode === 'delete' }" :disabled="dialog.mode !== 'delete' && !dialog.name.trim()">{{ dialog.mode === 'delete' ? '确认删除' : '确定' }}</button></div>
       </form>
     </div>
-    <div v-if="textFile.open" class="text-file-dialog" @keydown.ctrl.s.prevent="saveTextFile" @keydown.meta.s.prevent="saveTextFile">
-      <section><header><strong :title="textFile.path">{{ textFile.path.split(/[\\/]/).pop() }}{{ textFile.text !== textFile.original ? ' ●' : '' }}</strong><button :disabled="textFile.busy" @click="saveTextFile">保存</button><button :disabled="textFile.busy" @click="closeTextFile">关闭</button></header><p v-if="textFile.error" class="explorer__error">{{ textFile.error }}</p><textarea v-model="textFile.text" :readonly="textFile.busy" spellcheck="false" aria-label="文件内容" /><footer>{{ textFile.path }} · UTF-8 · 此文件不绑定题目或测试点</footer></section>
-    </div>
+
   </div>
 </template>
 
 <style scoped lang="scss">
 .explorer { position: relative; height: 100%; display: flex; flex-direction: column; min-height: 0; color: var(--color-tone-ccc); }
 .workspace-selector { padding:0 8px 7px; select { display:block; box-sizing:border-box; width:100%; height:28px; min-width:0; padding:0 7px; border:1px solid var(--color-border-control); border-radius:3px; background:var(--color-bg-panel-alt); color:var(--color-text-secondary); font:12px var(--font-ui); outline:none; &:focus-visible { border-color:var(--color-accent); } } }
-.text-file-dialog { position:fixed; inset:0; z-index:1950; display:flex; align-items:center; justify-content:center; background:var(--color-overlay); section { width:min(900px,85vw); height:75vh; display:flex; flex-direction:column; background:var(--color-bg-panel); border:1px solid var(--color-border-strong); border-radius:6px; overflow:hidden; } header { display:flex; gap:10px; padding:10px; strong { flex:1; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; } button { background:var(--color-bg-control); color:var(--color-text-primary); border:1px solid var(--color-border); padding:4px 12px; cursor:pointer; } } textarea { flex:1; min-height:0; resize:none; padding:12px; background:var(--color-bg-deep); color:var(--color-text-primary); border:0; outline:none; font:14px/1.6 Consolas,monospace; tab-size:4; white-space:pre; } footer { padding:8px; font-size:11px; color:var(--color-text-muted); overflow-wrap:anywhere; } }
+
 .explorer__toolbar { display:flex; flex:0 0 36px; align-items:center; gap:3px; padding:0 8px 0 12px; strong { flex:1; font-size:12px; font-weight:500; color:var(--color-text-secondary); } .icon-button { display:grid; place-items:center; width:26px; height:26px; padding:0; border:0; border-radius:3px; background:transparent; color:var(--color-text-soft); cursor:pointer; .codicon { font-size:17px; } &:hover { background:var(--color-bg-hover); color:var(--color-text-primary); } &[aria-pressed="true"] { background:var(--color-bg-selected); color:var(--color-accent-text); } &:focus-visible { outline:1px solid var(--color-accent); } } }
 .explorer__tree { flex:1; min-height:0; overflow:auto; padding:2px 0 14px; scrollbar-width:thin; }
 .explorer__move-hint { position: absolute; right: 7px; bottom: 7px; left: 7px; z-index: 5; padding: 6px; border: 1px solid var(--color-accent); border-radius: 4px; background: var(--color-accent-surface-hover); color: var(--color-accent-text); text-align: center; font-size: 9px; }

@@ -1,4 +1,6 @@
 <script setup lang="ts">
+import '@vscode/codicons/dist/codicon.css'
+import { noteParent } from '../utils/noteOrder'
 import { computed, onBeforeUnmount, onMounted, reactive, ref, watch } from 'vue'
 import { revealItemInDir } from '@tauri-apps/plugin-opener'
 import type { NoteEntry } from '../types'
@@ -9,6 +11,7 @@ import { batchDirectoryDropTarget, directoryDropTarget } from '../utils/director
 import { useLongPressMove } from '../composables/useLongPressMove'
 import { usePointerResize } from '../composables/usePointerResize'
 import { useWorkbenchStore } from '../stores/workbenchStore'
+import ResourceCreateInput from './ResourceCreateInput.vue'
 import NoteTreeNode from './NoteTreeNode.vue'
 import MarkdownNoteEditor from './MarkdownNoteEditor.vue'
 
@@ -20,6 +23,7 @@ const mode = ref<'read' | 'edit'>('read')
 const notice = ref('')
 const selectionMode = ref(false)
 const movingBusy = ref(false)
+const sorting = ref(false)
 const expandedPaths = ref(new Set<string>())
 const allEntries = computed(() => flattenTree(notes.entries))
 const visibleEntries = computed(() => flattenTree(notes.entries, expandedPaths.value))
@@ -73,15 +77,24 @@ async function moveEntries(sources: NoteEntry[], destination: string) {
   } catch (cause) { notes.error = String(cause) }
   finally { movingBusy.value = false }
 }
+function sortTarget(sources: NoteEntry[], path: string | null) {
+  const target = path ? findEntry(path) : null
+  if (!target || sources.some(source => source.path === target.path || noteParent(source.path) !== noteParent(target.path))) return undefined
+  return target.path
+}
+function commitDrop(sources: NoteEntry[], destination: string) {
+  if (sorting.value) notes.reorder(sources.map(source => source.path), destination)
+  else return moveEntries(sources, destination)
+}
 const holdMove = useLongPressMove<NoteEntry>({
   targetAttribute: 'data-note-path', rootSelector: '.note-sidebar',
   getSources: source => {
     if (!selection.selected.has(source.path)) selection.replace([source.path])
     return topLevelEntries(allEntries.value.filter(entry => selection.selected.has(entry.path)))
   },
-  resolveTarget: (source, path) => directoryDropTarget(source, path ? findEntry(path) : null, notes.rootPath),
-  resolveTargets: (sources, path) => batchDirectoryDropTarget(sources, path ? findEntry(path) : null, notes.rootPath),
-  onMove: (source, destination) => moveEntries([source], destination || notes.rootPath), onMoveMany: moveEntries,
+  resolveTarget: (source, path) => sorting.value ? sortTarget([source], path) : directoryDropTarget(source, path ? findEntry(path) : null, notes.rootPath),
+  resolveTargets: (sources, path) => sorting.value ? sortTarget(sources, path) : batchDirectoryDropTarget(sources, path ? findEntry(path) : null, notes.rootPath),
+  onMove: (source, destination) => commitDrop([source], destination || notes.rootPath), onMoveMany: commitDrop,
 })
 function selectEntry(entry: NoteEntry, event?: MouseEvent, checkbox = false) {
   if (holdMove.shouldSuppressClick()) { event?.preventDefault(); return true }
@@ -104,6 +117,32 @@ async function openEntry(entry: NoteEntry, event?: MouseEvent) {
 
 function openContext(entry: NoteEntry | null, event: MouseEvent) {
   contextMenu.value = { x: Math.min(event.clientX, window.innerWidth - 195), y: Math.max(42, Math.min(event.clientY, window.innerHeight - 360)), entry }
+}
+
+const creating = reactive({ kind: '' as '' | 'file' | 'folder', parent: '', busy: false, error: '', sequence: 0 })
+function cancelCreate() { if (!creating.busy) { creating.kind = ''; creating.error = '' } }
+function beginCreate(kind: 'file' | 'folder', entry?: NoteEntry | null) {
+  if (creating.busy || movingBusy.value || notes.loading || !notes.rootPath) return
+  const paths = [...selection.selected]
+  const selected = paths.length ? findEntry(paths[paths.length - 1]!) : null
+  creating.parent = parentOf(entry === undefined ? selected : entry)
+  creating.kind = kind
+  creating.sequence++
+  creating.error = ''
+  setFolderExpanded(creating.parent, true)
+  contextMenu.value = null
+}
+async function submitCreate(name: string) {
+  if (creating.busy || !creating.kind) return
+  if (!name.trim()) { cancelCreate(); return }
+  creating.busy = true
+  creating.error = ''
+  try {
+    if (creating.kind === 'file') { await notes.createFile(creating.parent || null, name); mode.value = 'edit' }
+    else { const path = await notes.createFolder(creating.parent || null, name); setFolderExpanded(path, true); selection.replace([path]) }
+    creating.kind = ''
+  } catch (e) { creating.error = String(e) }
+  finally { creating.busy = false }
 }
 
 function openDialog(kind: typeof dialog.mode, entry: NoteEntry | null = contextMenu.value?.entry ?? null) {
@@ -188,16 +227,17 @@ onBeforeUnmount(() => {
   <section class="note-manager">
     <div ref="noteBody" class="note-manager__body">
       <aside @dragover.prevent="holdMove.nativeOver" @drop.prevent="holdMove.nativeDrop" @dragend="holdMove.cancel" @dragleave="holdMove.nativeLeave" @click.capture="holdMove.suppressEvent" class="note-sidebar" :style="{ width: `${workbench.noteSidebarWidth}px` }" @contextmenu.prevent="openContext(null, $event)">
-        <div class="note-sidebar__toolbar"><strong>笔记目录</strong><button :aria-pressed="selectionMode" title="多选笔记和文件夹" @click.stop="toggleSelectionMode">{{ selectionMode ? '完成' : '多选' }}</button><button title="新建笔记" @click.stop="openDialog('file', null)">📄＋</button><button title="新建文件夹" @click.stop="openDialog('folder', null)">📁＋</button><button title="刷新" @click.stop="notes.refresh">↻</button></div>
-        <div v-if="selectionMode" class="tree-selection-bar"><button :disabled="!selection.scope.length || movingBusy" @click="selection.toggleAll()">{{ selection.allSelected ? '取消全选' : '全选' }}</button><span>已选 {{ selection.selected.size }} 项</span><button :disabled="!selection.selected.size || movingBusy" @click="selection.clear()">清空</button></div>
-        <div :data-note-path="notes.rootPath" :class="{ target: holdMove.targetPath.value === notes.rootPath && !!notes.rootPath }" class="note-sidebar__root" :title="notes.rootPath">{{ notes.rootPath || 'notes' }}</div>
+        <div class="note-sidebar__toolbar"><strong>算法笔记</strong><button title="新建笔记" aria-label="新建笔记" @click.stop="beginCreate('file')"><i class="codicon codicon-new-file" /></button><button title="新建文件夹" aria-label="新建文件夹" @click.stop="beginCreate('folder')"><i class="codicon codicon-new-folder" /></button><button :aria-pressed="selectionMode" title="多选笔记和文件夹" aria-label="多选笔记和文件夹" @click.stop="toggleSelectionMode"><i class="codicon" :class="selectionMode ? 'codicon-check' : 'codicon-checklist'" /></button></div>
+        <div v-if="selectionMode" class="tree-selection-bar"><button :disabled="!selection.scope.length || movingBusy" @click="selection.toggleAll()">{{ selection.allSelected ? '取消全选' : '全选' }}</button><span>已选 {{ selection.selected.size }} 项</span></div>
+        <div :data-note-path="notes.rootPath" :class="{ target: holdMove.targetPath.value === notes.rootPath && !!notes.rootPath }" class="note-sidebar__root" :title="notes.rootPath">{{ sorting ? '拖动调整同级顺序' : '笔记工作区' }}</div>
         <div v-if="notice" class="notice">{{ notice }}</div><div v-if="notes.error" class="error">{{ notes.error }}</div>
         <div v-if="notes.loading && !notes.entries.length" class="empty">正在读取笔记…</div>
         <div v-else-if="!notes.entries.length" class="empty">还没有笔记。点击上方按钮即可创建。</div>
         <div class="note-tree" data-directory-drop-area>
-          <NoteTreeNode v-for="entry in notes.entries" :key="entry.path" :entry="entry" :active-path="notes.activeNote?.path" :moving-path="holdMove.movingPath.value" :moving-paths="holdMove.movingPaths.value" :selected-paths="selection.selected" :selection-mode="selectionMode" :expanded-paths="expandedPaths" @toggle="setFolderExpanded" :target-path="holdMove.targetPath.value" @open="openEntry" @context="openContext" @select="(entry, event) => selectEntry(entry, event, true)" @hold="beginEntryMove" @drag="holdMove.startNative" />
+          <ResourceCreateInput v-if="creating.kind && creating.parent === notes.rootPath" :key="creating.sequence" :kind="creating.kind" :busy="creating.busy" :error="creating.error" @submit="submitCreate" @cancel="cancelCreate" />
+          <NoteTreeNode v-for="entry in notes.entries" :key="entry.path" :entry="entry" :create-parent="creating.kind ? creating.parent : undefined" :active-path="notes.activeNote?.path" :moving-path="holdMove.movingPath.value" :moving-paths="holdMove.movingPaths.value" :selected-paths="selection.selected" :selection-mode="selectionMode" :expanded-paths="expandedPaths" @toggle="setFolderExpanded" :target-path="holdMove.targetPath.value" @open="openEntry" @context="openContext" @select="(entry, event) => selectEntry(entry, event, true)" @hold="beginEntryMove" @drag="holdMove.startNative"><template #create><ResourceCreateInput v-if="creating.kind" :key="creating.sequence" :kind="creating.kind" :busy="creating.busy" :error="creating.error" @submit="submitCreate" @cancel="cancelCreate" /></template></NoteTreeNode>
         </div>
-        <div v-if="holdMove.movingPath.value" class="move-hint">移动 {{ holdMove.movingCount.value }} 项到目标文件夹后松开</div>
+        <div v-if="holdMove.movingPath.value" class="move-hint">{{ sorting ? '松开后放到目标项目之前' : `移动 ${holdMove.movingCount.value} 项到目标文件夹后松开` }}</div>
       </aside>
       <div class="note-sidebar-divider" title="拖动调整笔记目录宽度" @pointerdown="startSidebarResize" />
       <main class="note-workspace">
@@ -208,13 +248,17 @@ onBeforeUnmount(() => {
           </header>
           <MarkdownNoteEditor :model-value="notes.activeNote.content" :mode="mode" :note-path="notes.activeNote.path" @update:model-value="notes.updateContent" @save="notes.saveActive" />
         </template>
-        <div v-else class="welcome"><strong>选择一篇笔记</strong><p>左侧可以创建笔记和文件夹；题目标题栏创建的笔记会先放进“未归档”。</p><p>拖动文件或文件夹到目标目录即可移动。</p></div>
+        <div v-else class="welcome"><strong>选择一篇笔记</strong><p>左侧可以创建笔记和文件夹；题目标题栏创建的笔记会先放进“未归档”。</p><p>拖动文件或文件夹到目标目录即可移动。右键菜单可上移、下移，或开启拖动排序。</p></div>
       </main>
     </div>
 
     <div v-if="contextMenu" class="context-menu" :style="{ left: `${contextMenu.x}px`, top: `${contextMenu.y}px` }" @click.stop>
       <button v-if="contextMenu.entry && !contextMenu.entry.isDirectory" @click="openEntry(contextMenu.entry); contextMenu = null">打开</button>
-      <button @click="openDialog('file')">新建笔记…</button><button @click="openDialog('folder')">新建文件夹…</button>
+      <button @click="sorting = !sorting; contextMenu = null">{{ sorting ? '退出顺序调整' : '调整同级顺序（拖动）' }}</button>
+      <button v-if="contextMenu.entry" @click="notes.shift(contextMenu.entry.path, -1); contextMenu = null">上移</button><button v-if="contextMenu.entry" @click="notes.shift(contextMenu.entry.path, 1); contextMenu = null">下移</button>
+      <button @click="notes.refresh(); contextMenu = null">刷新</button>
+      <button @click="expandedPaths = new Set(); contextMenu = null">全部折叠</button>
+      <button @click="beginCreate('file', contextMenu?.entry ?? null)">新建笔记…</button><button @click="beginCreate('folder', contextMenu?.entry ?? null)">新建文件夹…</button>
       <div v-if="contextMenu.entry" class="line" /><button v-if="contextMenu.entry" @click="openDialog('rename')">重命名…</button><button v-if="contextMenu.entry" class="danger" @click="openDialog('delete')">删除…</button>
       <div class="line" /><button v-if="contextMenu.entry" @click="stage(contextMenu.entry, true)">剪切</button><button v-if="contextMenu.entry" @click="stage(contextMenu.entry, false)">复制</button><button :disabled="!clipboard" @click="paste(contextMenu.entry)">粘贴</button>
       <div class="line" /><button @click="copyPath(contextMenu.entry?.path || notes.rootPath)">复制路径</button><button @click="copyFileUrl(contextMenu.entry?.path || notes.rootPath)">复制文件链接</button><button @click="revealItemInDir(contextMenu.entry?.path || notes.rootPath); contextMenu = null">在文件资源管理器中显示</button>
@@ -248,4 +292,15 @@ onBeforeUnmount(() => {
 .tree-selection-bar { display: flex; align-items: center; gap: 6px; padding: 5px 9px; font-size: 11px; border-bottom: 1px solid var(--color-border); }
 .tree-selection-bar span { flex: 1; color: var(--color-text-muted); }
 .tree-selection-bar button { border: 0; border-radius: 3px; padding: 4px 6px; background: var(--color-bg-control); color: var(--color-text-secondary); cursor: pointer; }
+</style>
+
+<style scoped>
+.note-sidebar__toolbar { display:flex; align-items:center; gap:3px; height:36px; padding:0 8px 0 12px; }
+.note-sidebar__toolbar strong { flex:1; font-size:12px; font-weight:500; }
+.note-sidebar__toolbar button { display:grid; place-items:center; width:26px; height:26px; padding:0; border:0; background:transparent; color:var(--color-text-soft); border-radius:3px; }
+.note-sidebar__toolbar .codicon { font-size:17px; }
+.note-sidebar__toolbar button:hover { background:var(--color-bg-hover); }
+.note-sidebar__toolbar button[aria-pressed='true'] { background:var(--color-bg-selected); color:var(--color-accent-text); }
+.note-sidebar__root { margin:0 8px 7px; padding:5px 7px; border:1px solid var(--color-border-control); border-radius:3px; background:var(--color-bg-panel-alt); font-size:12px; }
+.note-tree { padding:2px 0 14px; }
 </style>

@@ -309,6 +309,7 @@ export interface ContestAnalysis {
 export type AssistanceLevel = 'hint' | 'guided' | 'full'
 
 export interface AiMessage {
+  contextLabel?: string
   role: 'user' | 'assistant'
   content: string
   timestamp: number

@@ -7,7 +7,7 @@ import type { Language } from '../types'
 import { monaco } from '../monaco'
 import { configureMonaco } from '../monaco'
 import { VueMonacoEditor } from '@guolao/vue-monaco-editor'
-import { formatCode } from '../utils/codeFormatter'
+import { registerCodeFormatters } from '../utils/editorFormatting'
 import CodeVersionManager from './CodeVersionManager.vue'
 import EditorRunControl from './EditorRunControl.vue'
 import { useWorkbenchStore } from '../stores/workbenchStore'
@@ -35,34 +35,15 @@ let breakpointDecorations: any = null
 let breakpointHoverDecorations: any = null
 let debugLineDecorations: any = null
 let editorDisposables: any[] = []
-let formatterDisposables: any[] = []
-
-function registerFormatters() {
-  if (formatterDisposables.length) return
-  for (const language of ['cpp', 'python', 'java'] as Language[]) {
-    formatterDisposables.push(monaco.languages.registerDocumentFormattingEditProvider(language, {
-      async provideDocumentFormattingEdits(model: any) {
-        store.isFormatting = true
-        store.formatError = ''
-        try {
-          const formatted = await formatCode(model.getValue(), language)
-          if (formatted === model.getValue()) return []
-          return [{ range: model.getFullModelRange(), text: formatted }]
-        } catch (error) {
-          store.formatError = `格式化失败：${String(error)}`
-          return []
-        } finally {
-          store.isFormatting = false
-        }
-      },
-    }))
-  }
-}
-
 async function formatDocument(editor = editorRef.value) {
   if (!editor || store.isFormatting) return
+  const model = editor.getModel()
+  const path = store.draftPath
+  const problem = store.currentProblem
+  const language = store.currentLanguage
   await editor.getAction('editor.action.formatDocument')?.run()
-  store.updateCode(editor.getValue())
+  if (editorRef.value === editor && editor.getModel() === model && store.draftPath === path
+      && store.currentProblem === problem && store.currentLanguage === language) store.updateCode(editor.getValue())
 }
 
 function breakpointLine(event: any) {
@@ -96,7 +77,7 @@ function renderDebugLine() {
 }
 
 function handleMount(editor: any) {
-  registerFormatters()
+  registerCodeFormatters(monaco, store)
   editorRef.value = editor
   ownedModels.add(editor.getModel())
   breakpointDecorations = editor.createDecorationsCollection([])
@@ -114,17 +95,23 @@ function handleMount(editor: any) {
     }),
     editor.onMouseLeave(() => breakpointHoverDecorations.set([])),
   ]
-  editor.addCommand(monaco.KeyMod.CtrlCmd | monaco.KeyCode.KeyS, async () => {
+  // addCommand registers a global binding. addAction scopes it to this editor
+  // and returns a disposable, so hidden/closed groups cannot steal shortcuts.
+  const action = (id: string, key: number, run: () => unknown) => editorDisposables.push(editor.addAction({
+    id, label: id, keybindings: [key], precondition: 'editorTextFocus', run,
+  }))
+  action('acm.save', monaco.KeyMod.CtrlCmd | monaco.KeyCode.KeyS, async () => {
+    const model = editor.getModel()
     if (settings.formatOnSave) await formatDocument(editor)
-    await store.persistDraft()
+    if (editorRef.value === editor && editor.getModel() === model) await store.persistDraft()
   })
-  editor.addCommand(monaco.KeyMod.Shift | monaco.KeyMod.Alt | monaco.KeyCode.KeyF, () => formatDocument(editor))
-  editor.addCommand(monaco.KeyMod.CtrlCmd | monaco.KeyCode.F5, () => store.runLocally())
-  editor.addCommand(monaco.KeyCode.F5, async () => {
+  action('acm.format', monaco.KeyMod.Shift | monaco.KeyMod.Alt | monaco.KeyCode.KeyF, () => formatDocument(editor))
+  action('acm.run', monaco.KeyMod.CtrlCmd | monaco.KeyCode.F5, () => store.runLocally())
+  action('acm.debug', monaco.KeyCode.F5, async () => {
     await store.debugLocally()
     workbench.openDebugger()
   })
-  editor.addCommand(monaco.KeyMod.Alt | monaco.KeyCode.F9, () => {
+  action('acm.breakpoint', monaco.KeyMod.Alt | monaco.KeyCode.F9, () => {
     const line = editor.getPosition()?.lineNumber
     if (line) store.toggleBreakpoint(line)
   })

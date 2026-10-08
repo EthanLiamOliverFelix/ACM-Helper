@@ -1172,7 +1172,7 @@ export const useProblemStore = defineStore('problem', () => {
     return draftFiles.value
   }
 
-  async function openDraftFile(file: DraftFileInfo) {
+  async function openDraftFile(file: DraftFileInfo, buffer?: { text: string; original: string }) {
     if (debugSession.value?.sessionId) await stopDebugSession()
     await queueWorkspaceTransition(async () => {
       if (saveTimer) clearTimeout(saveTimer)
@@ -1208,13 +1208,13 @@ export const useProblemStore = defineStore('problem', () => {
       currentLanguage.value = file.language
       const pendingSave = workspaceSaves.get(workspaceBufferKey(file.platform, file.problemId, file.language, file.path))
       if (pendingSave) await pendingSave
-      currentCode.value = await invoke<string>('read_workspace_file', { path: file.path }).catch(failWorkspaceDetails)
+      currentCode.value = buffer ? buffer.text : await invoke<string>('read_workspace_file', { path: file.path }).catch(failWorkspaceDetails)
       draftPath.value = file.path
-      draftDirty.value = false
+      draftDirty.value = !!buffer && buffer.text !== buffer.original
       runResult.value = null
       debugResult.value = null
       breakpoints.value = []
-      draftSaveStatus.value = 'saved'
+      draftSaveStatus.value = draftDirty.value ? 'template' : 'saved'
       testCases.value = []
       activeTestCaseId.value = ''
       runInput.value = ''

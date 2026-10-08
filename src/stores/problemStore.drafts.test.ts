@@ -2,6 +2,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { createPinia, setActivePinia } from 'pinia'
 import { useProblemStore } from './problemStore'
 import { useWorkbenchStore } from './workbenchStore'
+import { useTextFileStore } from './textFileStore'
 import type { Problem } from '../types'
 
 const mocks = vi.hoisted(() => ({invoke: vi.fn()}))
@@ -218,5 +219,57 @@ describe('code-first navigation', () => {
     finish()
     await Promise.resolve(); await Promise.resolve()
     expect(store.draftPath).toBe('F:/project/b.cpp')
+  })
+})
+
+
+describe('renaming an open text file to source code', () => {
+  function metadata(path: string, language = 'cpp') {
+    return { platform: 'local', problemId: 'local_renamed', title: 'C', language, path, createdAt: 0, unbound: true, statementMarkdown: '' }
+  }
+  it('converts the active tab in place and retains unsaved content', async () => {
+    const workbench = useWorkbenchStore()
+    const files = useTextFileStore()
+    workbench.openTextFile('F:/project/C.txt')
+    const doc = files.document('F:/project/C.txt')
+    doc.loaded = true
+    doc.original = 'original'
+    doc.text = 'int main(){return 0;}'
+    mocks.invoke.mockImplementation(async (command, args) => command === 'get_workspace_draft_info' ? metadata(args.path) : command === 'list_drafts' ? [] : undefined)
+    await workbench.workspacePathChanged('F:/project/C.txt', 'F:/project/C.cpp')
+    const group = workbench.groups[0]!
+    expect(group.tabs).toHaveLength(1)
+    expect(group.tabs[0]!.kind).toBe('code')
+    expect(group.tabs[0]!.context?.language).toBe('cpp')
+    expect(group.activeTabId).toBe(group.tabs[0]!.id)
+    expect(group.tabs[0]!.loading).toBe(false)
+    const store = useProblemStore()
+    expect(store.currentCode).toBe(doc.text)
+    expect(store.draftPath).toBe('F:/project/C.cpp')
+    expect(store.draftDirty).toBe(true)
+    await store.persistDraft()
+    expect(mocks.invoke).toHaveBeenCalledWith('save_workspace_file', { path: 'F:/project/C.cpp', code: doc.text })
+  })
+  it('converts an inactive tab without changing the selected file', async () => {
+    const workbench = useWorkbenchStore()
+    workbench.openTextFile('F:/project/C.txt')
+    workbench.openTextFile('F:/project/D.txt')
+    const selected = workbench.groups[0]!.activeTabId
+    mocks.invoke.mockImplementation(async (command, args) => command === 'get_workspace_draft_info' ? metadata(args.path, 'python') : undefined)
+    await workbench.workspacePathChanged('F:/project/C.txt', 'F:/project/C.PY')
+    expect(workbench.groups[0]!.tabs[0]!.kind).toBe('code')
+    expect(workbench.groups[0]!.tabs[0]!.context?.language).toBe('python')
+    expect(workbench.groups[0]!.activeTabId).toBe(selected)
+  })
+  it('changes a code tab back to text when its source extension is removed', async () => {
+    const workbench = useWorkbenchStore()
+    workbench.groups[0]!.tabs = [{ id: 'code:c', kind: 'code', title: 'C.cpp', context: { kind: 'local-file', contextId: 'file:c', platform: 'local', problemId: 'c', title: 'C', language: 'cpp', path: 'F:/C.cpp' } }]
+    workbench.groups[0]!.activeTabId = 'code:c'
+    await workbench.workspacePathChanged('F:/C.cpp', 'F:/C.txt')
+    const tab = workbench.groups[0]!.tabs[0]!
+    expect(tab.kind).toBe('text')
+    expect(tab.context).toBeUndefined()
+    expect(tab.path).toBe('F:/C.txt')
+    expect(workbench.groups[0]!.activeTabId).toBe(tab.id)
   })
 })

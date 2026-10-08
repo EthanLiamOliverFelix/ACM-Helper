@@ -290,7 +290,7 @@ async function closeLocalStatement() {
     <div v-if="store.currentProblem" class="problem-desc__header">
       <div class="problem-desc__overview">
         <div class="problem-desc__heading">
-          <h1><span class="problem-desc__id">{{ store.currentProblem.id }}</span> <span v-if="store.currentProblem.platform === 'local'" class="problem-desc__name" v-html="localTitleHtml" /><template v-else>{{ store.currentProblem.title }}</template></h1>
+          <h1><span v-if="store.currentProblem.platform === 'local'" class="problem-desc__name">{{ store.contextFileName }}</span><template v-else><span class="problem-desc__id">{{ store.currentProblem.id }}</span> {{ store.currentProblem.title }}</template></h1>
           <small>{{ problemSource }}</small>
         </div>
         <div class="problem-desc__facts">

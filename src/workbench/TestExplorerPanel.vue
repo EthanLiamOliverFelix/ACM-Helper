@@ -78,7 +78,7 @@ function diffTitle(segment: OutputDiffSegment) {
 <template>
   <section class="test-explorer">
     <div class="problem-summary">
-      <strong>{{ store.currentProblem?.id || '未选择题目' }}</strong>
+      <strong :title="store.currentProblem ? store.contextFileName : '未选择题目'">{{ store.currentProblem ? store.contextFileName : '未选择题目' }}</strong>
       <span>{{ store.isLoadingTests ? '加载中…' : `${passedCount} / ${store.testCases.length} 通过` }}</span>
     </div>
 

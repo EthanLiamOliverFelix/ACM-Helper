@@ -35,6 +35,13 @@ export interface WorkbenchTab {
   loadError?: string
 }
 
+export function companionTabTitle(context: WorkbenchContextRef, kind: WorkbenchTabKind): string {
+  const name = typeof context.path === 'string' ? context.path.split(/[\\/]/).pop() : ''
+  const extension = context.language === 'python' ? 'py' : context.language === 'java' ? 'java' : 'cpp'
+  const fileName = name || `${context.title || context.problemId}.${extension}`
+  return `${kind === 'problem-note' ? context.problemId : fileName} · ${kind === 'statement' ? '题面' : kind === 'problem-note' ? '笔记' : 'AI'}`
+}
+
 export interface EditorGroupState {
   id: string
   tabs: WorkbenchTab[]
@@ -125,7 +132,7 @@ export function normalizeWorkbenchState(value: unknown): PersistedWorkbenchState
     id: typeof group.id === 'string' ? group.id : `group-${index + 1}`,
     tabs: group.tabs
       .filter(tab => tab && typeof tab.id === 'string' && validTabKinds.includes(tab.kind as WorkbenchTabKind))
-      .map(tab => ({ ...tab, loading: false, loadError: undefined })),
+      .map(tab => ({ ...tab, title: tab.context && ['statement', 'ai'].includes(tab.kind) ? companionTabTitle(tab.context, tab.kind) : tab.title, loading: false, loadError: undefined })),
     activeTabId: null as string | null,
   })).filter((group, index) => index === 0 || group.tabs.length > 0)
   for (const group of groups) group.activeTabId = group.tabs.some(tab => tab.id === saved.groups?.find(item => item.id === group.id)?.activeTabId)
@@ -298,10 +305,10 @@ export const useWorkbenchStore = defineStore('workbench', () => {
       loading: true,
     }
     const mountedCodeTab = addTab(groups[0], codeTab)
-    const followerTabs = groups.slice(1).flatMap(group => group.tabs).filter(tab => tab.id.startsWith('following:'))
+    const followerTabs = groups.flatMap(group => group.tabs).filter(tab => tab.id.startsWith('following:'))
     for (const follower of followerTabs) {
       follower.context = { ...context }
-      follower.title = `${context.problemId} · ${follower.kind === 'statement' ? '题面' : follower.kind === 'problem-note' ? '笔记' : 'AI'}`
+      follower.title = companionTabTitle(context, follower.kind)
       follower.loading = follower.kind === 'statement' || follower.kind === 'problem-note'
       follower.loadError = undefined
     }
@@ -355,10 +362,10 @@ export const useWorkbenchStore = defineStore('workbench', () => {
       context,
       loading: true,
     })
-    const followerTabs = groups.slice(1).flatMap(group => group.tabs).filter(tab => tab.id.startsWith('following:'))
+    const followerTabs = groups.flatMap(group => group.tabs).filter(tab => tab.id.startsWith('following:'))
     for (const follower of followerTabs) {
       follower.context = { ...context }
-      follower.title = `${context.problemId} · ${follower.kind === 'statement' ? '题面' : follower.kind === 'problem-note' ? '笔记' : 'AI'}`
+      follower.title = companionTabTitle(context, follower.kind)
       follower.loading = follower.kind === 'statement' || follower.kind === 'problem-note'
       follower.loadError = undefined
     }
@@ -390,15 +397,17 @@ export const useWorkbenchStore = defineStore('workbench', () => {
     await store.setLanguage(language)
     if (!tab || tab.kind !== 'code' || !tab.context) return
     tab.context.language = language
+    tab.context.path = store.draftPath || undefined
     tab.id = `code:${tab.context.contextId}:${language}`
     tab.title = `${tab.context.title}.${language === 'cpp' ? 'cpp' : language === 'python' ? 'py' : 'java'}`
     group!.activeTabId = tab.id
+    queueFollowingTabs(tab.context)
   }
 
   function openStatement() {
     const context = contextFromCurrent()
     if (!context) return
-    addTab(ensureSecondGroup(), { id: 'following:statement', kind: 'statement', title: `${context.problemId} · 题面`, context })
+    addTab(ensureSecondGroup(), { id: 'following:statement', kind: 'statement', title: companionTabTitle(context, 'statement'), context })
   }
 
   async function openProblemNote() {
@@ -412,7 +421,7 @@ export const useWorkbenchStore = defineStore('workbench', () => {
   function openAi() {
     const context = contextFromCurrent() ?? undefined
     const target = context ? ensureSecondGroup() : activeGroup.value
-    addTab(target, { id: context ? 'following:ai' : 'global:ai', kind: 'ai', title: context ? `${context.problemId} · AI` : 'AI 辅助', context })
+    addTab(target, { id: context ? 'following:ai' : 'global:ai', kind: 'ai', title: context ? companionTabTitle(context, 'ai') : 'AI 辅助', context })
   }
   function openRunner(tool: RunnerTool = runnerTool.value) { runnerTool.value = tool; activity.value = 'runner'; sidebarVisible.value = true }
   function openTests() { openRunner('tests') }
@@ -425,10 +434,15 @@ export const useWorkbenchStore = defineStore('workbench', () => {
   function openNotes() { addTab(preferredFeatureGroup(), { id: 'global:notes', kind: 'notes', title: '算法笔记本' }) }
 
   async function syncFollowingTabs(context: WorkbenchContextRef) {
-    const followerTabs = groups.slice(1).flatMap(group => group.tabs).filter(tab => tab.id.startsWith('following:'))
+    const active = contextFromCurrent()
+    if (active && active.platform === context.platform && active.problemId === context.problemId
+      && active.language === context.language && (!context.path || textPathKey(context.path) === textPathKey(active.path || ''))) {
+      context = { ...context, path: active.path, title: active.title }
+    }
+    const followerTabs = groups.flatMap(group => group.tabs).filter(tab => tab.id.startsWith('following:'))
     for (const tab of followerTabs) {
       tab.context = { ...context }
-      tab.title = `${context.problemId} · ${tab.kind === 'statement' ? '题面' : tab.kind === 'problem-note' ? '笔记' : 'AI'}`
+      tab.title = companionTabTitle(context, tab.kind)
       if (tab.kind === 'problem-note' && useProblemStore().currentProblem) await useNoteStore().openProblemNote(useProblemStore().currentProblem!)
     }
   }
@@ -456,7 +470,13 @@ export const useWorkbenchStore = defineStore('workbench', () => {
       if (!store.draftFiles.length) await store.loadDraftFiles()
       const file = store.draftFiles.find(item => item.path.toLowerCase() === context.path!.toLowerCase())
         ?? await invoke<DraftFileInfo>('get_workspace_draft_info', { path: context.path })
-      if (file) await store.openDraftFile(file)
+      if (file) {
+        const textFiles = useTextFileStore()
+        const buffer = textFiles.documents[textPathKey(file.path)]
+        if (buffer?.loading) await textFiles.load(file.path)
+        await store.openDraftFile(file, buffer?.loaded ? { text: buffer.text, original: buffer.original } : undefined)
+        if (buffer?.loaded) textFiles.forget(file.path)
+      }
     } else {
       const known = [...store.problems, ...store.importedProblems].find(item => item.platform === context.platform && item.id === context.problemId)
       const fallback: Problem = known ?? { id: context.problemId, title: context.title, platform: context.platform, tags: [], url: context.url }
@@ -551,7 +571,31 @@ export const useWorkbenchStore = defineStore('workbench', () => {
     else { activity.value = next; sidebarVisible.value = true }
   }
 
+  async function refreshRenamedCodeTab(group: EditorGroupState, tab: WorkbenchTab, path: string) {
+    tab.loading = true
+    tab.loadError = undefined
+    try {
+      const file = await invoke<DraftFileInfo>('get_workspace_draft_info', { path })
+      // Another rename/close can win while the metadata is being read.
+      if (!group.tabs.includes(tab) || (tab.path ?? tab.context?.path) !== path) return
+      const wasActive = group.activeTabId === tab.id
+      tab.context = { kind: 'local-file', contextId: `file:${file.path.toLowerCase()}`,
+        platform: file.platform, problemId: file.problemId, title: file.title || file.problemId,
+        path: file.path, language: file.language }
+      tab.path = undefined
+      tab.id = `code:${tab.context.contextId}:${file.language}`
+      if (wasActive) group.activeTabId = tab.id
+      if (wasActive && activeGroupId.value === group.id) await activateTab(group.id, tab.id)
+    } catch (cause) {
+      tab.loadError = String(cause)
+    } finally {
+      tab.loading = false
+    }
+  }
+
   function workspacePathChanged(oldPath: string, newPath: string) {
+    const conversions: Promise<void>[] = []
+    const languageForPath = (path: string): Language | undefined => ({ cpp: 'cpp', py: 'python', java: 'java' } as Record<string, Language>)[path.split('.').pop()!.toLowerCase()]
     const normalize = (path: string) => path.replace(/\\/g, '/').toLowerCase()
     const old = normalize(oldPath)
     useTextFileStore().move(oldPath, newPath)
@@ -564,6 +608,10 @@ export const useWorkbenchStore = defineStore('workbench', () => {
         tab.id = `text:${textPathKey(tab.path)}`
         tab.title = tab.path.split(/[\\/]/).pop() || tab.title
         if (wasActive) group.activeTabId = tab.id
+        if (languageForPath(tab.path)) {
+          tab.kind = 'code'
+          conversions.push(refreshRenamedCodeTab(group, tab, tab.path))
+        }
         continue
       }
       if (!path || (normalize(path) !== old && !normalize(path).startsWith(`${old}/`))) continue
@@ -571,12 +619,23 @@ export const useWorkbenchStore = defineStore('workbench', () => {
       const wasActive = group.activeTabId === tab.id
       tab.context!.path = next
       tab.context!.contextId = `file:${next.toLowerCase()}`
+      if (tab.kind === 'statement' || tab.kind === 'ai') tab.title = companionTabTitle(tab.context!, tab.kind)
       if (tab.kind === 'code') {
         tab.id = `code:${tab.context!.contextId}:${tab.context!.language}`
         tab.title = next.split(/[\\/]/).pop() || tab.title
         if (wasActive) group.activeTabId = tab.id
+        const language = languageForPath(next)
+        if (language && language !== tab.context!.language) conversions.push(refreshRenamedCodeTab(group, tab, next))
+        else if (!language) {
+          tab.kind = 'text'
+          tab.path = next
+          tab.context = undefined
+          tab.id = `text:${textPathKey(next)}`
+          if (wasActive) group.activeTabId = tab.id
+        }
       }
     }
+    return Promise.all(conversions)
   }
 
   function workspacePathRemoved(path: string) {

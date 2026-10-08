@@ -102,7 +102,8 @@ export const useAiStore = defineStore('ai', () => {
     const content = draft.value.trim()
     if (!content || isSending.value) return
     saveConfig()
-    messages.value.push({ role: 'user', content, timestamp: Date.now() })
+    messages.value.push({ role: 'user', content, timestamp: Date.now(), contextLabel: useProblemStore().contextFileName })
+    const userMessage = messages.value[messages.value.length - 1]!
     draft.value = ''
     isSending.value = true
     error.value = null
@@ -114,8 +115,11 @@ export const useAiStore = defineStore('ai', () => {
         await learning.analyzeContest()
       }
       const requestMessages = messages.value.map(({ role, content }) => ({ role, content }))
+      const contextLabel = useProblemStore().contextFileName
+      userMessage.contextLabel = contextLabel
       // Mutate the proxy stored by Vue so every streamed delta repaints the chat.
       const assistantMessage = appendAiStreamingMessage(messages.value)
+      assistantMessage.contextLabel = contextLabel
       const onEvent = new Channel<{ delta: string }>()
       onEvent.onmessage = ({ delta }) => { assistantMessage.content += delta }
       const result = await invoke<AiChatResult>('ai_chat_stream', {

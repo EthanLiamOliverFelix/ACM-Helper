@@ -1,6 +1,6 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 import { createPinia, setActivePinia } from 'pinia'
-import { useWorkbenchStore, type WorkbenchTab } from './workbenchStore'
+import { useWorkbenchStore, companionTabTitle, normalizeWorkbenchState, type WorkbenchTab } from './workbenchStore'
 
 vi.mock('../dataCenter', () => ({
   getDataCenterValue: (_key: string, fallback: unknown) => fallback,
@@ -47,5 +47,29 @@ describe('tab sorting', () => {
     expect(group.tabs.map(tab => tab.id)).toEqual(['a', 'b', 'c'])
     store.moveTab(group.id, 'b', group.id, 'center', 2)
     expect(group.tabs.map(tab => tab.id)).toEqual(['a', 'b', 'c'])
+  })
+})
+
+
+describe('companion tab file names', () => {
+  const context = { kind: 'local-file' as const, contextId: 'file:cat', platform: 'local' as const, problemId: 'local_hidden_id', title: 'old title', language: 'cpp' as const, path: 'F:/project/小猫爬山.cpp' }
+  it('uses the actual file name instead of an internal local identifier', () => {
+    expect(companionTabTitle(context, 'statement')).toBe('小猫爬山.cpp · 题面')
+    expect(companionTabTitle({ ...context, path: 'F:\\project\\小猫爬山.cpp' }, 'ai')).toBe('小猫爬山.cpp · AI')
+    expect(companionTabTitle({ ...context, path: undefined, title: 'Lake Counting', language: 'python' }, 'ai')).toBe('Lake Counting.py · AI')
+  })
+  it('updates AI and statement tabs after renaming without changing problem identity', () => {
+    const store = useWorkbenchStore()
+    store.groups[0]!.tabs = ['statement', 'ai'].map(kind => ({ id: `following:${kind}`, kind: kind as 'statement' | 'ai', title: 'old', context: { ...context } }))
+    store.workspacePathChanged(context.path, 'F:/project/新名字.cpp')
+    expect(store.groups[0]!.tabs.map(tab => tab.title)).toEqual(['新名字.cpp · 题面', '新名字.cpp · AI'])
+    expect(store.groups[0]!.tabs.every(tab => tab.context?.problemId === 'local_hidden_id')).toBe(true)
+  })
+  it('refreshes titles in previously saved workspaces', () => {
+    const state = normalizeWorkbenchState({ version: 1, groups: [{ id: 'group-1', activeTabId: 'following:ai', tabs: [
+      { id: 'following:ai', kind: 'ai', title: 'local_hidden_id · AI', context },
+      { id: 'following:statement', kind: 'statement', title: 'local_hidden_id · 题面', context },
+    ] }] })
+    expect(state.groups[0]!.tabs.map(tab => tab.title)).toEqual(['小猫爬山.cpp · AI', '小猫爬山.cpp · 题面'])
   })
 })

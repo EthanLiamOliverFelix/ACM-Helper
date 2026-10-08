@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, watch } from 'vue'
+import { computed, watch, onBeforeUnmount } from 'vue'
 import { VueMonacoEditor } from '@guolao/vue-monaco-editor'
 import { configureMonaco, monaco } from '../monaco'
 import { useSettingsStore } from '../stores/settingsStore'
@@ -11,9 +11,16 @@ const settings = useSettingsStore()
 const doc = computed(() => files.document(props.path))
 configureMonaco()
 watch(() => props.path, path => { void files.load(path) }, { immediate: true })
+let saveAction: { dispose: () => void } | undefined
 function mount(editor: any) {
-  editor.addCommand(monaco.KeyMod.CtrlCmd | monaco.KeyCode.KeyS, () => { void files.save(props.path) })
+  saveAction?.dispose()
+  saveAction = editor.addAction({
+    id: 'acm.save-text', label: '保存文件', precondition: 'editorTextFocus',
+    keybindings: [monaco.KeyMod.CtrlCmd | monaco.KeyCode.KeyS],
+    run: () => files.save(props.path),
+  })
 }
+onBeforeUnmount(() => saveAction?.dispose())
 const options = { automaticLayout: true, fontSize: 14, fontFamily: "Consolas, 'Courier New', monospace", minimap: { enabled: false }, scrollBeyondLastLine: false, contextmenu: false }
 </script>
 

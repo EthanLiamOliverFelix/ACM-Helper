@@ -34,7 +34,7 @@ function importProblemSet(index: number) {
 <template>
   <div class="ai-view">
     <header class="ai-header">
-      <div class="ai-header__intro"><div class="ai-header__title"><h1>AI 刷题助手</h1><span class="context-file" :title="problems.draftPath || problems.contextFileName"><small>当前上下文</small><b>{{ problems.contextFileName }}</b></span></div><p>可读取当前题目、代码、提交记录、技能进度和最近的 VP 分析。</p></div>
+      <div class="ai-header__intro"><div class="ai-header__title"><h1>AI 刷题助手</h1><span class="context-file" :title="problems.draftPath || problems.contextFileName" aria-live="polite"><small>当前上下文</small><b>{{ problems.contextFileName }}</b></span></div><p>可读取当前题目、代码、提交记录、技能进度和最近的 VP 分析。</p></div>
       <button @click="ai.clear">清空对话</button>
     </header>
     <div class="ai-layout">
@@ -47,8 +47,8 @@ function importProblemSet(index: number) {
             <button @click="quickAsk('分析当前题目的关键知识点，以及我还缺少哪些前置技能。')">分析知识缺口</button>
           </div>
           <article v-for="(message, index) in ai.messages" :key="index" class="message" :class="`message--${message.role}`">
-            <span>{{ message.role === 'user' ? '你' : 'AI' }}</span>
             <div class="message__body">
+              <small v-if="message.contextLabel" class="message-context">{{ message.contextLabel }}</small>
               <div v-if="message.content" class="message__content" v-html="renderMessage(message.content)" />
               <div v-else class="message__content message__content--thinking">正在思考…</div>
               <div v-if="message.problemSet" class="generated-set">
@@ -78,11 +78,21 @@ function importProblemSet(index: number) {
 .levels { display: flex; flex-direction: column; gap: 6px; margin-bottom: 18px; button { padding: 8px 10px; text-align: left; border: 1px solid var(--color-border); background: var(--color-bg-app); color: var(--color-text-secondary); border-radius: 5px; cursor: pointer; span { display: block; color: var(--color-text-faint); font-size: 10px; margin-top: 2px; } } button.active { border-color: var(--color-accent); background: var(--color-selection); color: var(--color-text-on-accent); span { color: var(--color-text-secondary); } } }
 .context-card { display: flex; flex-direction: column; gap: 5px; padding: 10px; border-left: 3px solid var(--color-success); background: var(--color-bg-panel); font-size: 11px; span { color: var(--color-text-muted); } }
 .chat { flex: 1; display: flex; flex-direction: column; min-width: 0; }.chat__messages { flex: 1; overflow-y: auto; padding: 24px max(24px, calc((100% - 760px)/2)); }.chat-empty { margin: 15vh auto; max-width: 480px; text-align: center; color: var(--color-text-muted); strong { color: var(--color-text-strong); font-size: 18px; } p { line-height: 1.7; } }
-.message { max-width: 760px; margin: 0 auto 18px; display: grid; grid-template-columns: 34px 1fr; gap: 10px; > span { width: 30px; height: 30px; border-radius: 6px; display: grid; place-items: center; background: var(--color-accent-strong); font-size: 11px; } &__content { min-width: 0; padding: 10px 12px; border-radius: 7px; background: var(--color-bg-panel); font: 13px/1.65 'Segoe UI', sans-serif; word-break: break-word; } &--assistant > span { background: var(--color-tone-2e7d32); } }
+.message { max-width: 760px; margin: 0 auto 24px; &__content { min-width: 0; font: 13px/1.65 'Segoe UI', sans-serif; word-break: break-word; } &--user .message__content { padding: 14px 16px; border-radius: 10px; background: var(--color-bg-panel); } &--assistant .message__content { padding: 4px 0; background: transparent; } }
 .message__body { min-width: 0; }
 .generated-set { display: flex; align-items: center; justify-content: space-between; gap: 12px; margin-top: 6px; padding: 9px 11px; border: 1px solid var(--color-tone-3b6e90); border-radius: 6px; background: var(--color-accent-surface); div { display: flex; flex-direction: column; gap: 2px; } strong { color: var(--color-tone-d9efff); font-size: 12px; } span { color: var(--color-tone-8eb2ca); font-size: 9px; } button { padding: 6px 10px; border: 0; border-radius: 4px; background: var(--color-accent-strong); color: var(--color-text-on-accent); font-size: 10px; cursor: pointer; &:disabled { background: var(--color-tone-315b4c); color: var(--color-tone-89d3b7); cursor: default; } } }
+.message__content :deep(ul), .message__content :deep(ol) { margin: 9px 0; padding-inline-start: 1.8em; list-style-position: outside; }
+.message__content :deep(ul) { list-style-type: disc; }
+.message__content :deep(ol) { list-style-type: decimal; }
+.message__content :deep(ul ul) { list-style-type: circle; }
+.message__content :deep(ul ul ul) { list-style-type: square; }
+.message__content :deep(li) { display: list-item; padding-inline-start: .2em; margin: .35em 0; }
+.message__content :deep(li::marker) { color: var(--color-text-secondary); font-variant-numeric: tabular-nums; }
+.message__content :deep(li > p) { margin: .35em 0; }
+.message__content :deep(li > ul), .message__content :deep(li > ol) { margin: .35em 0; }
 .message__content :deep(p) { margin: 0 0 9px; }.message__content :deep(p:last-child) { margin-bottom: 0; }.message__content :deep(pre) { overflow: auto; margin: 9px 0; padding: 10px; border: 1px solid var(--color-tone-3a3a3a); border-radius: 5px; background: var(--color-bg-deep); font: 12px/1.5 Consolas, monospace; white-space: pre; }.message__content :deep(code) { padding: 1px 4px; border-radius: 3px; background: var(--color-bg-deep); font-family: Consolas, monospace; }.message__content :deep(pre code) { padding: 0; background: transparent; }.message__content :deep(table) { width: 100%; border-collapse: collapse; }.message__content :deep(th), .message__content :deep(td) { padding: 5px 8px; border: 1px solid var(--color-border-strong); }.message__content :deep(blockquote) { margin: 8px 0; padding-left: 10px; border-left: 3px solid var(--color-accent); color: var(--color-text-soft); }.message__content :deep(.katex-display) { overflow-x: auto; overflow-y: hidden; padding: 4px 0; }
 .quick-actions { max-width: 620px; margin: -11vh auto 30px; display: flex; justify-content: center; gap: 7px; button { padding: 7px 10px; border: 1px solid var(--color-border-control); border-radius: 5px; background: var(--color-bg-panel); color: var(--color-text-secondary); font-size: 11px; cursor: pointer; } button:hover { border-color: var(--color-accent); } }
 .chat-error { margin: 0 24px 8px; padding: 8px 10px; background: var(--color-tone-3a1b1b); color: var(--color-danger); border-radius: 4px; font-size: 11px; }
 .composer { display: flex; gap: 8px; padding: 14px max(24px, calc((100% - 760px)/2)); border-top: 1px solid var(--color-bg-subtle); textarea { flex: 1; min-height: 62px; max-height: 160px; resize: vertical; padding: 10px; background: var(--color-bg-panel); color: var(--color-text-strong); border: 1px solid var(--color-border-control); border-radius: 6px; outline: none; } textarea:focus { border-color: var(--color-accent); } button { width: 76px; border: 0; border-radius: 6px; background: var(--color-accent-strong); color: var(--color-text-on-accent); cursor: pointer; } button:disabled { opacity: .4; cursor: not-allowed; } }
+.message-context{display:block;margin-bottom:8px;font-size:10px;line-height:1.6;color:var(--color-text-muted);overflow-wrap:anywhere}.ai-header__title{flex-wrap:wrap}.context-file{max-width:100%;font-family:inherit}
 </style>

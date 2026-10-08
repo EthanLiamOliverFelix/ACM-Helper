@@ -9,6 +9,7 @@ import type { DraftFileInfo, WorkspaceEntry } from '../types'
 import ResourceTreeNode from './ResourceTreeNode.vue'
 import ResourceCreateInput from './ResourceCreateInput.vue'
 import { flattenTree, topLevelEntries } from '../utils/multiSelection'
+import { workspaceActionEntries, runWorkspaceBatch } from '../utils/workspaceBatch'
 import { useMultiSelection } from '../composables/useMultiSelection'
 import { batchDirectoryDropTarget, directoryDropTarget } from '../utils/directoryDrop'
 import { externalWorkspaceDropPath } from '../utils/externalWorkspaceDrop'
@@ -30,6 +31,15 @@ let refreshTimer: ReturnType<typeof setInterval> | undefined
 const loading = ref(false)
 const error = ref('')
 const notice = ref('')
+let noticeTimer: ReturnType<typeof setTimeout> | undefined
+function flashNotice(message: string, duration = 1600) {
+  if (noticeTimer) clearTimeout(noticeTimer)
+  notice.value = message
+  noticeTimer = setTimeout(() => {
+    if (notice.value === message) notice.value = ''
+    noticeTimer = undefined
+  }, duration)
+}
 const savedTreeState = getDataCenterValue<{ version: 1; expandedPaths: string[]; showHidden?: boolean } | null>('workspace-tree-state', null)
 const showHidden = ref(savedTreeState?.showHidden ?? false)
 const expandedPaths = ref(new Set(savedTreeState?.version === 1 ? savedTreeState.expandedPaths : []))
@@ -45,10 +55,23 @@ const allEntries = computed(() => flattenTree(entries.value))
 const visibleEntries = computed(() => flattenTree(entries.value, expandedPaths.value))
 const selection = useMultiSelection(() => visibleEntries.value.map(entry => entry.path), () => allEntries.value.map(entry => entry.path))
 const contextMenu = ref<{ x: number; y: number; entry: WorkspaceEntry | null } | null>(null)
-const fileClipboard = ref<{ entry: WorkspaceEntry; cut: boolean } | null>(null)
+const fileClipboard = ref<{ entries: WorkspaceEntry[]; cut: boolean } | null>(null)
 const creating = reactive({ kind: '' as '' | 'file' | 'folder', parentPath: '', busy: false, error: '', sequence: 0 })
-const dialog = reactive({ open: false, mode: '' as 'rename' | 'delete' | '', target: null as WorkspaceEntry | null, name: '' })
+const dialog = reactive({ open: false, mode: '' as 'rename' | 'delete' | '', target: null as WorkspaceEntry | null, targets: [] as WorkspaceEntry[], busy: false, name: '' })
 
+const menuTargets = computed(() => actionEntries(contextMenu.value?.entry ?? null))
+function actionEntries(target: WorkspaceEntry | null) {
+  return workspaceActionEntries(allEntries.value, selection.selected, target)
+}
+function batchFailures(failed: { entry: WorkspaceEntry; error: unknown }[]) {
+  return failed.map(item => `${item.entry.name}：${String(item.error)}`).join('；')
+}
+async function applyMenuAction(action: (entry: WorkspaceEntry) => Promise<void>, filesOnly = false) {
+  const targets = menuTargets.value.filter(entry => !filesOnly || !entry.isDirectory)
+  contextMenu.value = null
+  const result = await runWorkspaceBatch(targets, action)
+  error.value = batchFailures(result.failed)
+}
 function findEntry(path: string, list = entries.value): WorkspaceEntry | null {
   for (const entry of list) {
     if (entry.path === path) return entry
@@ -137,11 +160,6 @@ async function removeRoot() {
     await selectRoot()
   } catch (cause) { error.value = String(cause) }
 }
-async function openSystem(entry: WorkspaceEntry) {
-  contextMenu.value = null
-  try { await invoke('open_workspace_system', { path: entry.path }) }
-  catch (cause) { error.value = String(cause) }
-}
 
 function parentOf(entry: WorkspaceEntry | null) {
   if (!entry) return rootPath.value
@@ -189,15 +207,20 @@ async function submitCreate(name: string) {
   finally { creating.busy = false }
 }
 function openDialog(mode: typeof dialog.mode, entry: WorkspaceEntry | null = contextMenu.value?.entry ?? null) {
+  const targets = actionEntries(entry)
+  if (mode === 'rename' && (targets.length !== 1 || (entry && selection.selected.has(entry.path) && selection.selected.size > 1))) return
   cancelCreate()
   contextMenu.value = null
+  dialog.targets = mode === 'delete' ? [...targets] : []
   dialog.open = true
   dialog.mode = mode
   dialog.target = entry
   dialog.name = mode === 'rename' && entry ? entry.name : ''
 }
-function closeDialog() { dialog.open = false; dialog.mode = ''; dialog.target = null; dialog.name = '' }
+function closeDialog() { if (dialog.busy) return; dialog.targets = []; dialog.open = false; dialog.mode = ''; dialog.target = null; dialog.name = '' }
 async function submitDialog() {
+  if (dialog.busy) return
+  dialog.busy = true
   error.value = ''
   try {
     if (dialog.mode === 'rename' && dialog.target) {
@@ -205,20 +228,24 @@ async function submitDialog() {
       const oldPath = dialog.target.path
       const newPath = await invoke<string>('rename_workspace_entry', { path: oldPath, newName: dialog.name })
       store.workspacePathChanged(oldPath, newPath)
-      workbench.workspacePathChanged(oldPath, newPath)
+      await workbench.workspacePathChanged(oldPath, newPath)
       if (dialog.target.isDirectory) replaceExpandedPath(oldPath, newPath)
-      closeDialog()
+      dialog.open = false
       await refresh()
-    } else if (dialog.mode === 'delete' && dialog.target) {
-      const deletedPath = dialog.target.path
-      await invoke('delete_workspace_entry', { path: deletedPath })
-      await store.workspacePathDeleted(deletedPath)
-      workbench.workspacePathRemoved(deletedPath)
-      if (dialog.target.isDirectory) replaceExpandedPath(deletedPath)
-      closeDialog()
+    } else if (dialog.mode === 'delete' && dialog.targets.length) {
+      const result = await runWorkspaceBatch([...dialog.targets], async entry => {
+        await invoke('delete_workspace_entry', { path: entry.path })
+        await store.workspacePathDeleted(entry.path)
+        workbench.workspacePathRemoved(entry.path)
+        if (entry.isDirectory) replaceExpandedPath(entry.path)
+      })
+      dialog.open = false
       await refresh()
+      flashNotice(`已删除 ${result.completed.length} 项`, 3000)
+      error.value = batchFailures(result.failed)
     }
   } catch (cause) { error.value = String(cause) }
+  finally { dialog.busy = false }
 }
 
 function selectEntry(entry: WorkspaceEntry, event?: MouseEvent, checkbox = false) {
@@ -257,7 +284,7 @@ async function moveEntries(sources: WorkspaceEntry[], destinationPath: string) {
       try {
         const newPath = await invoke<string>('paste_workspace_entry', { sourcePath: source.path, destinationPath, cut: true })
         store.workspacePathChanged(source.path, newPath)
-        workbench.workspacePathChanged(source.path, newPath)
+        await workbench.workspacePathChanged(source.path, newPath)
         if (source.isDirectory) replaceExpandedPath(source.path, newPath)
         moved++
       } catch (cause) { failures.push(`${source.name}：${String(cause)}`) }
@@ -281,34 +308,40 @@ const holdMove = useLongPressMove<WorkspaceEntry>({
 
 async function copyText(value: string, message: string) {
   await navigator.clipboard.writeText(value)
-  notice.value = message
+  flashNotice(message)
   contextMenu.value = null
-  window.setTimeout(() => { if (notice.value === message) notice.value = '' }, 1600)
 }
 
 function stageEntry(entry: WorkspaceEntry, cut: boolean) {
-  fileClipboard.value = { entry, cut }
-  notice.value = cut ? `已剪切：${entry.name}` : `已复制：${entry.name}`
+  const targets = actionEntries(entry)
+  fileClipboard.value = { entries: [...targets], cut }
+  flashNotice(`${cut ? '已剪切' : '已复制'} ${targets.length} 项`, 3000)
   contextMenu.value = null
 }
 
 async function pasteEntry(destination: WorkspaceEntry | null) {
-  if (!fileClipboard.value) return
+  if (!fileClipboard.value || movingBusy.value) return
   const source = fileClipboard.value
+  movingBusy.value = true
+  error.value = ''
+  contextMenu.value = null
   try {
     if (source.cut) await store.persistDraft()
     const destinationPath = destination?.isDirectory ? destination.path : parentOf(destination)
-    const newPath = await invoke<string>('paste_workspace_entry', { sourcePath: source.entry.path, destinationPath, cut: source.cut })
-    if (source.cut) {
-      store.workspacePathChanged(source.entry.path, newPath)
-      workbench.workspacePathChanged(source.entry.path, newPath)
-      if (source.entry.isDirectory) replaceExpandedPath(source.entry.path, newPath)
-      fileClipboard.value = null
-    }
-    notice.value = source.cut ? '移动完成' : '复制完成'
-    contextMenu.value = null
+    const result = await runWorkspaceBatch(source.entries, async entry => {
+      const newPath = await invoke<string>('paste_workspace_entry', { sourcePath: entry.path, destinationPath, cut: source.cut })
+      if (source.cut) {
+        store.workspacePathChanged(entry.path, newPath)
+        await workbench.workspacePathChanged(entry.path, newPath)
+        if (entry.isDirectory) replaceExpandedPath(entry.path, newPath)
+      }
+    })
+    if (source.cut) fileClipboard.value = result.failed.length ? { entries: result.failed.map(item => item.entry), cut: true } : null
     await refresh()
+    flashNotice(`已${source.cut ? '移动' : '复制'} ${result.completed.length} 项`, 3000)
+    error.value = batchFailures(result.failed)
   } catch (cause) { error.value = String(cause) }
+  finally { movingBusy.value = false }
 }
 
 function fileUrl(path: string) {
@@ -348,7 +381,8 @@ async function handleExternalDrop(event: DragDropEvent) {
     setFolderExpanded(destination, true)
     await refresh()
     selection.replace(result.paths)
-    notice.value = result.paths.length ? `已导入 ${result.paths.length} 项，系统中的原文件已保留` : ''
+    if (result.paths.length) flashNotice(`已导入 ${result.paths.length} 项，系统中的原文件已保留`, 3000)
+    else notice.value = ''
     error.value = result.errors.join('\n')
   } catch (e) {
     notice.value = ''
@@ -374,6 +408,7 @@ onBeforeUnmount(() => {
   disposed = true
   unlistenExternalDrop?.()
   if (refreshTimer) clearInterval(refreshTimer)
+  if (noticeTimer) clearTimeout(noticeTimer)
   window.removeEventListener('click', dismissMenu)
   window.removeEventListener('blur', dismissMenu)
   window.removeEventListener('keydown', handleEscape)
@@ -389,7 +424,7 @@ onBeforeUnmount(() => {
       <button class="icon-button" :title="selectionMode ? '退出多选' : '多选文件和文件夹'" aria-label="多选文件和文件夹" :aria-pressed="selectionMode" @click.stop="toggleSelectionMode"><i class="codicon" :class="selectionMode ? 'codicon-check' : 'codicon-checklist'" aria-hidden="true" /></button>
     </div>
     <div class="workspace-selector" :data-workspace-path="rootPath" :class="{ target: (externalTarget || holdMove.targetPath.value) === rootPath && !!rootPath }"><select v-model="rootPath" aria-label="当前工作区" :title="rootPath" :disabled="loading || movingBusy || creating.busy" @change="selectRoot"><option v-for="root in roots" :key="root.path" :value="root.path">{{ root.name }}</option></select></div>
-    <div v-if="selectionMode" class="tree-selection-bar"><button :disabled="!selection.scope.length || movingBusy" @click="selection.toggleAll()">{{ selection.allSelected ? '取消全选' : '全选' }}</button><span>已选 {{ selection.selected.size }} 项</span></div>
+    <div v-if="selectionMode" class="tree-selection-bar"><button :disabled="!selection.scope.length || movingBusy || dialog.busy" @click="selection.toggleAll()">{{ selection.allSelected ? '取消全选' : '全选' }}</button><span>已选 {{ selection.selected.size }} 项</span><button :disabled="!selection.selected.size || movingBusy || dialog.busy" title="删除选中的文件和文件夹" @click="openDialog('delete', null)"><i class="codicon codicon-trash" /></button></div>
     <div v-if="notice" class="explorer__notice">{{ notice }}</div>
     <div v-if="error" class="explorer__error">{{ error }}</div>
     <div v-if="allEntries.length >= 10000" class="explorer__notice">目录较大，仅显示前 10000 项。可单独添加子文件夹。</div>
@@ -403,22 +438,22 @@ onBeforeUnmount(() => {
     <div v-else-if="holdMove.movingPath.value" class="explorer__move-hint">移动 {{ holdMove.movingCount.value }} 项到目标文件夹后松开</div>
 
     <div v-if="contextMenu" class="context-menu" :style="{ left: `${contextMenu.x}px`, top: `${contextMenu.y}px` }" @click.stop>
-      <button v-if="contextMenu.entry && !contextMenu.entry.isDirectory" @click="openEntry(contextMenu.entry); contextMenu = null">打开</button>
-      <button v-if="contextMenu.entry && !contextMenu.entry.isDirectory" @click="openSystem(contextMenu.entry)">使用系统应用打开</button>
+      <button v-if="contextMenu.entry && !contextMenu.entry.isDirectory" @click="applyMenuAction(entry => openEntry(entry), true)">打开</button>
+      <button v-if="contextMenu.entry && !contextMenu.entry.isDirectory" @click="applyMenuAction(entry => invoke('open_workspace_system', { path: entry.path }), true)">使用系统应用打开</button>
       <button @click="addRoot(); contextMenu = null">添加工作区文件夹…</button>
       <button @click="beginCreate('file', contextMenu?.entry ?? null)">新建文件…</button>
       <button @click="beginCreate('folder', contextMenu?.entry ?? null)">新建文件夹…</button>
       <div v-if="contextMenu.entry" class="context-menu__line" />
-      <button v-if="contextMenu.entry" @click="openDialog('rename')">重命名…</button>
-      <button v-if="contextMenu.entry" class="danger" @click="openDialog('delete')">删除…</button>
+      <button v-if="contextMenu.entry" :disabled="menuTargets.length !== 1 || (selection.selected.has(contextMenu.entry.path) && selection.selected.size > 1)" :title="selection.selected.has(contextMenu.entry.path) && selection.selected.size > 1 ? '请选中单个项目后重命名' : '重命名'" @click="openDialog('rename')">重命名…</button>
+      <button v-if="contextMenu.entry" class="danger" @click="openDialog('delete')">删除{{ menuTargets.length > 1 ? ` ${menuTargets.length} 项` : '' }}…</button>
       <div class="context-menu__line" />
       <button v-if="contextMenu.entry" @click="stageEntry(contextMenu.entry, true)">剪切</button>
       <button v-if="contextMenu.entry" @click="stageEntry(contextMenu.entry, false)">复制</button>
-      <button :disabled="!fileClipboard" @click="pasteEntry(contextMenu.entry)">粘贴<span v-if="fileClipboard">“{{ fileClipboard.entry.name }}”</span></button>
+      <button :disabled="!fileClipboard" @click="pasteEntry(contextMenu.entry)">粘贴<span v-if="fileClipboard">“{{ `${fileClipboard.entries.length} 项` }}”</span></button>
       <div class="context-menu__line" />
-      <button @click="copyText(contextMenu.entry?.path || rootPath, '路径已复制')">复制路径</button>
-      <button @click="copyText(fileUrl(contextMenu.entry?.path || rootPath), '文件链接已复制')">复制文件链接</button>
-      <button @click="revealItemInDir(contextMenu.entry?.path || rootPath); contextMenu = null">在文件资源管理器中显示</button>
+      <button @click="copyText(menuTargets.length ? menuTargets.map(entry => entry.path).join('\n') : rootPath, '路径已复制')">复制路径</button>
+      <button @click="copyText(menuTargets.length ? menuTargets.map(entry => fileUrl(entry.path)).join('\n') : fileUrl(rootPath), '文件链接已复制')">复制文件链接</button>
+      <button @click="menuTargets.length ? applyMenuAction(entry => revealItemInDir(entry.path)) : revealItemInDir(rootPath)">在文件资源管理器中显示</button>
       <button @click="refresh(); contextMenu = null">刷新</button>
       <button @click="collapseFolders(); contextMenu = null">全部折叠</button>
       <button :disabled="loading" @click="showHidden = !showHidden; persistTreeState(); contextMenu = null; refresh()">{{ showHidden ? '隐藏系统文件' : '显示隐藏文件' }}</button>
@@ -433,8 +468,11 @@ onBeforeUnmount(() => {
           <label>名称<input v-model="dialog.name" autofocus placeholder="输入名称" /></label>
 
         </template>
-        <p v-else class="delete-warning">将“{{ dialog.target?.name }}”<template v-if="dialog.target?.isDirectory">及其中的全部文件</template>移到系统回收站，可通过系统回收站恢复。</p>
-        <div class="entry-dialog__actions"><button type="button" @click="closeDialog">取消</button><button type="submit" :class="{ danger: dialog.mode === 'delete' }" :disabled="dialog.mode !== 'delete' && !dialog.name.trim()">{{ dialog.mode === 'delete' ? '确认删除' : '确定' }}</button></div>
+        <template v-else>
+          <p class="delete-warning">将以下 {{ dialog.targets.length }} 项移到系统回收站；文件夹包含其全部内容，可通过系统回收站恢复。</p>
+          <ul class="delete-targets"><li v-for="entry in dialog.targets" :key="entry.path" :title="entry.path">{{ entry.name }}</li></ul>
+        </template>
+        <div class="entry-dialog__actions"><button type="button" :disabled="dialog.busy" @click="closeDialog">取消</button><button type="submit" :class="{ danger: dialog.mode === 'delete' }" :disabled="dialog.busy || (dialog.mode !== 'delete' && !dialog.name.trim()) || (dialog.mode === 'delete' && !dialog.targets.length)">{{ dialog.busy ? '处理中…' : dialog.mode === 'delete' ? '确认删除' : '确定' }}</button></div>
       </form>
     </div>
 
@@ -455,6 +493,7 @@ onBeforeUnmount(() => {
 </style>
 
 <style scoped>
+.delete-targets { max-height: 200px; overflow: auto; padding-left: 20px; color: var(--color-text-secondary); font-size: 12px; overflow-wrap: anywhere; }
 .workspace-selector.target { background: var(--color-accent-surface-hover); box-shadow: inset 0 0 0 1px var(--color-accent); color: var(--color-accent-text); }
 </style>
 

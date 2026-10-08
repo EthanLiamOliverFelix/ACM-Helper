@@ -6,14 +6,15 @@ import { FitAddon } from '@xterm/addon-fit'
 import '@xterm/xterm/css/xterm.css'
 import { useProblemStore } from '../stores/problemStore'
 import { useWorkbenchStore } from '../stores/workbenchStore'
-import type { RunDiagnostic } from '../utils/runDiagnostics'
+import { createDiagnosticDelivery, diagnosticText, type PendingDiagnostic } from '../utils/terminalDiagnostics'
 import { usePointerResize } from '../composables/usePointerResize'
 
-const props = defineProps<{ visible: boolean; diagnostic?: RunDiagnostic | null }>()
+const props = defineProps<{ visible: boolean; diagnostics: PendingDiagnostic[] }>()
+const emit = defineEmits<{ 'diagnostic-delivered': [id: number] }>()
 const store = useProblemStore()
 const workbench = useWorkbenchStore()
 const { startPointerResize } = usePointerResize()
-type Session = { key: number; id?: number; label: string; directory: string; terminal: Terminal; fit: FitAddon; host?: HTMLElement; observer?: ResizeObserver; busy: boolean; exited: boolean; disposed: boolean; error: string; pending: string; queue: Promise<void>; starting?: Promise<void> }
+type Session = { key: number; id?: number; label: string; directory: string; terminal: Terminal; fit: FitAddon; host?: HTMLElement; observer?: ResizeObserver; busy: boolean; exited: boolean; disposed: boolean; error: string; pending: string; queue: Promise<void>; starting?: Promise<void>; lastOutputAt: number; promptReady: boolean }
 const sessions = ref<Session[]>([])
 const selected = ref(0)
 const active = computed(() => sessions.value.find(session => session.key === selected.value))
@@ -24,9 +25,7 @@ let nextKey = 0
 let disposed = false
 let lastRequest = 0
 let themeObserver: MutationObserver | undefined
-let initialized = false
-let lastDiagnostic: RunDiagnostic | null | undefined
-let diagnosticQueue = Promise.resolve()
+let initialSession: Promise<Session> | undefined
 
 function updateTheme(session: Session) {
   if (!session.host) return
@@ -61,7 +60,7 @@ async function createSession() {
   const terminal = markRaw(new Terminal({ fontSize: 13, fontFamily: '"Cascadia Mono", Consolas, monospace', cursorBlink: true, scrollback: 5000 }))
   const fit = markRaw(new FitAddon())
   terminal.loadAddon(fit)
-  const session = reactive<Session>({ key, label: `${path?.split(/[\\/]/).pop() || 'PowerShell'} · ${key}`, directory: '', terminal, fit, busy: true, exited: false, disposed: false, error: '', pending: '', queue: markRaw(Promise.resolve()) })
+  const session = reactive<Session>({ key, label: `${path?.split(/[\\/]/).pop() || 'PowerShell'} · ${key}`, directory: '', terminal, fit, busy: true, exited: false, disposed: false, error: '', pending: '', queue: markRaw(Promise.resolve()), lastOutputAt: Date.now(), promptReady: false })
   sessions.value.push(session)
   selected.value = key
   session.starting = markRaw((async () => {
@@ -69,10 +68,21 @@ async function createSession() {
       await nextTick()
       if (session.disposed) return
       resize(session)
+      const decoder = new TextDecoder()
+      let startupOutput = ''
       const output = new Channel<{ data: number[]; exited: boolean }>()
       output.onmessage = message => {
         if (session.disposed) return
-        if (message.data.length) terminal.write(new Uint8Array(message.data))
+        if (message.data.length) {
+          session.lastOutputAt = Date.now()
+          const bytes = new Uint8Array(message.data)
+          if (!session.promptReady) {
+            startupOutput = (startupOutput + decoder.decode(bytes, { stream: true })).slice(-8192)
+            const plain = startupOutput.replace(/\x1b\[[0-?]*[ -/]*[@-~]/g, '')
+            session.promptReady = /PS [^\r\n]*>/.test(plain)
+          }
+          terminal.write(bytes)
+        }
         if (message.exited) { session.exited = true; terminal.writeln('\r\n[终端已结束]') }
       }
       const result = await invoke<{ id: number; directory: string }>('start_terminal', { path, cols: terminal.cols, rows: terminal.rows, output })
@@ -129,32 +139,40 @@ async function handleRequest() {
   if (request.action !== 'show') await run(request.action === 'run' ? 'compile-run' : request.action === 'run-existing' ? 'run' : 'compile')
   else { if (!active.value) await createSession(); await nextTick(); resize(); active.value?.terminal.focus() }
 }
-function appendDiagnostic(diagnostic = props.diagnostic) {
-  if (!initialized || diagnostic === lastDiagnostic) return
-  lastDiagnostic = diagnostic
-  if (!diagnostic) return
-  diagnosticQueue = diagnosticQueue.then(async () => {
-    if (disposed) return
-    const session = active.value ?? await createSession()
+const deliverDiagnostics = createDiagnosticDelivery(async diagnostic => {
+  if (initialSession) await initialSession
+  if (disposed) throw new Error('终端已关闭')
+  while (!disposed) {
+    let session = active.value
+    if (!session || session.disposed || session.exited) session = await createSession()
+    if (session.starting) await session.starting
     await nextTick()
     resize(session)
-    if (session.disposed || disposed) return
-    // Display CPH output directly; never send diagnostic text to the shell.
-    session.terminal.writeln(`\r\n\x1b[33m[CPH · ${diagnostic.title}]\x1b[0m`)
-    session.terminal.writeln(diagnostic.message.replace(/\r?\n/g, '\r\n'))
-    session.terminal.writeln('\r\n\x1b[90m[本次 CPH 运行已结束；终端可继续输入命令]\x1b[0m')
+    // start_terminal returns before PowerShell has drawn its prompt. In
+    // particular, ConPTY's startup clear/resize can erase early xterm writes.
+    const deadline = Date.now() + 5000
+    const windows = /Windows/i.test(navigator.userAgent)
+    while (!disposed && !session.disposed && !session.exited && Date.now() < deadline
+        && ((windows && !session.promptReady) || Date.now() - session.lastOutputAt < 150)) {
+      await new Promise(resolve => window.setTimeout(resolve, 50))
+    }
+    if (disposed) throw new Error('终端已关闭')
+    if (session.disposed) continue // The selected session was closed during startup.
+    await new Promise<void>(resolve => session!.terminal.write(diagnosticText(diagnostic), resolve))
     session.terminal.scrollToBottom()
-  }).catch(cause => { if (!disposed) error.value = String(cause) })
-}
-watch(() => props.diagnostic, value => appendDiagnostic(value))
+    return
+  }
+  throw new Error('终端已关闭')
+}, id => emit('diagnostic-delivered', id), cause => { if (!disposed) error.value = String(cause) })
+watch(() => props.diagnostics, items => { void deliverDiagnostics(items) })
 watch(() => workbench.terminalRequest.sequence, () => { void handleRequest() })
 watch([selected, () => props.visible, () => sessions.value.length], async () => { await nextTick(); resize(); if (props.visible) active.value?.terminal.focus() })
 onMounted(async () => {
   themeObserver = new MutationObserver(() => sessions.value.forEach(updateTheme))
   themeObserver.observe(document.documentElement, { attributes: true, attributeFilter: ['data-theme'] })
-  await createSession()
-  initialized = true
-  if (!disposed) { appendDiagnostic(); await handleRequest() }
+  initialSession = createSession()
+  await initialSession
+  if (!disposed) { void deliverDiagnostics(props.diagnostics); await handleRequest() }
 })
 onBeforeUnmount(() => {
   disposed = true

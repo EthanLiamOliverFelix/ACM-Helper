@@ -1,8 +1,9 @@
 <script setup lang="ts">
-import { computed, defineAsyncComponent, ref, watch } from 'vue'
+import { computed, defineAsyncComponent, ref, shallowRef, watch } from 'vue'
 import { useProblemStore } from '../stores/problemStore'
 import { useWorkbenchStore } from '../stores/workbenchStore'
 import { getRunDiagnostic } from '../utils/runDiagnostics'
+import type { PendingDiagnostic } from '../utils/terminalDiagnostics'
 import { usePointerResize } from '../composables/usePointerResize'
 
 const store = useProblemStore()
@@ -13,6 +14,18 @@ const TerminalPanel = defineAsyncComponent(() => import('./TerminalPanel.vue'))
 const terminalCreated = ref(false)
 watch(() => workbench.terminalRequest.sequence, () => { terminalCreated.value = true })
 const diagnostic = computed(() => getRunDiagnostic(store.runResult, store.currentLanguage))
+const pendingDiagnostics = shallowRef<PendingDiagnostic[]>([])
+let nextDiagnosticId = 0
+const seenResults = new WeakSet<object>()
+watch(() => store.runResult, result => {
+  const value = getRunDiagnostic(result, store.currentLanguage)
+  if (!result || !value || seenResults.has(result)) return
+  seenResults.add(result)
+  pendingDiagnostics.value = [...pendingDiagnostics.value, { ...value, id: ++nextDiagnosticId }]
+}, { immediate: true })
+function acknowledgeDiagnostic(id: number) {
+  pendingDiagnostics.value = pendingDiagnostics.value.filter(item => item.id !== id)
+}
 const message = computed(() => diagnostic.value?.message ?? '')
 watch(diagnostic, value => { if (value) { terminalCreated.value = true; workbench.terminalVisible = true } }, { immediate: true })
 const visible = computed(() => !!message.value || workbench.terminalVisible)
@@ -47,7 +60,7 @@ function startResize(event: PointerEvent) {
       </div>
       <div><div id="terminal-panel-actions" /><button v-if="message" type="button" @click="copyMessage">{{ copied ? '已复制' : '复制报错' }}</button><button type="button" class="close" title="隐藏底部面板" @click="close">×</button></div>
     </header>
-    <TerminalPanel v-if="terminalCreated" :visible="visible" :diagnostic="diagnostic" />
+    <TerminalPanel v-if="terminalCreated" :visible="visible" :diagnostics="pendingDiagnostics" @diagnostic-delivered="acknowledgeDiagnostic" />
   </section>
 </template>
 

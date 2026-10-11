@@ -237,7 +237,7 @@ async function moveDataCenter() {
 
   <div v-if="settingsOpen" class="settings-modal" @click.self="settingsOpen = false">
     <section class="settings-card">
-      <header><button v-if="settingsPage !== 'main'" class="settings-back" @click="settingsPage = 'main'">‹</button><div><h2>{{ settingsPage === 'main' ? '设置' : settingsPage === 'translation' ? '翻译模型' : '解题模型' }}</h2><p>{{ settingsPage === 'main' ? '应用、账号与数据管理' : settingsPage === 'translation' ? '用于翻译 Codeforces 与 AtCoder 英文题面' : '用于刷题助手、题单生成与学习建议' }}</p></div><button class="settings-close" @click="settingsOpen = false">×</button></header>
+      <header><button v-if="settingsPage !== 'main'" class="settings-back" @click="settingsPage = 'main'">‹</button><div><h2>{{ settingsPage === 'main' ? '设置' : settingsPage === 'translation' ? '翻译模型' : '解题模型' }}</h2><p>{{ settingsPage === 'main' ? '应用、账号与数据管理' : settingsPage === 'translation' ? '用于翻译 Codeforces、AtCoder 与 QOJ 英文题面' : '用于刷题助手、题单生成与学习建议' }}</p></div><button class="settings-close" @click="settingsOpen = false">×</button></header>
       <div v-if="settingsPage === 'main'" class="settings-grid">
         <section>
           <h3>新题目默认代码</h3>
@@ -274,6 +274,7 @@ async function moveDataCenter() {
           <div class="account-row"><div><span>Codeforces</span><strong :class="{ offline: !problems.isLoggedIn }">{{ problems.isRefreshingAccounts ? '检测中…' : problems.isLoggedIn ? (problems.cfAccount || '已登录') : '未登录' }}</strong></div><button :disabled="problems.isCfLoginOpening" @click="problems.loginViaBrowser">{{ problems.isCfLoginOpening ? '打开中…' : problems.isLoggedIn ? '切换账号' : '登录' }}</button></div>
           <div class="account-row"><div><span>洛谷</span><strong :class="{ offline: !problems.luoguLoggedIn }">{{ problems.isRefreshingAccounts ? '检测中…' : problems.luoguLoggedIn ? (problems.luoguAccount || '已登录') : '未登录' }}</strong></div><button :disabled="problems.isLuoguLoginOpening" @click="problems.loginLuogu">{{ problems.isLuoguLoginOpening ? '打开中…' : problems.luoguLoggedIn ? '切换账号' : '登录' }}</button></div>
           <div class="account-row"><div><span>AtCoder</span><strong :class="{ offline: !problems.atcoderLoggedIn }">{{ problems.isRefreshingAccounts ? '检测中…' : problems.atcoderLoggedIn ? (problems.atcoderAccount || '已登录') : '未登录' }}</strong></div><button :disabled="problems.isAtcoderLoginOpening" @click="problems.loginExternalAccount('atcoder')">{{ problems.isAtcoderLoginOpening ? '登录中…' : problems.atcoderLoggedIn ? '切换账号' : '登录' }}</button></div>
+          <div class="account-row"><div><span>QOJ</span><strong :class="{ offline: !problems.qojLoggedIn }">{{ problems.isRefreshingAccounts ? '检测中…' : problems.qojLoggedIn ? (problems.qojAccount || '已登录') : '未登录' }}</strong></div><button :disabled="problems.isQojLoginOpening" @click="problems.loginExternalAccount('qoj')">{{ problems.isQojLoginOpening ? '登录中…' : problems.qojLoggedIn ? '切换账号' : '登录' }}</button></div>
           <button class="secondary" :disabled="problems.isRefreshingAccounts" @click="problems.refreshAccounts">刷新账号状态</button>
           <p class="privacy">AtCoder 仍使用单独的内嵌登录窗口；关闭窗口会立即结束本次登录进程。网页异常不会阻塞其他平台和网络任务。</p>
         </section>

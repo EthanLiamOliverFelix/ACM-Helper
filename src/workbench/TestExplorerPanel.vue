@@ -2,13 +2,13 @@
 import { computed, ref } from 'vue'
 import { useProblemStore } from '../stores/problemStore'
 import { diffOutput, type OutputDiffSegment } from '../utils/outputDiff'
+import { getTestCaseStatusText } from '../utils/runDiagnostics'
 import '@vscode/codicons/dist/codicon.css'
 
 const store = useProblemStore()
 const collapsed = ref(new Set<string>())
 const copied = ref('')
 const passedCount = computed(() => store.testCases.filter(test => test.status === 'passed').length)
-const statuses = { idle: '未运行', running: '运行中…', passed: '通过', failed: '答案错误', completed: '已运行', error: '运行错误' }
 
 function toggle(testId: string) {
   const next = new Set(collapsed.value)
@@ -28,23 +28,25 @@ function clearAll() {
   store.clearTestCases()
 }
 
-function syncCollapsedResults() {
+function syncCollapsedResults(testIds: Set<string>) {
   const next = new Set(collapsed.value)
   for (const test of store.testCases) {
+    if (!testIds.has(test.id)) continue
     if (test.status === 'passed') next.add(test.id)
-    else if (test.status === 'failed' || test.status === 'error') next.delete(test.id)
+    else if (test.status === 'failed' || test.status === 'error' || test.status === 'completed') next.delete(test.id)
   }
   collapsed.value = next
 }
 
 async function runTestCase(testId: string) {
   await store.runTestCase(testId)
-  syncCollapsedResults()
+  syncCollapsedResults(new Set([testId]))
 }
 
 async function runAllTestCases() {
+  const testIds = new Set(store.testCases.map(test => test.id))
   await store.runAllTestCases()
-  syncCollapsedResults()
+  syncCollapsedResults(testIds)
 }
 
 const diffCache = new Map<string, { expected: string; actual: string; segments: OutputDiffSegment[] }>()
@@ -96,7 +98,7 @@ function diffTitle(segment: OutputDiffSegment) {
             <button class="collapse" :title="collapsed.has(test.id) ? '展开' : '收起'" @click.stop="toggle(test.id)"><i class="codicon" :class="collapsed.has(test.id) ? 'codicon-chevron-right' : 'codicon-chevron-down'" /></button>
             <strong>TC {{ index + 1 }}</strong>
             <div class="case-result">
-              <span class="case-status" :class="test.status">{{ test.compileFailed ? '编译失败' : statuses[test.status] }}</span>
+              <span class="case-status" :class="test.status" :title="test.status === 'error' ? test.stderr : undefined">{{ getTestCaseStatusText(test) }}</span>
               <span v-if="test.durationMs != null && !test.compileFailed && test.status !== 'idle' && test.status !== 'running'" class="case-duration" title="程序运行耗时">{{ test.durationMs }}ms</span>
             </div>
             <button class="case-run" title="运行当前测试点" :disabled="store.isRunning || !store.currentCode.trim()" @click.stop="runTestCase(test.id)"><i class="codicon codicon-play" /></button>

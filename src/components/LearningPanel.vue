@@ -5,7 +5,6 @@ import { useLearningStore } from '../stores/learningStore'
 import { useAiStore } from '../stores/aiStore'
 import { useProblemStore } from '../stores/problemStore'
 import { useProblemSetStore } from '../stores/problemSetStore'
-import { useWorkbenchStore } from '../stores/workbenchStore'
 import type { SkillNode, SkillPlanProblem } from '../types'
 import PracticeStatistics from './PracticeStatistics.vue'
 import AlgorithmOverview from './AlgorithmOverview.vue'
@@ -14,7 +13,6 @@ const learning = useLearningStore()
 const ai = useAiStore()
 const problemStore = useProblemStore()
 const problemSets = useProblemSetStore()
-const workbench = useWorkbenchStore()
 const levels = computed(() => [...new Set(SKILL_TREE.map((skill) => skill.level))].sort((a, b) => a - b))
 const generatingSkillId = ref<string | null>(null)
 const planError = ref('')
@@ -95,7 +93,6 @@ async function openPlanProblem(problem: SkillPlanProblem) {
   planError.value = ''
   try {
     await problemStore.openRecommendedProblem(problem)
-    workbench.openCurrentCode()
   }
   catch (error) { planError.value = String(error) }
 }

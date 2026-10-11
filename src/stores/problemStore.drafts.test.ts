@@ -3,6 +3,7 @@ import { createPinia, setActivePinia } from 'pinia'
 import { useProblemStore } from './problemStore'
 import { useWorkbenchStore } from './workbenchStore'
 import { useTextFileStore } from './textFileStore'
+import { useProblemSetStore } from './problemSetStore'
 import type { Problem } from '../types'
 
 const mocks = vi.hoisted(() => ({invoke: vi.fn()}))
@@ -156,6 +157,50 @@ describe('code-first navigation', () => {
       await vi.advanceTimersByTimeAsync(0)
     }
   }
+  it('opens an uncached set problem before any network request and only fetches the clicked statement', async () => {
+    const paint = frames()
+    const store = useProblemStore()
+    const sets = useProblemSetStore()
+    const workbench = useWorkbenchStore()
+    sets.activeSet!.problems = ['1A', '1B'].map(id => ({ platform: 'codeforces', id, title: id, tags: [], addedAt: 1 }))
+    let finish!: (value: Problem) => void
+    mocks.invoke.mockImplementation(command => command === 'fetch_problem_detail_cf'
+      ? new Promise<Problem>(resolve => { finish = resolve }) : Promise.resolve(null))
+
+    await sets.openProblem(sets.activeSet!.problems[0]!)
+    expect(store.currentProblem?.id).toBe('1A')
+    expect(workbench.groups[0].tabs.some(tab => tab.context?.problemId === '1A')).toBe(true)
+    expect(mocks.invoke.mock.calls.some(([command]) => command === 'import_problem_url' || command === 'fetch_problem_detail_cf')).toBe(false)
+
+    await paint()
+    expect(mocks.invoke.mock.calls.filter(([command]) => command === 'fetch_problem_detail_cf')).toEqual([
+      ['fetch_problem_detail_cf', { problemId: '1A' }],
+    ])
+    finish({ id: '1A', title: 'Theatre Square', platform: 'codeforces', tags: [], contentFormat: 'html', description: '<p>Statement</p>' })
+    for (let index = 0; index < 8; index++) await Promise.resolve()
+    expect(store.currentProblem?.description).toBe('<p>Statement</p>')
+    expect(store.importedProblems[0]?.description).toBe('<p>Statement</p>')
+  })
+  it('reuses a rich statement from imports even when the catalog has only metadata', async () => {
+    const paint = frames()
+    const store = useProblemStore()
+    const reference = { id: '1A', title: 'Theatre Square', platform: 'codeforces' as const, tags: [], url: 'https://codeforces.com/problemset/problem/1/A' }
+    store.problems = [{ ...reference }]
+    store.importedProblems = [{ ...reference, contentFormat: 'html', description: '<p>Cached</p>' }]
+    await store.openRecommendedProblem(reference)
+    await paint()
+    expect(store.currentProblem?.description).toBe('<p>Cached</p>')
+    expect(mocks.invoke.mock.calls.some(([command]) => command === 'fetch_problem_detail_cf' || command === 'import_problem_url')).toBe(false)
+  })
+  it('fills set metadata from cached problems without fetching every missing entry', async () => {
+    const store = useProblemStore()
+    const sets = useProblemSetStore()
+    sets.activeSet!.problems = ['1A', '1B'].map(id => ({ platform: 'codeforces', id, title: id, tags: [], addedAt: 1 }))
+    store.importedProblems = [{ id: '1A', title: 'Theatre Square', platform: 'codeforces', tags: ['math'], rating: 1000 }]
+    await sets.enrichSetMetadata(sets.activeSetId, { fetchMissing: false })
+    expect(sets.activeSet!.problems[0]?.tags).toEqual(['math'])
+    expect(mocks.invoke).not.toHaveBeenCalled()
+  })
   it('shows code before restoring tests or requesting the remote statement', async () => {
     const paint = frames()
     const store = useProblemStore()
@@ -271,5 +316,29 @@ describe('renaming an open text file to source code', () => {
     expect(tab.context).toBeUndefined()
     expect(tab.path).toBe('F:/C.txt')
     expect(workbench.groups[0]!.activeTabId).toBe(tab.id)
+  })
+})
+
+
+describe('CPH code freshness', () => {
+  it('submits the edited code on the next run and replaces the previous compile error', async () => {
+    const store = useProblemStore()
+    const file = { platform: 'local' as const, problemId: 'fresh', title: 'fresh', language: 'cpp' as const, path: 'F:/fresh.cpp', createdAt: 0, unbound: true, statementMarkdown: '' }
+    mocks.invoke.mockImplementation(async (command, args) => {
+      if (command === 'read_workspace_file') return 'broken code'
+      if (command === 'run_code') return { success: args.code === 'int main(){return 0;}', stdout: '', stderr: args.code === 'broken code' ? 'previous error' : '', compileFailed: args.code === 'broken code', exitCode: 0, durationMs: 1, timedOut: false }
+    })
+    await store.openDraftFile(file)
+    store.addTestCase()
+    const id = store.testCases[0]!.id
+    await store.runTestCase(id)
+    expect(store.runResult?.stderr).toBe('previous error')
+    store.updateCode('int main(){return 0;}')
+    await store.runTestCase(id)
+    expect(store.runSequence).toBe(2)
+    expect(store.runResult?.stderr).toBe('')
+    expect(store.runResult?.compileFailed).toBe(false)
+    const requests = mocks.invoke.mock.calls.filter(([command]) => command === 'run_code')
+    expect(requests.map(([, args]) => args.code)).toEqual(['broken code', 'int main(){return 0;}'])
   })
 })

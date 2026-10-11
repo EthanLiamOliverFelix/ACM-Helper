@@ -3,7 +3,7 @@ use regex::Regex;
 use reqwest::Client;
 use scraper::{Html, Selector};
 use serde::{Deserialize, Serialize};
-use std::io::{BufRead, BufReader, Read, Write};
+use std::io::{BufRead, BufReader, Write};
 use std::net::TcpListener;
 use std::sync::{
     atomic::{AtomicBool, AtomicU64, Ordering},
@@ -109,18 +109,14 @@ pub async fn open_atcoder_manual_submit(
 pub async fn open_qoj_manual_submit(
     app: AppHandle,
     problem_id: String,
+    problem_url: Option<String>,
     code: String,
 ) -> Result<String, String> {
     if code.trim().is_empty() {
         return Err("代码为空，无法复制".into());
     }
     let problem_id = problem_id.trim().to_ascii_uppercase();
-    if !Regex::new(r"^(?:\d+|C\d+[A-Z][A-Z0-9_]*)$")
-        .unwrap()
-        .is_match(&problem_id)
-    {
-        return Err(format!("无法识别 QOJ 题号：{problem_id}"));
-    }
+    let submit_url = qoj_manual_submit_url(&problem_id, problem_url.as_deref())?;
     tauri::async_runtime::spawn_blocking(move || {
         let mut clipboard =
             arboard::Clipboard::new().map_err(|e| format!("无法访问剪贴板：{e}"))?;
@@ -130,6 +126,77 @@ pub async fn open_qoj_manual_submit(
     })
     .await
     .map_err(|e| format!("复制代码任务失败：{e}"))??;
+    let url = submit_url
+        .parse()
+        .map_err(|e| format!("提交页地址无效：{e}"))?;
+    if let Some(window) = app.get_webview_window("qoj_manual_submit") {
+        window
+            .navigate(url)
+            .map_err(|e| format!("无法切换 QOJ 提交页：{e}"))?;
+        let _ = window.set_title(&format!("QOJ {problem_id} · 代码已复制，请粘贴提交"));
+        let _ = window.show();
+        let _ = window.set_focus();
+    } else {
+        WebviewWindowBuilder::new(&app, "qoj_manual_submit", WebviewUrl::External(url))
+            .initialization_script(
+                r##"(function(){
+                if(location.hostname!=='qoj.ac'||location.hash!=='#tab-submit-answer')return;
+                var attempts=0,timer=setInterval(function(){
+                    var link=document.querySelector('a[href="#tab-submit-answer"]');
+                    if(link){clearInterval(timer);link.click();}
+                    else if(++attempts>=140)clearInterval(timer);
+                },250);
+            })();"##,
+            )
+            .title(format!("QOJ {problem_id} · 代码已复制，请粘贴提交"))
+            .inner_size(1080.0, 820.0)
+            .min_inner_size(760.0, 560.0)
+            .visible(true)
+            .build()
+            .map_err(|e| format!("无法打开 QOJ 提交窗口：{e}"))?;
+    }
+    Ok(format!("已复制代码并打开 QOJ {problem_id} 的官方提交页"))
+}
+
+fn qoj_manual_submit_url(problem_id: &str, problem_url: Option<&str>) -> Result<String, String> {
+    let problem_id = problem_id.trim().to_ascii_uppercase();
+    if !Regex::new(r"^(?:\d+|C\d+[A-Z][A-Z0-9_]*)$")
+        .unwrap()
+        .is_match(&problem_id)
+    {
+        return Err(format!("无法识别 QOJ 题号：{problem_id}"));
+    }
+    if let Some(value) = problem_url.filter(|value| !value.trim().is_empty()) {
+        let url = reqwest::Url::parse(value.trim())
+            .map_err(|_| "无法识别 QOJ 官方题目链接".to_string())?;
+        if url.scheme() != "https"
+            || url.host_str() != Some("qoj.ac")
+            || url.port().is_some()
+            || !url.username().is_empty()
+            || url.password().is_some()
+        {
+            return Err("仅支持 QOJ 官方 HTTPS 题目链接".into());
+        }
+        let pattern = Regex::new(
+            r"(?i)^(/(?:contest/(\d+)/)?problem/([a-z0-9_]+))(?:/statement/[a-z_]+)?/?$",
+        )
+        .unwrap();
+        let parts = pattern
+            .captures(url.path())
+            .ok_or_else(|| "无法识别 QOJ 题目链接".to_string())?;
+        let label = parts[3].to_ascii_uppercase();
+        let url_id = if label.chars().all(|ch| ch.is_ascii_digit()) {
+            label
+        } else if let Some(contest) = parts.get(2) {
+            format!("C{}{}", contest.as_str(), label)
+        } else {
+            return Err("无法识别 QOJ 题目链接".into());
+        };
+        if url_id != problem_id {
+            return Err("QOJ 提交链接与当前题目不匹配".into());
+        }
+        return Ok(format!("https://qoj.ac{}#tab-submit-answer", &parts[1]));
+    }
     let submit_url = if let Some(captures) = Regex::new(r"^C(\d+)([A-Z][A-Z0-9_]*)$")
         .unwrap()
         .captures(&problem_id)
@@ -141,25 +208,7 @@ pub async fn open_qoj_manual_submit(
     } else {
         format!("https://qoj.ac/problem/{problem_id}#tab-submit-answer")
     };
-    let url = submit_url
-        .parse()
-        .map_err(|e| format!("提交页地址无效：{e}"))?;
-    if let Some(window) = app.get_webview_window("qoj_manual_submit") {
-        window
-            .navigate(url)
-            .map_err(|e| format!("无法切换 QOJ 提交页：{e}"))?;
-        let _ = window.show();
-        let _ = window.set_focus();
-    } else {
-        WebviewWindowBuilder::new(&app, "qoj_manual_submit", WebviewUrl::External(url))
-            .title(format!("QOJ {problem_id} · 代码已复制，请粘贴提交"))
-            .inner_size(1080.0, 820.0)
-            .min_inner_size(760.0, 560.0)
-            .visible(true)
-            .build()
-            .map_err(|e| format!("无法打开 QOJ 提交窗口：{e}"))?;
-    }
-    Ok(format!("已复制代码并打开 QOJ {problem_id} 的官方提交页"))
+    Ok(submit_url)
 }
 
 // ── Serde types ───────────────────────────────────────────────────
@@ -422,129 +471,74 @@ fn start_signal_server() -> Result<(u16, std::sync::mpsc::Receiver<String>), Str
     Ok((port, rx))
 }
 
-/// 接收浏览器回传的大段页面内容。POST 避免把完整题面塞进 URL。
-fn start_payload_server(
-    stop: Arc<AtomicBool>,
-) -> Result<(u16, std::sync::mpsc::Receiver<String>), String> {
-    let listener =
-        TcpListener::bind("127.0.0.1:0").map_err(|e| format!("启动本地服务失败: {}", e))?;
-    let port = listener
-        .local_addr()
-        .map_err(|e| format!("获取端口失败: {}", e))?
-        .port();
-    let (tx, rx) = std::sync::mpsc::channel::<String>();
-    listener
-        .set_nonblocking(true)
-        .map_err(|e| format!("设置题面回调失败: {e}"))?;
-    std::thread::spawn(move || {
-        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(60);
-        while !stop.load(Ordering::Relaxed) && std::time::Instant::now() < deadline {
-            if let Ok((mut stream, _)) = listener.accept() {
-                let _ = stream.set_read_timeout(Some(std::time::Duration::from_secs(3)));
-                let mut reader = BufReader::new(stream.try_clone().unwrap());
-                let mut first_line = String::new();
-                let _ = reader.read_line(&mut first_line);
-                let mut content_length = 0usize;
-                loop {
-                    let mut header = String::new();
-                    if reader.read_line(&mut header).is_err()
-                        || header == "\r\n"
-                        || header.is_empty()
-                    {
-                        break;
-                    }
-                    if let Some(value) = header.to_ascii_lowercase().strip_prefix("content-length:")
-                    {
-                        content_length = value.trim().parse().unwrap_or(0);
-                    }
-                }
-                let mut body = vec![0u8; content_length.min(4 * 1024 * 1024)];
-                if content_length > 0 && reader.read_exact(&mut body).is_ok() {
-                    let encoded = String::from_utf8_lossy(&body);
-                    let decoded = urlencoding::decode(&encoded)
-                        .unwrap_or_else(|_| std::borrow::Cow::Borrowed(""))
-                        .into_owned();
-                    if !decoded.is_empty() {
-                        let _ = tx.send(decoded);
-                    }
-                }
-                let response = "HTTP/1.1 200 OK\r\nContent-Length: 2\r\nAccess-Control-Allow-Origin: *\r\nConnection: close\r\n\r\nOK";
-                let _ = stream.write_all(response.as_bytes());
-                return;
-            }
-            std::thread::sleep(std::time::Duration::from_millis(100));
+// Native callbacks avoid website CSP/local-network restrictions on statement delivery.
+const CF_STATEMENT_PROBE: &str = r#"(function () {
+    var node = document.querySelector('.problem-statement');
+    return {
+        html: node && node.querySelector('.title') ? node.outerHTML : null,
+        challenge: /just a moment|checking your browser/i.test(document.title || '')
+            || Boolean(document.querySelector('#challenge-running, #challenge-form'))
+    };
+})();"#;
+
+fn capture_cf_statement(
+    window: &tauri::WebviewWindow,
+    stop: &AtomicBool,
+) -> Result<String, String> {
+    let started = std::time::Instant::now();
+    let deadline = started + std::time::Duration::from_secs(60);
+    loop {
+        if stop.load(Ordering::Relaxed) {
+            return Err("已取消 Codeforces 题面加载".into());
         }
-    });
-    Ok((port, rx))
+        if std::time::Instant::now() >= deadline {
+            return Err("Codeforces 题面加载超时，请重新抓取；如需人机验证，请到设置 → OJ 账号中完成验证".into());
+        }
+        let (sender, receiver) = std::sync::mpsc::channel();
+        window.eval_with_callback(CF_STATEMENT_PROBE, move |payload| {
+            let _ = sender.send(payload);
+        }).map_err(|error| format!("读取 Codeforces 题面失败: {error}"))?;
+        let remaining = deadline.saturating_duration_since(std::time::Instant::now());
+        if let Ok(payload) = receiver.recv_timeout(remaining.min(std::time::Duration::from_secs(2))) {
+            if let Ok(value) = serde_json::from_str::<serde_json::Value>(&payload) {
+                if let Some(html) = value.get("html").and_then(serde_json::Value::as_str) {
+                    if is_cf_statement_html(html) {
+                        return Ok(html.to_string());
+                    }
+                }
+                // Give automatic browser checks time to finish, without opening a window.
+                if value.get("challenge").and_then(serde_json::Value::as_bool) == Some(true)
+                    && started.elapsed() >= std::time::Duration::from_secs(8)
+                {
+                    return Err("Codeforces 需要人机验证，请到设置 → OJ 账号打开 Codeforces 登录窗口完成验证，再重新抓取题面".into());
+                }
+            }
+        }
+        std::thread::sleep(std::time::Duration::from_millis(250));
+    }
 }
 
 fn fetch_cf_html_via_webview(app: &AppHandle, url: &str) -> Result<String, String> {
     static NEXT_STATEMENT: AtomicU64 = AtomicU64::new(1);
-    let label = format!(
-        "cf_statement_{}",
-        NEXT_STATEMENT.fetch_add(1, Ordering::Relaxed)
-    );
+    let label = format!("cf_statement_{}", NEXT_STATEMENT.fetch_add(1, Ordering::Relaxed));
     let stop = Arc::new(AtomicBool::new(false));
-    let (port, result_rx) = start_payload_server(stop.clone())?;
     let window = WebviewWindowBuilder::new(
         app,
         &label,
-        WebviewUrl::External(url.parse().map_err(|e| format!("题目链接无效: {}", e))?),
+        WebviewUrl::External(url.parse().map_err(|e| format!("题目链接无效: {e}"))?),
     )
-    .title("Codeforces 题面加载 — 关闭窗口可取消")
+    .title("Codeforces · 正在读取题面")
     .inner_size(900.0, 700.0)
     .visible(false)
     .build()
-    .map_err(|e| {
-        stop.store(true, Ordering::Relaxed);
-        format!("创建题面浏览器失败: {}", e)
-    })?;
+    .map_err(|e| format!("创建题面浏览器失败: {e}"))?;
     let closed = stop.clone();
     window.on_window_event(move |event| {
-        if matches!(
-            event,
-            tauri::WindowEvent::Destroyed | tauri::WindowEvent::CloseRequested { .. }
-        ) {
+        if matches!(event, tauri::WindowEvent::Destroyed | tauri::WindowEvent::CloseRequested { .. }) {
             closed.store(true, Ordering::Relaxed);
         }
     });
-    let js = format!(
-        r#"(function() {{
-            if (window.__acmStatementSent) return;
-            var node = document.querySelector('.problem-statement');
-            if (!node) return;
-            window.__acmStatementSent = true;
-            fetch('http://127.0.0.1:{}/result', {{
-                method: 'POST', mode: 'no-cors',
-                headers: {{'Content-Type': 'text/plain'}},
-                body: encodeURIComponent(node.outerHTML)
-            }}).catch(function() {{ window.__acmStatementSent = false; }});
-        }})();"#,
-        port
-    );
-    let started = std::time::Instant::now();
-    let mut shown = false;
-    let result = loop {
-        if stop.load(Ordering::Relaxed) {
-            break Err("已取消 Codeforces 题面加载".to_string());
-        }
-        if started.elapsed() >= std::time::Duration::from_secs(60) {
-            break Err("Codeforces 浏览器题面加载超时，请重试并在窗口中完成人机验证".to_string());
-        }
-        let _ = window.eval(&js);
-        match result_rx.recv_timeout(std::time::Duration::from_millis(750)) {
-            Ok(html) => break Ok(html),
-            Err(std::sync::mpsc::RecvTimeoutError::Disconnected) => {
-                break Err("Codeforces 题面回调已结束，请重试".to_string())
-            }
-            Err(std::sync::mpsc::RecvTimeoutError::Timeout) => {}
-        }
-        if !shown && started.elapsed() >= std::time::Duration::from_secs(5) {
-            let _ = window.show();
-            shown = true;
-        }
-    };
-    stop.store(true, Ordering::Relaxed);
+    let result = capture_cf_statement(&window, &stop);
     window.destroy().ok();
     result
 }
@@ -569,8 +563,8 @@ pub async fn login_via_browser(
         existing.destroy().ok();
     }
 
-    // 本地回调只传输“登录成功”标记。
-    let (port, login_rx) = start_signal_server()?;
+    // Only the public account name is returned; credentials stay in the WebView.
+    let (port, login_rx) = crate::commands::callback::callback_server()?;
 
     // 生成检测 JS（函数形式，方便每次 navigation 后重新注入）
     fn make_detect_js(port: u16, switch_account: bool, current_username: &str) -> String {
@@ -589,12 +583,12 @@ pub async fn login_via_browser(
             var hasLogout = document.body && document.body.innerText &&
                 document.body.innerText.indexOf('Logout') !== -1;
             var href=profile?(profile.getAttribute('href')||''):'';
-            var username=decodeURIComponent((href.split('/profile/')[1]||'').split(/[?#]/)[0]||'').toLowerCase();
+            var username=decodeURIComponent((href.split('/profile/')[1]||'').split(/[?#]/)[0]||'');
             if (switching && !hasProfile && !hasLogout) sessionStorage.setItem('__acmCfSawLogout','1');
-            var changed=!switching || (username && previous && username!==previous) || (username && !previous && sessionStorage.getItem('__acmCfSawLogout')==='1');
-            if ((hasProfile || hasLogout) && changed) {{
+            var changed=!switching || (username && previous && username.toLowerCase()!==previous) || (username && !previous && sessionStorage.getItem('__acmCfSawLogout')==='1');
+            if (username && changed) {{
                 window.__cf_login_sent = true;
-                new Image().src = 'http://127.0.0.1:{port}/cookie?login';
+                new Image().src = 'http://127.0.0.1:{port}/result?'+encodeURIComponent(username);
             }}
         }} catch(e) {{}}
     }};
@@ -644,11 +638,11 @@ pub async fn login_via_browser(
     let app_for_thread = app.clone();
     std::thread::spawn(move || {
         match login_rx.recv_timeout(std::time::Duration::from_secs(180)) {
-            Ok(_) => {
+            Ok(username) => {
                 if let Some(wv) = app_for_thread.get_webview_window("cf_login") {
                     wv.destroy().ok();
                 }
-                let _ = app_for_thread.emit("cf-login-success", true);
+                let _ = app_for_thread.emit("cf-login-success", username);
             }
             Err(_timeout) => {
                 // 超时，关闭窗口
@@ -1227,7 +1221,7 @@ pub async fn inspect_cf_account(app: AppHandle) -> Result<AccountStatus, String>
     if let Some(window) = app.get_webview_window("cf_account_check") {
         let _ = window.destroy();
     }
-    let (port, rx) = start_signal_server()?;
+    let (port, rx) = crate::commands::callback::callback_server()?;
     let script = format!(
         r#"(function() {{
           if (window.__acmAccountInspector) return;
@@ -1278,6 +1272,35 @@ pub async fn inspect_cf_account(app: AppHandle) -> Result<AccountStatus, String>
 #[cfg(test)]
 mod tests {
     #[test]
+    fn qoj_submit_urls_preserve_contest_context_and_reject_mismatched_links() {
+        use super::qoj_manual_submit_url;
+        assert_eq!(
+            qoj_manual_submit_url(
+                "14687",
+                Some("https://qoj.ac/contest/1096/problem/14687/statement/zh_cn")
+            )
+            .unwrap(),
+            "https://qoj.ac/contest/1096/problem/14687#tab-submit-answer"
+        );
+        assert_eq!(
+            qoj_manual_submit_url("C1096A", None).unwrap(),
+            "https://qoj.ac/contest/1096/problem/A#tab-submit-answer"
+        );
+        assert_eq!(
+            qoj_manual_submit_url("2", None).unwrap(),
+            "https://qoj.ac/problem/2#tab-submit-answer"
+        );
+        for url in [
+            "https://qoj.ac/problem/3",
+            "https://evil.example/problem/2",
+            "https://qoj.ac@evil.example/problem/2",
+            "https://qoj.ac/login",
+            "https://qoj.ac/problem/2/../3",
+        ] {
+            assert!(qoj_manual_submit_url("2", Some(url)).is_err());
+        }
+    }
+    #[test]
     fn browser_fallback_rejects_challenge_pages_and_accepts_real_statements() {
         assert!(!super::is_cf_statement_html(
             "Just a moment<script>var selector='problem-statement';</script>"
@@ -1288,18 +1311,45 @@ mod tests {
         assert!(super::is_cf_statement_html("<div class='problem-statement'><div class='header'><div class='title'>A. Test</div></div><p>Body</p></div>"));
     }
 
-    #[test]
-    fn cancelled_statement_callback_releases_receiver() {
-        let stop = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
-        let (_, rx) = super::start_payload_server(stop.clone()).unwrap();
-        stop.store(true, std::sync::atomic::Ordering::Relaxed);
-        assert!(matches!(
-            rx.recv_timeout(std::time::Duration::from_secs(2)),
-            Err(std::sync::mpsc::RecvTimeoutError::Disconnected)
-        ));
-    }
-
     use super::*;
+
+    #[test]
+    #[cfg(windows)]
+    #[ignore = "requires installed WebView2; uses an isolated hidden native window"]
+    fn cf_native_statement_capture_stays_hidden_with_blocked_network_requests() {
+        let (sender, receiver) = std::sync::mpsc::channel();
+        let mut context = tauri::generate_context!();
+        context.config_mut().app.windows.clear();
+        let data = std::env::current_dir().unwrap().join("target")
+            .join(format!("cf-native-test-{}", std::process::id()));
+        let app = tauri::Builder::default().any_thread().setup(move |app| {
+            let window = WebviewWindowBuilder::new(app, "cf_native_test", WebviewUrl::External("about:blank".parse().unwrap()))
+                .data_directory(data).visible(false).build()?;
+            let handle = app.handle().clone();
+            std::thread::spawn(move || {
+                let result = (|| {
+                    std::thread::sleep(std::time::Duration::from_millis(250));
+                    window.eval(r#"document.head.innerHTML='<meta http-equiv="Content-Security-Policy" content="connect-src &apos;none&apos;; img-src &apos;none&apos;">';document.body.innerHTML='<div class="problem-statement"><div class="title">A. Theatre Square</div><p>Body</p><pre>6 6 4</pre></div>';"#).map_err(|error| error.to_string())?;
+                    let html = capture_cf_statement(&window, &AtomicBool::new(false))?;
+                    if window.is_visible().map_err(|error| error.to_string())? {
+                        return Err("statement capture opened a visible window".to_string());
+                    }
+                    Ok(html)
+                })();
+                let _ = sender.send(result);
+                window.destroy().ok();
+                handle.exit(0);
+            });
+            Ok(())
+        }).build(context).unwrap();
+        let code = app.run_return(|_, event| {
+            if let tauri::RunEvent::ExitRequested { code: None, api, .. } = event { api.prevent_exit(); }
+        });
+        assert_eq!(code, 0);
+        let html = receiver.recv_timeout(std::time::Duration::from_secs(1)).unwrap().unwrap();
+        assert!(html.contains("Theatre Square"));
+        assert!(html.contains("6 6 4"));
+    }
 
     #[test]
     fn preserves_breaks_in_browser_serialized_samples() {

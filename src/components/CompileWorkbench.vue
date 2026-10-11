@@ -17,11 +17,12 @@ const diagnostic = computed(() => getRunDiagnostic(store.runResult, store.curren
 const pendingDiagnostics = shallowRef<PendingDiagnostic[]>([])
 let nextDiagnosticId = 0
 const seenResults = new WeakSet<object>()
+watch(() => store.runSequence, () => { pendingDiagnostics.value = [] }, { flush: 'sync' })
 watch(() => store.runResult, result => {
   const value = getRunDiagnostic(result, store.currentLanguage)
   if (!result || !value || seenResults.has(result)) return
   seenResults.add(result)
-  pendingDiagnostics.value = [...pendingDiagnostics.value, { ...value, id: ++nextDiagnosticId }]
+  pendingDiagnostics.value = [{ ...value, id: ++nextDiagnosticId }]
 }, { immediate: true })
 function acknowledgeDiagnostic(id: number) {
   pendingDiagnostics.value = pendingDiagnostics.value.filter(item => item.id !== id)

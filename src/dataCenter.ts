@@ -46,6 +46,7 @@ export type DataCenterKey =
   | 'show-problem-tags'
   | 'problem-catalog'
   | 'qoj-archive'
+  | 'qoj-catalog-pages'
 
 const legacyKeys: Record<DataCenterKey, string> = {
   settings: 'acm-helper-settings',
@@ -64,6 +65,7 @@ const legacyKeys: Record<DataCenterKey, string> = {
   'show-problem-tags': 'acm-helper-show-problem-tags',
   'problem-catalog': 'acm-helper-problem-catalog-v1',
   'qoj-archive': 'acm-helper-qoj-archive-v1',
+  'qoj-catalog-pages': 'acm-helper-qoj-catalog-pages-v1',
 }
 
 const cache = new Map<DataCenterKey, unknown>()

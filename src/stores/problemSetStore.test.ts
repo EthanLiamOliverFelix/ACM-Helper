@@ -17,6 +17,38 @@ beforeEach(() => {
   setActivePinia(createPinia())
 })
 
+describe('contest imports', () => {
+  it('imports QOJ archive rows with original titles and links and deduplicates contests', () => {
+    const store = useProblemSetStore()
+    const contest = { platform: 'qoj' as const, contestId: '1096', title: 'ICPC Finals', url: 'https://qoj.ac/contest/1096' }
+    const rows = [{ id: '14687', title: 'Grand Voting', url: 'https://qoj.ac/contest/1096/problem/14687', platform: 'qoj' as const, tags: [] }]
+    const result = store.importContest(contest, rows)
+    expect(result.set.problems[0]).toMatchObject(rows[0])
+    expect(store.importContest(contest, rows).added).toBe(false)
+    setActivePinia(createPinia())
+    expect(useProblemSetStore().containsContest('qoj', '1096')).toBe(true)
+  })
+  it('imports every problem into one ordinary set and prevents duplicate contests', () => {
+    const store = useProblemSetStore()
+    const contest = { platform: 'codeforces' as const, contestId: 'contest:123', title: 'Round 123', url: 'https://codeforces.com/contest/123' }
+    const problems = ['123A', '123B'].map(id => ({ id, title: id, platform: 'codeforces' as const, tags: [] }))
+    const activeBefore = store.activeSetId
+    const result = store.importContest(contest, [...problems, problems[0]])
+    expect(result.set.problems.map(p => p.id)).toEqual(['123A', '123B'])
+    expect(store.activeSetId).toBe(activeBefore)
+    expect(store.containsContest('codeforces', '123')).toBe(true)
+    expect(store.importContest({ ...contest, contestId: '123' }, problems).added).toBe(false)
+    setActivePinia(createPinia())
+    expect(useProblemSetStore().containsContest('codeforces', '123')).toBe(true)
+  })
+  it('does not create an empty set after a failed contest read', () => {
+    const store = useProblemSetStore()
+    const count = store.sets.length
+    expect(() => store.importContest({ platform: 'atcoder', contestId: 'abc1', title: 'ABC 1', url: 'https://atcoder.jp/contests/abc1' }, [])).toThrow()
+    expect(store.sets.length).toBe(count)
+  })
+})
+
 describe('problem set groups', () => {
   it('keeps legacy sets at the root and restores nested groups and membership', () => {
     data.set('problem-sets', [{ id: 'legacy', name: '旧题单', createdAt: 1, problems: [] }])

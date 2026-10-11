@@ -15,10 +15,15 @@ struct Session {
     master: Box<dyn MasterPty + Send>,
     writer: Box<dyn Write + Send>,
     killer: Box<dyn ChildKiller + Send + Sync>,
+    diagnostic_prefix: String,
+    diagnostic_files: Vec<std::path::PathBuf>,
 }
 impl Drop for Session {
     fn drop(&mut self) {
         let _ = self.killer.kill();
+        for file in &self.diagnostic_files {
+            let _ = std::fs::remove_file(file);
+        }
     }
 }
 #[derive(Default)]
@@ -62,13 +67,22 @@ fn size(cols: u16, rows: u16) -> PtySize {
 
 type Shell = (Session, Box<dyn Read + Send>, Box<dyn Child + Send + Sync>);
 fn open_shell(directory: &std::path::Path, cols: u16, rows: u16) -> Result<Shell, String> {
+    let diagnostic_prefix = std::env::temp_dir().join(format!(
+        "acm-cph-{}-{}-{}", std::process::id(),
+        NEXT_ID.fetch_add(1, Ordering::Relaxed),
+        std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap_or_default().as_nanos()
+    )).to_string_lossy().into_owned();
     let pair = native_pty_system()
         .openpty(size(cols, rows))
         .map_err(|e| e.to_string())?;
     #[cfg(windows)]
     let mut command = {
         let mut command = CommandBuilder::new("powershell.exe");
-        command.args(["-NoLogo", "-NoProfile", "-NoExit", "-Command", "[Console]::InputEncoding = [Console]::OutputEncoding = [System.Text.UTF8Encoding]::new(); $OutputEncoding = [Console]::OutputEncoding"]);
+        let initialization = format!(
+            "[Console]::InputEncoding = [Console]::OutputEncoding = [System.Text.UTF8Encoding]::new(); $OutputEncoding = [Console]::OutputEncoding; function global:Show-CPHError([int]$Id) {{ $file = {} + '-' + $Id + '.txt'; try {{ [Console]::Write([System.IO.File]::ReadAllText($file, [System.Text.Encoding]::UTF8)) }} finally {{ Remove-Item -LiteralPath $file -Force -ErrorAction SilentlyContinue }} }}",
+            quote(&diagnostic_prefix)
+        );
+        command.args(["-NoLogo", "-NoProfile", "-NoExit", "-Command", &initialization]);
         command
     };
     #[cfg(not(windows))]
@@ -93,10 +107,43 @@ fn open_shell(directory: &std::path::Path, cols: u16, rows: u16) -> Result<Shell
             master: pair.master,
             writer,
             killer,
+            diagnostic_prefix,
+            diagnostic_files: Vec::new(),
         },
         reader,
         child,
     ))
+}
+
+fn print_diagnostic(session: &mut Session, text: &str) -> Result<(), String> {
+    let number = session.diagnostic_files.len() + 1;
+    let file = std::path::PathBuf::from(format!("{}-{}.txt", session.diagnostic_prefix, number));
+    // Diagnostic text is data on disk, never interpolated into shell source.
+    let mut output = std::fs::OpenOptions::new().write(true).create_new(true).open(&file).map_err(|e| e.to_string())?;
+    session.diagnostic_files.push(file.clone());
+    output.write_all(text.as_bytes()).map_err(|e| e.to_string())?;
+    drop(output);
+    #[cfg(windows)]
+    let command = format!("Show-CPHError {}\r", number);
+    #[cfg(not(windows))]
+    let command = format!("cat -- {}; rm -- {}\r", quote(&file.to_string_lossy()), quote(&file.to_string_lossy()));
+    session.writer.write_all(command.as_bytes()).and_then(|_| session.writer.flush()).map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+pub async fn print_terminal_diagnostic(
+    window: Window,
+    sessions: State<'_, TerminalSessions>,
+    id: u64,
+    text: String,
+) -> Result<(), String> {
+    main_window(&window)?;
+    if text.len() > 1024 * 1024 { return Err("一次报错不能超过 1 MB".into()); }
+    let registry = sessions.0.clone();
+    tauri::async_runtime::spawn_blocking(move || {
+        let mut registry = registry.lock().map_err(|e| e.to_string())?;
+        print_diagnostic(registry.get_mut(&id).ok_or("终端已结束")?, &text)
+    }).await.map_err(|e| e.to_string())?
 }
 
 #[tauri::command]
@@ -411,6 +458,21 @@ mod tests {
         }
         session.master.resize(size(120, 40)).unwrap();
         until(&receiver, &mut output, &mut *session.writer, "PS ");
+        output.clear();
+        print_diagnostic(&mut session, "\r\n源.cpp:35: error: expected ';'\r\n$(Write-Output 'UNEXPECTED-EXECUTION')\r\nCPH-DIAGNOSTIC-END\r\n").unwrap();
+        until(&receiver, &mut output, &mut *session.writer, "CPH-DIAGNOSTIC-END");
+        // The prompt must come after the diagnostic, from the real shell.
+        let tail = String::from_utf8_lossy(&output).split("CPH-DIAGNOSTIC-END").last().unwrap().as_bytes().to_vec();
+        output = tail;
+        until(&receiver, &mut output, &mut *session.writer, "PS ");
+        assert!(!session.diagnostic_files[0].exists());
+        output.clear();
+        print_diagnostic(&mut session, "\r\nSECOND-CPH-ERROR\r\n").unwrap();
+        until(&receiver, &mut output, &mut *session.writer, "SECOND-CPH-ERROR");
+        let tail = String::from_utf8_lossy(&output).split("SECOND-CPH-ERROR").last().unwrap().as_bytes().to_vec();
+        output = tail;
+        until(&receiver, &mut output, &mut *session.writer, "PS ");
+        assert!(!session.diagnostic_files[1].exists());
         session
             .writer
             .write_all("$value = Read-Host '输入'; Write-Output ('收到:' + $value)\r".as_bytes())

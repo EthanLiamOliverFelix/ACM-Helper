@@ -1,7 +1,7 @@
 import { computed, ref } from 'vue'
 import { defineStore } from 'pinia'
 import { invoke } from '@tauri-apps/api/core'
-import type { Difficulty, LuoguProblemPage, LuoguTrainingDetail, Problem, SkillPlanProblem } from '../types'
+import type { Difficulty, LuoguProblemPage, LuoguTrainingDetail, Problem, QojProblemPage, SkillPlanProblem } from '../types'
 import { useProblemStore } from './problemStore'
 import { mapInOrderedBatches, parseBatchProblemInput, type BatchProblemToken } from '../utils/problemBatch'
 import { qojProblemUrl } from '../utils/qoj'
@@ -26,6 +26,7 @@ export interface ProblemSet {
   name: string
   createdAt: number
   problems: ProblemSetEntry[]
+  contestSource?: { platform: 'codeforces' | 'atcoder' | 'luogu' | 'qoj'; contestId: string; url: string }
   source?: {
     platform: 'luogu'
     trainingId: number
@@ -70,6 +71,28 @@ export const useProblemSetStore = defineStore('problemSets', () => {
     sets.value.push(set)
     activeSetId.value = set.id
     save()
+  }
+
+  function containsContest(platform: string, contestId: string) {
+    const normalized = contestId.replace(/^(?:contest|gym):/i, '').toLowerCase()
+    return sets.value.some(set => set.contestSource?.platform === platform && set.contestSource.contestId.toLowerCase() === normalized)
+  }
+
+  function importContest(contest: { platform: 'codeforces' | 'atcoder' | 'luogu' | 'qoj'; contestId: string; title: string; url: string }, problems: Problem[]) {
+    const id = contest.contestId.replace(/^(?:contest|gym):/i, '').toLowerCase()
+    const existing = sets.value.find(set => set.contestSource?.platform === contest.platform && set.contestSource.contestId.toLowerCase() === id)
+    if (existing) return { set: existing, added: false }
+    if (!problems.length) throw new Error('这场比赛没有可加入题单的公开题目')
+    const seen = new Set<string>()
+    const entries: ProblemSetEntry[] = problems.filter(p => p.platform === contest.platform && !seen.has(p.id) && !!seen.add(p.id)).map(p => ({
+      platform: contest.platform, id: p.id, title: p.title, url: p.url, rating: p.rating, tags: [...p.tags], addedAt: Date.now(),
+    }))
+    if (!entries.length) throw new Error('这场比赛没有可加入题单的公开题目')
+    const set: ProblemSet = { id: makeId(), name: contest.title, createdAt: Date.now(), problems: entries,
+      contestSource: { platform: contest.platform, contestId: id, url: contest.url } }
+    sets.value.push(set)
+    save()
+    return { set, added: true }
   }
 
   function createGroup(name: string, parentId: string | null = null) {
@@ -261,10 +284,11 @@ export const useProblemSetStore = defineStore('problemSets', () => {
     return match ? `https://codeforces.com/problemset/problem/${match[1]}/${match[2]}` : ''
   }
 
-  async function enrichSetMetadata(setId = activeSetId.value) {
+  async function enrichSetMetadata(setId = activeSetId.value, options: { fetchMissing?: boolean } = {}) {
     const set = sets.value.find((candidate) => candidate.id === setId)
     if (!set) return { updated: 0, failed: 0 }
-    const catalog = useProblemStore().problems
+    const problems = useProblemStore()
+    const catalog = [...problems.importedProblems, ...problems.problems]
     let updated = 0
     for (const entry of set.problems) {
       const known = catalog.find((problem) => problem.platform === entry.platform && problem.id.toUpperCase() === entry.id.toUpperCase())
@@ -273,7 +297,11 @@ export const useProblemSetStore = defineStore('problemSets', () => {
       }
     }
 
-    const pending = set.problems.filter((entry) => !entry.metadataFetchedAt && (!entry.tags.length || (entry.platform === 'luogu' && !entry.difficulty)))
+    if (options.fetchMissing === false) {
+      if (updated) save()
+      return { updated, failed: 0 }
+    }
+    const pending = set.problems.filter((entry) => entry.platform !== 'qoj' && !entry.metadataFetchedAt && (!entry.tags.length || (entry.platform === 'luogu' && !entry.difficulty)))
     let cursor = 0
     let failed = 0
     async function worker() {
@@ -367,7 +395,6 @@ export const useProblemSetStore = defineStore('problemSets', () => {
   }
 
   async function resolveProblem(token: BatchProblemToken): Promise<Problem> {
-    if (token.platform === 'qoj' || (token.url && /https?:\/\/(?:www\.)?qoj\.ac\//i.test(token.url))) throw new Error('该平台当前未启用')
     if (token.url) return invoke<Problem>('import_problem_url', { url: token.url })
     const known = findCatalogProblem(token)
     if (known) return known
@@ -376,10 +403,15 @@ export const useProblemSetStore = defineStore('problemSets', () => {
         ? `https://www.luogu.com.cn/problem/${token.id}`
         : token.platform === 'atcoder'
           ? `https://atcoder.jp/contests/${token.id.split('_')[0].toLowerCase()}/tasks/${token.id.toLowerCase()}`
-          : `https://codeforces.com/problemset/problem/${token.id.match(/^\d+/)?.[0]}/${token.id.replace(/^\d+/, '')}`
+          : token.platform === 'qoj' ? qojProblemUrl(token.id) : `https://codeforces.com/problemset/problem/${token.id.match(/^\d+/)?.[0]}/${token.id.replace(/^\d+/, '')}`
       return invoke<Problem>('import_problem_url', { url })
     }
-    if (token.query && token.platform !== 'codeforces') {
+    if (token.query && token.platform === 'qoj') {
+      const page = await invoke<QojProblemPage>('fetch_problems_qoj', { page: 1, keyword: token.query })
+      const exact = page.problems.filter(problem => normalized(problem.title) === normalized(token.query!))
+      if (exact.length === 1) return exact[0]
+      if (page.problems.length === 1) return page.problems[0]
+    } else if (token.query && token.platform !== 'codeforces') {
       const page = await invoke<LuoguProblemPage>('fetch_problems_luogu', {
         page: 1,
         keyword: token.query,
@@ -467,12 +499,11 @@ export const useProblemSetStore = defineStore('problemSets', () => {
   }
 
   async function openProblem(problem: ProblemSetEntry) {
-    if (!problem.metadataFetchedAt) await enrichSetMetadata(activeSetId.value)
     const url = problemUrl(problem)
     if (!url) throw new Error('题号格式无效，无法打开该题')
     await useProblemStore().openRecommendedProblem({ ...problem, url })
   }
 
   save()
-  return { sets, groups, activeSetId, activeSet, createSet, createGroup, renameItem, canMoveItem, moveItem, moveItems, topLevelItemIds, reorderItems, reorderGroup, deleteGroup, exportSetText, exportSetEntries, reorderProblem, deleteSet, deleteSets, reorderSet, addProblem, addProblemUrl, addProblemsBatch, importPlan, importLuoguTraining, enrichSetMetadata, removeProblem, contains, openProblem }
+  return { sets, groups, activeSetId, activeSet, createSet, containsContest, importContest, createGroup, renameItem, canMoveItem, moveItem, moveItems, topLevelItemIds, reorderItems, reorderGroup, deleteGroup, exportSetText, exportSetEntries, reorderProblem, deleteSet, deleteSets, reorderSet, addProblem, addProblemUrl, addProblemsBatch, importPlan, importLuoguTraining, enrichSetMetadata, removeProblem, contains, openProblem }
 })

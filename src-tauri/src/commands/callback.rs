@@ -3,17 +3,39 @@ use std::net::TcpListener;
 use std::time::Duration;
 
 pub(crate) fn callback_server() -> Result<(u16, std::sync::mpsc::Receiver<String>), String> {
+    callback_server_with_timeout(Duration::from_secs(180))
+}
+
+pub(crate) fn callback_server_with_timeout(
+    timeout: Duration,
+) -> Result<(u16, std::sync::mpsc::Receiver<String>), String> {
     let listener =
         TcpListener::bind("127.0.0.1:0").map_err(|e| format!("启动本地回调失败: {}", e))?;
     let port = listener
         .local_addr()
         .map_err(|e| format!("获取回调端口失败: {}", e))?
         .port();
+    listener
+        .set_nonblocking(true)
+        .map_err(|e| format!("设置回调超时失败: {e}"))?;
     let (tx, rx) = std::sync::mpsc::channel();
     std::thread::spawn(move || {
-        for incoming in listener.incoming() {
-            let Ok(mut stream) = incoming else { continue };
-            let _ = stream.set_read_timeout(Some(Duration::from_secs(180)));
+        let deadline = std::time::Instant::now() + timeout;
+        while std::time::Instant::now() < deadline {
+            let mut stream = match listener.accept() {
+                Ok((stream, _)) => stream,
+                Err(error) if error.kind() == std::io::ErrorKind::WouldBlock => {
+                    std::thread::sleep(Duration::from_millis(25));
+                    continue;
+                }
+                Err(_) => break,
+            };
+            let _ = stream.set_nonblocking(false);
+            let _ = stream.set_read_timeout(Some(
+                deadline
+                    .saturating_duration_since(std::time::Instant::now())
+                    .max(Duration::from_millis(1)),
+            ));
             let mut reader = BufReader::new(stream.try_clone().unwrap());
             let mut request_line = String::new();
             let _ = reader.read_line(&mut request_line);
@@ -60,6 +82,15 @@ pub(crate) fn callback_server() -> Result<(u16, std::sync::mpsc::Receiver<String
 mod tests {
     use super::*;
     use std::net::TcpStream;
+
+    #[test]
+    fn abandoned_account_callback_releases_receiver_after_timeout() {
+        let (_, rx) = callback_server_with_timeout(Duration::from_millis(40)).unwrap();
+        assert!(matches!(
+            rx.recv_timeout(Duration::from_secs(1)),
+            Err(std::sync::mpsc::RecvTimeoutError::Disconnected)
+        ));
+    }
 
     #[test]
     fn callback_server_decodes_large_unicode_get_payload() {

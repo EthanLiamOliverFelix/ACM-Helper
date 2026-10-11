@@ -6,7 +6,7 @@ import { FitAddon } from '@xterm/addon-fit'
 import '@xterm/xterm/css/xterm.css'
 import { useProblemStore } from '../stores/problemStore'
 import { useWorkbenchStore } from '../stores/workbenchStore'
-import { createDiagnosticDelivery, diagnosticText, type PendingDiagnostic } from '../utils/terminalDiagnostics'
+import { createDiagnosticDelivery, diagnosticText, trackTerminalUserInput, type PendingDiagnostic } from '../utils/terminalDiagnostics'
 import { usePointerResize } from '../composables/usePointerResize'
 
 const props = defineProps<{ visible: boolean; diagnostics: PendingDiagnostic[] }>()
@@ -14,7 +14,7 @@ const emit = defineEmits<{ 'diagnostic-delivered': [id: number] }>()
 const store = useProblemStore()
 const workbench = useWorkbenchStore()
 const { startPointerResize } = usePointerResize()
-type Session = { key: number; id?: number; label: string; directory: string; terminal: Terminal; fit: FitAddon; host?: HTMLElement; observer?: ResizeObserver; busy: boolean; exited: boolean; disposed: boolean; error: string; pending: string; queue: Promise<void>; starting?: Promise<void>; lastOutputAt: number; promptReady: boolean }
+type Session = { key: number; id?: number; label: string; directory: string; terminal: Terminal; fit: FitAddon; host?: HTMLElement; observer?: ResizeObserver; inputCleanup?: () => void; busy: boolean; exited: boolean; disposed: boolean; error: string; pending: string; queue: Promise<void>; starting?: Promise<void>; lastOutputAt: number; promptReady: boolean; inputUsed: boolean }
 const sessions = ref<Session[]>([])
 const selected = ref(0)
 const active = computed(() => sessions.value.find(session => session.key === selected.value))
@@ -26,6 +26,8 @@ let disposed = false
 let lastRequest = 0
 let themeObserver: MutationObserver | undefined
 let initialSession: Promise<Session> | undefined
+let diagnosticSessionKey: number | undefined
+const terminalSizes = new Map<number, string>()
 
 function updateTheme(session: Session) {
   if (!session.host) return
@@ -35,7 +37,13 @@ function updateTheme(session: Session) {
 function resize(session = active.value) {
   if (!session || session.disposed || !props.visible || session.key !== selected.value || !session.host?.clientWidth || !session.host.clientHeight) return
   session.fit.fit()
-  if (session.id != null && !session.exited) void invoke('resize_terminal', { id: session.id, cols: session.terminal.cols, rows: session.terminal.rows }).catch(cause => { session.error = String(cause) })
+  if (session.id != null && !session.exited) {
+    const dimensions = `${session.terminal.cols}:${session.terminal.rows}`
+    if (terminalSizes.get(session.key) === dimensions) return
+    terminalSizes.set(session.key, dimensions)
+    void invoke('resize_terminal', { id: session.id, cols: session.terminal.cols, rows: session.terminal.rows })
+      .catch(cause => { terminalSizes.delete(session.key); session.error = String(cause) })
+  }
 }
 async function send(session: Session, data: string) {
   if (session.disposed || session.exited) return
@@ -49,18 +57,19 @@ function mountHost(session: Session, element: unknown) {
   session.host = markRaw(element)
   session.terminal.open(element)
   updateTheme(session)
+  session.inputCleanup = trackTerminalUserInput(session.terminal, element, () => { session.inputUsed = true })
   session.terminal.onData(data => { void send(session, data) })
   session.observer = markRaw(new ResizeObserver(() => resize(session)))
   session.observer.observe(element)
 }
-async function createSession() {
+async function createSession(diagnostic = false) {
   error.value = ''
   const path = store.draftPath || null
   const key = ++nextKey
   const terminal = markRaw(new Terminal({ fontSize: 13, fontFamily: '"Cascadia Mono", Consolas, monospace', cursorBlink: true, scrollback: 5000 }))
   const fit = markRaw(new FitAddon())
   terminal.loadAddon(fit)
-  const session = reactive<Session>({ key, label: `${path?.split(/[\\/]/).pop() || 'PowerShell'} · ${key}`, directory: '', terminal, fit, busy: true, exited: false, disposed: false, error: '', pending: '', queue: markRaw(Promise.resolve()), lastOutputAt: Date.now(), promptReady: false })
+  const session = reactive<Session>({ key, label: diagnostic ? 'CPH 编译报错' : `${path?.split(/[\\/]/).pop() || 'PowerShell'} · ${key}`, directory: '', terminal, fit, busy: true, exited: false, disposed: false, error: '', pending: '', queue: markRaw(Promise.resolve()), lastOutputAt: Date.now(), promptReady: false, inputUsed: false })
   sessions.value.push(session)
   selected.value = key
   session.starting = markRaw((async () => {
@@ -76,8 +85,9 @@ async function createSession() {
         if (message.data.length) {
           session.lastOutputAt = Date.now()
           const bytes = new Uint8Array(message.data)
+          const decoded = decoder.decode(bytes, { stream: true })
           if (!session.promptReady) {
-            startupOutput = (startupOutput + decoder.decode(bytes, { stream: true })).slice(-8192)
+            startupOutput = (startupOutput + decoded).slice(-8192)
             const plain = startupOutput.replace(/\x1b\[[0-?]*[ -/]*[@-~]/g, '')
             session.promptReady = /PS [^\r\n]*>/.test(plain)
           }
@@ -85,9 +95,12 @@ async function createSession() {
         }
         if (message.exited) { session.exited = true; terminal.writeln('\r\n[终端已结束]') }
       }
-      const result = await invoke<{ id: number; directory: string }>('start_terminal', { path, cols: terminal.cols, rows: terminal.rows, output })
+      const cols = terminal.cols, rows = terminal.rows
+      const result = await invoke<{ id: number; directory: string }>('start_terminal', { path, cols, rows, output })
       if (session.disposed || disposed) { await invoke('close_terminal', { id: result.id }); return }
       session.id = result.id
+      terminalSizes.set(key, `${cols}:${rows}`)
+      resize(session)
       session.directory = result.directory
       if (session.pending) { const pending = session.pending; session.pending = ''; await send(session, pending) }
       if (selected.value === key && props.visible) terminal.focus()
@@ -98,10 +111,14 @@ async function createSession() {
   return session
 }
 async function removeSession(session: Session) {
+  if (session.disposed) return
   session.disposed = true
+  if (diagnosticSessionKey === session.key) diagnosticSessionKey = undefined
+  terminalSizes.delete(session.key)
   const index = sessions.value.findIndex(item => item.key === session.key)
-  sessions.value.splice(index, 1)
+  if (index >= 0) sessions.value.splice(index, 1)
   session.observer?.disconnect()
+  session.inputCleanup?.()
   session.terminal.dispose()
   if (selected.value === session.key) selected.value = sessions.value[Math.min(index, sessions.value.length - 1)]?.key ?? 0
   if (session.id != null) await invoke('close_terminal', { id: session.id }).catch(cause => { error.value = String(cause) })
@@ -117,6 +134,7 @@ async function run(action: 'run' | 'compile-run' | 'compile') {
     if (!session || session.exited || session.id == null) session = await createSession()
     if (session.id == null || session.exited || session.disposed) return
     session.busy = true
+    session.inputUsed = true
     session.error = ''
     const command = await invoke<string>('terminal_run_command', { path: store.draftPath, language: store.currentLanguage, action })
     await send(session, command)
@@ -139,39 +157,69 @@ async function handleRequest() {
   if (request.action !== 'show') await run(request.action === 'run' ? 'compile-run' : request.action === 'run-existing' ? 'run' : 'compile')
   else { if (!active.value) await createSession(); await nextTick(); resize(); active.value?.terminal.focus() }
 }
-const deliverDiagnostics = createDiagnosticDelivery(async diagnostic => {
+const deliverDiagnostics = createDiagnosticDelivery(async (diagnostic, isCurrent) => {
   if (initialSession) await initialSession
-  if (disposed) throw new Error('终端已关闭')
-  while (!disposed) {
-    let session = active.value
-    if (!session || session.disposed || session.exited) session = await createSession()
+  // A terminal may be deleted while startup or delivery is in flight. Recover
+  // once for this diagnostic; startup failures must never create a retry loop.
+  for (let attempt = 0; attempt < 2; attempt++) {
+    if (!isCurrent()) return
+    if (disposed) throw new Error('终端已关闭')
+    let session = sessions.value.find(item => item.key === diagnosticSessionKey)
+    // Never inject a command into a user's partial input or a running program.
+    if (!session || session.disposed || session.exited || session.inputUsed || (!session.busy && session.id == null)) {
+      session = await createSession(true)
+      if (!session.disposed && !disposed) diagnosticSessionKey = session.key
+    }
+    if (!isCurrent()) return
+    selected.value = session.key
     if (session.starting) await session.starting
     await nextTick()
     resize(session)
-    // start_terminal returns before PowerShell has drawn its prompt. In
-    // particular, ConPTY's startup clear/resize can erase early xterm writes.
+    if (!session.disposed && !session.exited && session.id == null) throw new Error(session.error || '终端未就绪')
+    // Wait until the shell can accept its diagnostic printing command.
     const deadline = Date.now() + 5000
     const windows = /Windows/i.test(navigator.userAgent)
-    while (!disposed && !session.disposed && !session.exited && Date.now() < deadline
+    while (isCurrent() && !disposed && !session.disposed && !session.exited && !session.inputUsed && Date.now() < deadline
         && ((windows && !session.promptReady) || Date.now() - session.lastOutputAt < 150)) {
       await new Promise(resolve => window.setTimeout(resolve, 50))
     }
+    if (!isCurrent()) return
     if (disposed) throw new Error('终端已关闭')
-    if (session.disposed) continue // The selected session was closed during startup.
-    await new Promise<void>(resolve => session!.terminal.write(diagnosticText(diagnostic), resolve))
-    session.terminal.scrollToBottom()
+    if (session.disposed || session.exited || session.inputUsed) {
+      if (attempt === 0) continue
+      throw new Error('报错终端已关闭或正在输入命令；请重新运行测试点')
+    }
+    if (session.id == null) throw new Error(session.error || '终端未就绪')
+    try {
+      await invoke('print_terminal_diagnostic', { id: session.id, text: diagnosticText(diagnostic) })
+    } catch (cause) {
+      // The backend can notice a closed shell before its channel exit event.
+      if (attempt === 0 && (session.disposed || session.exited || String(cause) === '终端已结束')) {
+        if (!session.disposed) await removeSession(session)
+        continue
+      }
+      throw cause
+    }
+    if (!session.disposed) session.terminal.scrollToBottom()
+    error.value = ''
     return
   }
-  throw new Error('终端已关闭')
 }, id => emit('diagnostic-delivered', id), cause => { if (!disposed) error.value = String(cause) })
 watch(() => props.diagnostics, items => { void deliverDiagnostics(items) })
+function clearActiveTerminal() {
+  if (!active.value) return
+  active.value.terminal.clear()
+  active.value.terminal.focus()
+}
 watch(() => workbench.terminalRequest.sequence, () => { void handleRequest() })
 watch([selected, () => props.visible, () => sessions.value.length], async () => { await nextTick(); resize(); if (props.visible) active.value?.terminal.focus() })
 onMounted(async () => {
   themeObserver = new MutationObserver(() => sessions.value.forEach(updateTheme))
   themeObserver.observe(document.documentElement, { attributes: true, attributeFilter: ['data-theme'] })
-  initialSession = createSession()
-  await initialSession
+  const forDiagnostic = props.diagnostics.length > 0
+  initialSession = createSession(forDiagnostic)
+  const session = await initialSession
+  if (forDiagnostic && !session.disposed && !disposed) diagnosticSessionKey = session.key
   if (!disposed) { void deliverDiagnostics(props.diagnostics); await handleRequest() }
 })
 onBeforeUnmount(() => {
@@ -184,7 +232,7 @@ onBeforeUnmount(() => {
   <div class="terminal-panel" data-sidebar-shortcut-ignore>
     <Teleport to="#terminal-panel-actions">
       <div v-show="visible" class="terminal-actions" data-sidebar-shortcut-ignore>
-        <button title="清屏" aria-label="清屏" :disabled="!active" @click="active?.terminal.clear(); active?.terminal.focus()"><i class="codicon codicon-clear-all" /></button>
+        <button title="清屏" aria-label="清屏" :disabled="!active" @click="clearActiveTerminal"><i class="codicon codicon-clear-all" /></button>
         <button title="新建终端" aria-label="新建终端" @click="createSession()"><i class="codicon codicon-add" /></button>
         <button title="终止并删除终端" aria-label="终止并删除终端" :disabled="!active" @click="active && removeSession(active)"><i class="codicon codicon-trash" /></button>
       </div>

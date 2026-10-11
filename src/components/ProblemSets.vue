@@ -1,12 +1,12 @@
 <script setup lang="ts">
-import { computed, nextTick, onBeforeUnmount, reactive, ref, watch } from 'vue'
+import { computed, nextTick, onBeforeUnmount, onMounted, reactive, ref, watch } from 'vue'
 import { invoke } from '@tauri-apps/api/core'
+import QojArchivePanel from './QojArchivePanel.vue'
 import { useProblemSetStore } from '../stores/problemSetStore'
 import { useContestFavoriteStore } from '../stores/contestFavoriteStore'
 import { useProblemStore } from '../stores/problemStore'
 import { useLearningStore } from '../stores/learningStore'
 import { usePracticeStore, type PracticeProblem } from '../stores/practiceStore'
-import { useWorkbenchStore } from '../stores/workbenchStore'
 import { useMultiSelection } from '../composables/useMultiSelection'
 import { createDragGhost } from '../composables/dragGhost'
 import '@vscode/codicons/dist/codicon.css'
@@ -17,8 +17,7 @@ const contests = useContestFavoriteStore()
 const problems = useProblemStore()
 const learning = useLearningStore()
 const practice = usePracticeStore()
-const workbench = useWorkbenchStore()
-const view = ref<'list' | 'detail' | 'smart' | 'plaza' | 'contests' | 'favorites' | 'contest-detail'>('list')
+const view = ref<'list' | 'detail' | 'smart' | 'plaza' | 'contests' | 'qoj-archive' | 'contest-detail'>('list')
 const activeSmartId = ref<'wrongbook' | 'today'>('wrongbook')
 const setSearch = ref('')
 const setPage = ref(1)
@@ -109,7 +108,7 @@ const menuItem = computed(() => itemMenu.value?.id
   : null)
 const menuIsGroup = computed(() => sets.groups.some(group => group.id === itemMenu.value?.id))
 const setStats = computed(() => new Map(sets.sets.map(set => {
-  const visible = set.problems.filter(problem => problem.platform !== 'qoj')
+  const visible = set.problems
   const solved = visible.filter(problem => learning.profile.solvedProblems.includes(`${problem.platform}:${problem.id}`)).length
   return [set.id, { total: visible.length, solved, percent: visible.length ? solved / visible.length * 100 : 0 }]
 })))
@@ -317,7 +316,7 @@ const bulkMode = ref(false)
 const confirmBulkDelete = ref(false)
 const dragId = ref('')
 const metadataLoading = ref(false)
-const contestUrl = ref('')
+const addingContest = ref('')
 const contestSearch = ref('')
 const contestPage = ref(1)
 const contestPageSize = 30
@@ -327,7 +326,7 @@ const contestCatalogLoading = ref(false)
 const activeContest = ref<{ platform: 'codeforces' | 'luogu' | 'atcoder' | 'qoj'; contestId: string; title: string; url: string } | null>(null)
 const contestProblems = ref<Problem[]>([])
 const contestProblemsLoading = ref(false)
-const contestDetailBack = ref<'contests' | 'favorites'>('contests')
+const contestDetailBack = ref<'contests'>('contests')
 let holdTimer: number | null = null
 let holdStart = { x: 0, y: 0 }
 let suppressClick = false
@@ -365,20 +364,12 @@ const filteredSmartProblems = computed(() => {
 })
 const filteredProblems = computed(() => {
   const query = problemSearch.value.trim().toLowerCase()
-  const list = (sets.activeSet?.problems ?? []).filter((problem) => problem.platform !== 'qoj')
+  const list = (sets.activeSet?.problems ?? [])
   return query ? list.filter((problem) => problem.id.toLowerCase().includes(query) || problem.title.toLowerCase().includes(query) || problem.tags.some((tag) => tag.toLowerCase().includes(query))) : list
 })
-const visibleActiveSetProblemCount = computed(() => sets.activeSet?.problems.filter((problem) => problem.platform !== 'qoj').length ?? 0)
-const solvedCount = computed(() => sets.activeSet?.problems.filter((problem) => problem.platform !== 'qoj' && learning.profile.solvedProblems.includes(`${problem.platform}:${problem.id}`)).length ?? 0)
+const visibleActiveSetProblemCount = computed(() => sets.activeSet?.problems.length ?? 0)
+const solvedCount = computed(() => sets.activeSet?.problems.filter((problem) => learning.profile.solvedProblems.includes(`${problem.platform}:${problem.id}`)).length ?? 0)
 const plazaPages = computed(() => Math.max(1, Math.ceil(plazaCount.value / plazaPerPage.value)))
-const filteredContests = computed(() => {
-  const query = contestSearch.value.trim().toLowerCase()
-  const visible = contests.favorites.filter((contest) => contest.platform !== 'qoj')
-  return query
-    ? visible.filter((contest) => contest.title.toLowerCase().includes(query) || contest.contestId.toLowerCase().includes(query) || contest.platform.includes(query))
-    : visible
-})
-const visibleContestCount = computed(() => contests.favorites.filter((contest) => contest.platform !== 'qoj').length)
 const filteredContestCatalog = computed(() => {
   const query = contestSearch.value.trim().toLowerCase()
   return contestCatalog.value.filter((contest) => contest.platform === contestCatalogPlatform.value
@@ -464,7 +455,7 @@ async function openSet(id: string) {
   view.value = 'detail'
   metadataLoading.value = true
   try {
-    const result = await sets.enrichSetMetadata(id)
+    const result = await sets.enrichSetMetadata(id, { fetchMissing: false })
     if (result.updated) flash(`已补全 ${result.updated} 道题目信息`)
     if (result.failed) error.value = `${result.failed} 道题暂时无法从原 OJ 补全信息`
   } finally {
@@ -628,17 +619,6 @@ async function openPlaza() {
   if (!plazaTrainings.value.length) await fetchPlaza(1)
 }
 
-function addContest() {
-  if (!contestUrl.value.trim()) return
-  error.value = ''
-  try {
-    if (/https?:\/\/(?:www\.)?qoj\.ac\//i.test(contestUrl.value)) throw new Error('该平台当前未启用')
-    const result = contests.addFromUrl(contestUrl.value)
-    contestUrl.value = ''
-    flash(result.added ? '比赛已收藏' : '这场比赛已经收藏过了')
-  } catch (reason) { error.value = String(reason) }
-}
-
 async function loadContestCatalog(force = false) {
   if (contestCatalog.value.length && !force) return
   contestCatalogLoading.value = true
@@ -655,12 +635,10 @@ async function openContestBrowser() {
   if (!problems.problems.some(problem => problem.platform === 'codeforces')) tasks.push(problems.fetchProblems())
   if (!problems.problems.some(problem => problem.platform === 'atcoder')) tasks.push(problems.fetchAtCoderProblems())
   await Promise.allSettled(tasks)
+  void migrateFavorites()
 }
 
-function openContestFavorites() {
-  contestSearch.value = ''
-  view.value = 'favorites'
-}
+function openQojArchive() { view.value = 'qoj-archive' }
 
 function analysisProblems(analysis: ContestAnalysis): Problem[] {
   return analysis.problems.map((problem) => ({
@@ -678,47 +656,76 @@ function analysisProblems(analysis: ContestAnalysis): Problem[] {
 
 async function openContest(contest: { platform: 'codeforces' | 'luogu' | 'atcoder' | 'qoj'; contestId: string; title: string; url: string }) {
   if (contest.platform === 'qoj') return
-  contestDetailBack.value = view.value === 'favorites' ? 'favorites' : 'contests'
+  contestDetailBack.value = 'contests'
   activeContest.value = contest
   contestProblems.value = []
   contestProblemsLoading.value = true
   error.value = ''
   view.value = 'contest-detail'
   try {
-    if (contest.platform === 'atcoder') {
-      if (!problems.problems.some((problem) => problem.platform === 'atcoder')) await problems.fetchAtCoderProblems()
-      const prefix = `${contest.contestId.toLowerCase()}_`
-      contestProblems.value = problems.problems.filter((problem) => problem.platform === 'atcoder' && problem.id.toLowerCase().startsWith(prefix))
-    } else {
-      const command = contest.platform === 'luogu' ? 'analyze_contest_luogu' : 'analyze_contest_cf'
-      const analysis = await invoke<ContestAnalysis>(command, { contestUrl: contest.url })
-      activeContest.value = { ...contest, title: analysis.title }
-      contestProblems.value = analysisProblems(analysis)
-    }
+    const result = await readContest({ ...contest, platform: contest.platform })
+    activeContest.value = { ...contest, title: result.title }
+    contestProblems.value = result.problems
     if (!contestProblems.value.length) throw new Error('这场比赛暂时没有可读取的公开题目')
   } catch (reason) { error.value = String(reason) }
   finally { contestProblemsLoading.value = false }
 }
 
-function favoriteCatalogContest(contest: ContestCatalogEntry) {
-  const result = contests.addFromUrl(contest.url, contest.title)
-  flash(result.added ? '比赛已收藏' : '这场比赛已经收藏过了')
+type ImportableContest = { platform: 'codeforces' | 'atcoder' | 'luogu'; contestId: string; title: string; url: string }
+async function readContest(contest: ImportableContest) {
+  if (contest.platform === 'atcoder') {
+    if (!problems.problems.some(p => p.platform === 'atcoder')) await problems.fetchAtCoderProblems()
+    const prefix = `${contest.contestId.toLowerCase()}_`
+    return { title: contest.title, problems: problems.problems.filter(p => p.platform === 'atcoder' && p.id.toLowerCase().startsWith(prefix)) }
+  }
+  const analysis = await invoke<ContestAnalysis>(contest.platform === 'luogu' ? 'analyze_contest_luogu' : 'analyze_contest_cf', { contestUrl: contest.url })
+  return { title: analysis.title, problems: analysisProblems(analysis) }
 }
+async function addContestToSets(contest: { platform: string; contestId: string; title: string; url: string }) {
+  if (addingContest.value || contest.platform === 'qoj') return
+  if (sets.containsContest(contest.platform, contest.contestId)) { flash('这场比赛已加入题单'); return }
+  addingContest.value = `${contest.platform}:${contest.contestId}`
+  error.value = ''
+  try {
+    const target = contest as ImportableContest
+    const result = activeContest.value?.platform === target.platform && activeContest.value.contestId === target.contestId && contestProblems.value.length && !contestProblemsLoading.value
+      ? { title: activeContest.value.title, problems: contestProblems.value } : await readContest(target)
+    sets.importContest({ ...target, title: result.title }, result.problems)
+    flash(`已加入题单「${result.title}」`)
+  } catch (reason) { error.value = String(reason) }
+  finally { addingContest.value = '' }
+}
+// Preserve old collections by importing them once, without changing the current screen.
+let migratingFavorites = false
+async function migrateFavorites() {
+  if (migratingFavorites) return
+  migratingFavorites = true
+  try {
+    for (const favorite of [...contests.favorites]) {
+      if (favorite.platform === 'qoj') continue
+      try {
+        if (!sets.containsContest(favorite.platform, favorite.contestId)) {
+          const result = await readContest(favorite as ImportableContest)
+          sets.importContest({ ...favorite, title: result.title } as ImportableContest, result.problems)
+        }
+        contests.remove(favorite.id)
+      } catch { /* Keep the original collection for a later retry if offline. */ }
+    }
+  } finally { migratingFavorites = false }
+}
+onMounted(() => { void migrateFavorites() })
 
 async function openContestProblem(problem: Problem) {
   if (!problem.url || problem.platform === 'local') return
   await problems.openRecommendedProblem({ ...problem, platform: problem.platform, url: problem.url })
-  workbench.openCurrentCode()
 }
 
 async function openPracticeProblem(problem: PracticeProblem) {
   await practice.openProblem(problem)
-  workbench.openCurrentCode()
 }
 
 async function openSetProblem(problem: Parameters<typeof sets.openProblem>[0]) {
   await sets.openProblem(problem)
-  workbench.openCurrentCode()
 }
 
 async function analyzeActiveContest() {
@@ -782,8 +789,8 @@ watch(() => itemDialog.mode, mode => {
       <div v-if="!bulkMode && !currentGroupId" class="home-entry-grid">
         <button class="home-entry wrongbook-entry" :title="`错题本：今日复习 ${practice.todayProblems.length} 题，共 ${practice.wrongProblems.length} 题`" @click="openSmart('wrongbook')"><i aria-hidden="true" class="codicon codicon-notebook" /><strong>错题本</strong><small v-if="practice.todayProblems.length">今日 {{ practice.todayProblems.length }}</small></button>
         <button class="home-entry plaza-entry" title="洛谷题单广场：官方、教材与精选用户题单" @click="openPlaza"><i aria-hidden="true" class="codicon codicon-library" /><strong>洛谷题单广场</strong></button>
-        <button class="home-entry contest-entry" title="Codeforces / AtCoder 比赛目录" @click="openContestBrowser"><i aria-hidden="true" class="codicon codicon-calendar" /><strong>比赛目录</strong></button>
-        <button class="home-entry favorite-entry" :title="`比赛收藏：${visibleContestCount} 场`" @click="openContestFavorites"><i aria-hidden="true" class="codicon codicon-star-full" /><strong>比赛收藏</strong><small v-if="visibleContestCount">{{ visibleContestCount }}</small></button>
+        <button class="home-entry contest-entry" title="Codeforces / AtCoder 比赛目录" @click="openContestBrowser"><i aria-hidden="true" class="codicon codicon-calendar" /><strong>cf/atc比赛</strong></button>
+        <button class="home-entry favorite-entry" title="QOJ 比赛归档" @click="openQojArchive"><i aria-hidden="true" class="codicon codicon-archive" /><strong>QOJ 比赛归档</strong></button>
       </div>
       <div v-if="bulkMode" class="bulk-bar"><button :disabled="!selection.scope.length" @click="selection.toggleAll(); confirmBulkDelete = false">{{ selection.allSelected ? '取消全选' : '全选' }}</button><span>已选 {{ selectedSetIds.size }} 项</span><button class="danger" :disabled="!selectedSetIds.size" @click="deleteSelected">{{ confirmBulkDelete ? '确认删除（保留组内未选内容）' : '删除' }}</button></div>
       <div v-if="notice" class="notice">{{ notice }}</div><div v-if="error" class="error">{{ error }}</div>
@@ -891,34 +898,22 @@ watch(() => itemDialog.mode, mode => {
       <header class="panel-header detail-header"><button class="back" @click="view = 'list'">‹ 返回</button><div><strong>CF / AtCoder 比赛</strong><span>比赛将以本地题目目录打开</span></div><button :disabled="contestCatalogLoading" @click="loadContestCatalog(true)">{{ contestCatalogLoading ? '更新中…' : '更新' }}</button></header>
       <div v-if="notice" class="notice">{{ notice }}</div><div v-if="error" class="error">{{ error }}</div>
       <div class="contest-tabs"><button :class="{ active: contestCatalogPlatform === 'codeforces' }" @click="contestCatalogPlatform = 'codeforces'">Codeforces Div</button><button :class="{ active: contestCatalogPlatform === 'atcoder' }" @click="contestCatalogPlatform = 'atcoder'">AtCoder</button></div>
-      <strong class="contest-section-title">比赛目录</strong>
+      <strong class="contest-section-title">cf/atc比赛</strong>
       <div v-if="contestCatalogLoading && !contestCatalog.length" class="empty">正在读取比赛目录…</div>
       <ul v-else :key="`${contestCatalogPlatform}:${contestPage}:${contestSearch}`" class="contest-items contest-catalog-items">
         <li v-for="contest in pagedContestCatalog" :key="`${contest.platform}:${contest.id}`">
           <button class="contest-open" @click="openContest({ ...contest, contestId: contest.id })"><span>{{ contestPlatformLabel(contest.platform) }}</span><div><strong>{{ contest.title }}</strong><small><span>{{ contest.id }}</span><em :class="{ complete: contestProgress(contest).total > 0 && contestProgress(contest).solved === contestProgress(contest).total }">已做 {{ contestProgress(contest).solved }}/{{ contestProgress(contest).total }}</em></small></div></button>
-          <button class="contest-favorite" :class="{ active: contests.contains(contest.platform, contest.id) }" title="收藏比赛" @click="favoriteCatalogContest(contest)">{{ contests.contains(contest.platform, contest.id) ? '★' : '☆' }}</button>
+          <button class="contest-favorite" :class="{ active: sets.containsContest(contest.platform, contest.id) }" :disabled="!!addingContest || sets.containsContest(contest.platform, contest.id)" title="加入题单" @click="addContestToSets({ ...contest, contestId: contest.id })">{{ addingContest === `${contest.platform}:${contest.id}` ? '…' : sets.containsContest(contest.platform, contest.id) ? '✓' : '＋' }}</button>
         </li>
       </ul>
       <div v-if="contestPages > 1" class="pagination contest-pagination"><button :disabled="contestPage <= 1" @click="contestPage--">‹</button><span>{{ contestPage }} / {{ contestPages }}</span><button :disabled="contestPage >= contestPages" @click="contestPage++">›</button></div>
       <footer class="bottom-search"><span>⌕</span><input v-model="contestSearch" placeholder="搜索 CF / AtCoder 比赛" /></footer>
     </template>
 
-    <template v-else-if="view === 'favorites'">
-      <header class="panel-header detail-header"><button class="back" @click="view = 'list'">‹ 返回</button><div><strong>比赛收藏</strong><span>{{ visibleContestCount }} 场 · 点击进入本地题目目录</span></div></header>
-      <form class="contest-link" @submit.prevent="addContest"><input v-model="contestUrl" placeholder="粘贴洛谷 / CF / AtCoder 比赛链接" /><button :disabled="!contestUrl.trim()">＋ 收藏</button></form>
-      <div v-if="notice" class="notice">{{ notice }}</div><div v-if="error" class="error">{{ error }}</div>
-      <ul class="contest-items">
-        <li v-for="contest in filteredContests" :key="contest.id">
-          <button class="contest-open" @click="openContest(contest)"><span>{{ contestPlatformLabel(contest.platform) }}</span><div><strong>{{ contest.title }}</strong><small>{{ contest.url }}</small></div></button>
-          <button class="contest-remove" title="取消收藏" @click="contests.remove(contest.id)">×</button>
-        </li>
-      </ul>
-      <div v-if="!filteredContests.length" class="empty">{{ visibleContestCount ? '没有找到对应比赛' : '还没有收藏比赛，粘贴比赛链接即可添加' }}</div>
-      <footer class="bottom-search"><span>⌕</span><input v-model="contestSearch" placeholder="搜索收藏的比赛" /></footer>
-    </template>
+    <QojArchivePanel v-else-if="view === 'qoj-archive'" @back="view = 'list'" />
 
     <template v-else-if="view === 'contest-detail' && activeContest">
-      <header class="panel-header detail-header"><button class="back" @click="view = contestDetailBack">‹ 返回</button><div><strong>{{ activeContest.title }}</strong><span>{{ contestSolvedCount }}/{{ contestProblems.length }} 道题目 · {{ contestPlatformLabel(activeContest.platform) }}</span></div><div class="detail-header__actions"><button v-if="activeContest.platform !== 'luogu'" :disabled="learning.isAnalyzing || contestProblemsLoading || !contestProblems.length" @click="analyzeActiveContest">{{ learning.isAnalyzing ? '分析中…' : 'VP 分析' }}</button><button :disabled="contests.contains(activeContest.platform, activeContest.contestId)" @click="contests.addFromUrl(activeContest.url, activeContest.title)">{{ contests.contains(activeContest.platform, activeContest.contestId) ? '★ 已收藏' : '☆ 收藏' }}</button></div></header>
+      <header class="panel-header detail-header"><button class="back" @click="view = contestDetailBack">‹ 返回</button><div><strong>{{ activeContest.title }}</strong><span>{{ contestSolvedCount }}/{{ contestProblems.length }} 道题目 · {{ contestPlatformLabel(activeContest.platform) }}</span></div><div class="detail-header__actions"><button v-if="activeContest.platform !== 'luogu'" :disabled="learning.isAnalyzing || contestProblemsLoading || !contestProblems.length" @click="analyzeActiveContest">{{ learning.isAnalyzing ? '分析中…' : 'VP 分析' }}</button><button :disabled="!!addingContest || contestProblemsLoading || sets.containsContest(activeContest.platform, activeContest.contestId)" @click="addContestToSets(activeContest)">{{ addingContest ? '加入中…' : sets.containsContest(activeContest.platform, activeContest.contestId) ? '✓ 已加入题单' : '＋ 加入题单' }}</button></div></header>
       <div v-if="error" class="error">{{ error }}</div><div v-if="contestProblemsLoading" class="empty">正在读取比赛题目…</div>
       <ul v-else class="problem-items contest-problem-items"><li v-for="problem in contestProblems" :key="`${problem.platform}:${problem.id}`" @click="openContestProblem(problem)"><span class="solved">{{ learning.profile.solvedProblems.includes(`${problem.platform}:${problem.id}`) ? '✓' : '' }}</span><div><small>{{ problem.id }}</small><strong>{{ problem.title }}</strong><p><span v-if="problem.rating">★ {{ problem.rating }}</span><template v-if="problems.showProblemTags"><span v-for="tag in problem.tags" :key="tag">{{ tag }}</span></template></p></div><button>打开 ›</button></li></ul>
       <div v-if="!contestProblemsLoading && !contestProblems.length && !error" class="empty">当前比赛没有公开题目</div>

@@ -17,7 +17,7 @@ function messageOf(reason: unknown) {
 
 function operationDeadline(platform: string, operation: string) {
   if (operation === 'submit') return 270_000
-  if (platform === 'qoj' && (operation === 'fetch-archive' || operation === 'fetch-contest' || operation === 'fetch-statement')) return 165_000
+  if (platform === 'qoj' && (operation === 'fetch-catalog' || operation === 'fetch-archive' || operation === 'fetch-contest' || operation === 'fetch-statement')) return 165_000
   if (operation === 'fetch-catalog') return 100_000
   if (operation === 'inspect-account') return 45_000
   return 70_000

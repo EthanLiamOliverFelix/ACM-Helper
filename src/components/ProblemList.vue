@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { useProblemStore } from '../stores/problemStore'
-import { computed, defineAsyncComponent, ref } from 'vue'
+import { computed, defineAsyncComponent, ref, watch } from 'vue'
 import { useProblemSetStore } from '../stores/problemSetStore'
 import { useLearningStore } from '../stores/learningStore'
 import { useWorkbenchStore } from '../stores/workbenchStore'
@@ -15,10 +15,14 @@ const ResourceExplorer = defineAsyncComponent(() => import('./ResourceExplorer.v
 const ProblemSets = defineAsyncComponent(() => import('./ProblemSets.vue'))
 const panelMode = ref<'problems' | 'sets' | 'files'>('problems')
 const activePanelMode = computed(() => props.lockedMode ?? panelMode.value)
+watch(() => [store.currentPlatform, store.qojCatalogPage, store.isLoadingCatalog], () => {
+  if (store.currentPlatform === 'qoj' && !store.isLoadingCatalog) void store.countQojCatalog()
+}, { flush: 'post', immediate: true })
 const sourceOptions = [
   { key: 'codeforces' as const, label: 'Codeforces' },
   { key: 'luogu' as const, label: '洛谷' },
   { key: 'atcoder' as const, label: 'AtCoder' },
+  { key: 'qoj' as const, label: 'QOJ' },
 ]
 
 const difficultyColor: Record<string, string> = {
@@ -62,7 +66,7 @@ async function applyLuoguSource(value: string) {
 }
 
 function onSearchInput() {
-  if (store.currentPlatform !== 'luogu') store.setPage(1)
+  if (store.currentPlatform !== 'luogu' && store.currentPlatform !== 'qoj') store.setPage(1)
 }
 
 async function openProblem(problem: typeof store.problems[number]) {
@@ -99,7 +103,7 @@ async function openProblem(problem: typeof store.problems[number]) {
       <button class="search-button" :disabled="store.isLoadingCatalog" @click="store.applyProblemFilters()">{{ store.isLoadingCatalog ? '查询中…' : '搜索' }}</button>
     </div>
 
-    <div class="problem-list__filter-row">
+    <div v-if="store.currentPlatform !== 'qoj'" class="problem-list__filter-row">
       <details class="filter-menu">
         <summary>题目难度范围⌄</summary>
         <div class="filter-menu__popup">
@@ -133,7 +137,7 @@ async function openProblem(problem: typeof store.problems[number]) {
       </details>
     </div>
 
-    <div class="problem-list__selected">
+    <div v-if="store.currentPlatform !== 'qoj'" class="problem-list__selected">
       <span>已选择</span>
       <button v-if="store.currentPlatform === 'luogu' && store.luoguDifficulty != null" @click="applyLuoguDifficulty(null)">难度 {{ luoguDifficulties.find(p => p.value === store.luoguDifficulty)?.label }} ×</button>
       <button v-else-if="store.minRating != null || store.maxRating != null" @click="applyRatingPreset(ratingPresets[0])">难度 {{ store.minRating ?? 0 }}–{{ store.maxRating ?? '∞' }} ×</button>
@@ -144,8 +148,9 @@ async function openProblem(problem: typeof store.problems[number]) {
 
     <!-- 筛选状态栏 -->
     <div class="problem-list__status">
-      <span>共 {{ store.currentPlatform === 'luogu' ? store.luoguTotal : store.filteredProblems.length }} 道</span>
+      <span v-if="store.currentPlatform === 'qoj'" :title="store.qojCountError">{{ store.qojCatalogTotal !== null ? `共 ${store.qojCatalogTotal} 题` : store.qojCountError ? `统计暂停 · 已读取 ${store.qojCountProgress.problems} 题` : `正在统计 ${store.qojCountProgress.completed}/${store.qojCountProgress.pages} 页 · 已读取 ${store.qojCountProgress.problems} 题` }}</span><span v-else>共 {{ store.currentPlatform === 'luogu' ? store.luoguTotal : store.filteredProblems.length }} 道</span>
       <div class="problem-list__status-actions">
+        <button v-if="store.currentPlatform === 'qoj' && store.qojCountError" class="catalog-refresh-btn" :disabled="store.isCountingQoj" @click="store.countQojCatalog()">继续统计</button>
         <button
           v-if="store.currentPlatform === 'codeforces'"
           class="catalog-refresh-btn"
@@ -154,7 +159,8 @@ async function openProblem(problem: typeof store.problems[number]) {
           @click="store.refreshCfCatalog()"
         >{{ store.isRefreshingCfCatalog ? '更新中…' : '更新题库' }}</button>
         <button v-if="store.currentPlatform === 'atcoder'" class="catalog-refresh-btn" :disabled="store.isRefreshingAtCoderCatalog" title="从 AtCoder Problems 数据集更新题目目录" @click="store.fetchAtCoderProblems(true)">{{ store.isRefreshingAtCoderCatalog ? '更新中…' : '更新题库' }}</button>
-        <button class="tag-visibility-btn" :class="{ active: store.showProblemTags }" :title="store.showProblemTags ? '隐藏题目算法标签，避免知识点剧透' : '显示题目算法标签'" @click="store.toggleProblemTags">
+        <button v-if="store.currentPlatform === 'qoj'" class="catalog-refresh-btn" :disabled="store.isLoadingCatalog" @click="store.fetchQojProblems(store.page, true)">更新题库</button>
+        <button v-if="store.currentPlatform !== 'qoj'" class="tag-visibility-btn" :class="{ active: store.showProblemTags }" :title="store.showProblemTags ? '隐藏题目算法标签，避免知识点剧透' : '显示题目算法标签'" @click="store.toggleProblemTags">
           {{ store.showProblemTags ? '隐藏算法标签' : '显示算法标签' }}
         </button>
         <button
@@ -168,6 +174,7 @@ async function openProblem(problem: typeof store.problems[number]) {
     </div>
 
     <!-- 题目列表 -->
+    <div v-if="store.currentPlatform === 'qoj' && store.isLoadingCatalog && !store.qojCatalogPage" class="catalog-loading">正在读取 QOJ 题库…</div>
     <ul class="problem-list__items">
       <li
         v-for="problem in store.pagedProblems"
@@ -179,7 +186,7 @@ async function openProblem(problem: typeof store.problems[number]) {
         <div class="problem-item__id">{{ problem.id }}</div>
         <div class="problem-item__body">
           <span class="problem-item__title"><span v-if="learning.profile.solvedProblems.includes(`${problem.platform}:${problem.id}`)" class="problem-item__solved" title="已完成">✓</span>{{ problem.title }}</span>
-          <div class="problem-item__meta">
+          <div v-if="problem.platform !== 'qoj'" class="problem-item__meta">
             <span
               v-if="problem.platform === 'luogu' && problem.difficulty"
               class="problem-item__difficulty"
@@ -192,11 +199,11 @@ async function openProblem(problem: typeof store.problems[number]) {
             </span>
           </div>
         </div>
-        <div v-if="store.showProblemTags" class="problem-item__tags">
+        <div v-if="store.showProblemTags && problem.platform !== 'qoj'" class="problem-item__tags">
           <span v-for="tag in problem.tags" :key="tag" class="tag">{{ tag }}</span>
         </div>
         <button
-          v-if="problem.platform === 'codeforces' || problem.platform === 'luogu' || problem.platform === 'atcoder'"
+          v-if="problem.platform === 'codeforces' || problem.platform === 'luogu' || problem.platform === 'atcoder' || problem.platform === 'qoj'"
           class="problem-item__add"
           :class="{ added: problemSets.contains(problem) }"
           :title="problemSets.contains(problem) ? `已在「${problemSets.activeSet?.name}」中` : `加入「${problemSets.activeSet?.name}」`"
@@ -228,6 +235,7 @@ async function openProblem(problem: typeof store.problems[number]) {
 </template>
 
 <style scoped lang="scss">
+.catalog-loading { padding: 20px 12px; color: var(--color-text-soft); font-size: 12px; }
 .problem-list__catalog { flex: 1; min-height: 0; display: flex; flex-direction: column; overflow: hidden; }
 .problem-list {
   display: flex;

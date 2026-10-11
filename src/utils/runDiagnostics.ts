@@ -1,17 +1,22 @@
-import type { Language, RunResult } from '../types'
+import type { Language, LocalTestCase, RunResult } from '../types'
 
 export interface RunDiagnostic {
   title: string
   message: string
 }
 
-/** Standard error belongs in the bottom workbench; stdout stays with the test case. */
+/** Only compiler failures open and write to the terminal automatically. */
 export function getRunDiagnostic(result: RunResult | null, _language: Language): RunDiagnostic | null {
-  if (!result || !result.stderr.trim()) return null
-  if (result.compileFailed) return { title: '编译问题', message: result.stderr }
-  if (result.timedOut) return { title: '运行超时', message: result.stderr }
-  if (result.success) return { title: '标准错误输出', message: result.stderr }
-  return { title: '运行问题', message: result.stderr }
+  if (!result?.compileFailed || !result.stderr.trim()) return null
+  return { title: '编译问题', message: result.stderr }
+}
+
+export function getTestCaseStatusText(test: Pick<LocalTestCase, 'status' | 'compileFailed' | 'timedOut'>): string {
+  if (test.status === 'error') {
+    if (test.compileFailed) return '编译失败'
+    if (test.timedOut) return '运行超时'
+  }
+  return { idle: '未运行', running: '运行中…', passed: '通过', failed: '答案错误', completed: '已运行', error: '运行错误' }[test.status]
 }
 
 export function selectWorkbenchResult(results: RunResult[]): RunResult | null {

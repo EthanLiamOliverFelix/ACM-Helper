@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { nextTick, ref, watch } from 'vue'
+import { onMounted, ref } from 'vue'
 import { useAiStore } from '../stores/aiStore'
 import DOMPurify from 'dompurify'
 import { renderLuoguMarkdown } from '../utils/luoguMarkdown'
@@ -14,10 +14,12 @@ const problemSets = useProblemSetStore()
 const problems = useProblemStore()
 const messagesEl = ref<HTMLElement | null>(null)
 const importedMessages = ref(new Set<number>())
-watch(
-  () => [ai.messages.length, ai.messages[ai.messages.length - 1]?.content.length],
-  async () => { await nextTick(); messagesEl.value?.scrollTo({ top: messagesEl.value.scrollHeight, behavior: 'smooth' }) },
-)
+// Match AI-helper: only opening the view moves the viewport. Streaming and
+// additional messages leave the user's reading position unchanged.
+onMounted(() => {
+  const element = messagesEl.value
+  if (element) element.scrollTop = element.scrollHeight
+})
 function quickAsk(text: string) { ai.draft = text; ai.send() }
 function renderMessage(content: string) {
   const html = renderLuoguMarkdown(normalizeAiMarkdown(stripChatProblemSetBlock(content)))
@@ -69,6 +71,7 @@ function importProblemSet(index: number) {
 </template>
 
 <style scoped lang="scss">
+.chat__messages { overflow-anchor: none; }
 .ai-view { flex: 1; height: 100%; min-width: 0; background: var(--color-bg-deep); color: var(--color-text-primary); display: flex; flex-direction: column; }
 .ai-header { display: flex; justify-content: space-between; align-items: center; gap: 18px; padding: 22px 28px; border-bottom: 1px solid var(--color-bg-subtle); &__intro { min-width: 0; flex: 1; } &__title { display: flex; min-width: 0; align-items: center; gap: 14px; } h1 { flex: 0 0 auto; margin: 0 0 4px; font-size: 23px; } p { margin: 0; color: var(--color-text-muted); font-size: 12px; } > button { flex: 0 0 auto; background: transparent; border: 1px solid var(--color-border-control); color: var(--color-text-soft); border-radius: 4px; padding: 6px 10px; cursor: pointer; } }
 .context-file { display: flex; min-width: 0; max-width: min(500px, 48vw); align-items: center; gap: 7px; overflow: hidden; padding: 6px 10px; border: 1px solid var(--color-tone-3f5363); border-radius: 5px; background: var(--color-tone-202a31); color: var(--color-tone-c7e7fb); font: 11px Consolas, monospace; white-space: nowrap; small { flex: 0 0 auto; color: var(--color-tone-7895a8); font: 9px 'Segoe UI', sans-serif; } b { min-width: 0; overflow: hidden; font-weight: 400; text-overflow: ellipsis; } }

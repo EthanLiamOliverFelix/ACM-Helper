@@ -8,10 +8,11 @@ Monaco Editor、Rust 与 Tauri 2 开发。
 
 ## 主要功能
 
-- 浏览并筛选 Codeforces、洛谷与 AtCoder 题库；仅在用户打开题目时抓取具体题面，
+- 浏览并筛选 Codeforces、洛谷、AtCoder 与 QOJ 题库；仅在用户打开题目时抓取具体题面，
   并可手动更新远端题目目录。
-- 通过链接导入 Codeforces、洛谷和 AtCoder 题目，支持结构化 Markdown、LaTeX、
-  图片与样例。
+- 通过链接导入 Codeforces、洛谷、AtCoder 和 QOJ 题目，支持结构化 Markdown、LaTeX、
+  图片与样例；QOJ 优先使用中文题面，并支持 PDF 题面。
+- 浏览 QOJ 比赛归档与通过队伍统计，将整场比赛一键导入本地题单。
 - 使用本地打包的 Monaco Editor 编写 C++、Python 和 Java，支持代码格式化、
   草稿持久化、快捷键和行号断点。
 - 在 Windows 上无黑色控制台地编译运行代码；分别统计编译与运行耗时，并限制
@@ -20,7 +21,7 @@ Monaco Editor、Rust 与 Tauri 2 开发。
   受限并发运行。
 - 使用 GDB 调试 C++、内置跟踪器调试 Python、JDB 调试 Java；支持继续、下一步、
   步入、步出、监视表达式和当前执行行高亮。
-- 自动提交到洛谷，包括验证码处理、结果回收和测试点详情。Codeforces 与 AtCoder
+- 自动提交到洛谷，包括验证码处理、结果回收和测试点详情。Codeforces、AtCoder 与 QOJ
   采用人工接管方式：复制当前代码并打开官方提交页面。
 - 创建、导入、搜索和拖动排序题单；AI 推荐题单与技能树题单共用本地题目引用。
 - 提供包含 130 个节点的算法技能树、VP 知识缺口分析、间隔错题复习和题目笔记。

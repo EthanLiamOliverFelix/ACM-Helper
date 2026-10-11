@@ -6,3 +6,17 @@ export function qojProblemUrl(id: string) {
     ? `https://qoj.ac/contest/${contestProblem[1]}/problem/${contestProblem[2]}`
     : `https://qoj.ac/problem/${encodeURIComponent(id.trim())}`
 }
+
+
+/** Only embed QOJ's own PDF downloads in the statement panel. */
+export function qojStatementPdfUrl(note?: string): string | null {
+  const match = note?.match(/^PDF statement:\s*(https:\/\/\S+)/)
+  if (!match) return null
+  try {
+    const url = new URL(match[1]!)
+    return url.hostname === 'qoj.ac' && !url.port && !url.username && !url.password ? url.href : null
+  } catch { return null }
+}
+export function isQojPlaceholderTitle(title: string, id: string) {
+  return ['QOJ', 'QOJ.ac', `QOJ ${id}`, id].includes(title.trim())
+}

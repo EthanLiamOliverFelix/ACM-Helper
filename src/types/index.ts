@@ -90,6 +90,15 @@ export interface QojArchiveProblem {
   label: string
   title: string
   url: string
+  acceptedTeams?: number
+  submittedTeams?: number
+}
+
+export interface QojProblemPage {
+  updatedAt?: number
+  problems: Problem[]
+  page: number
+  totalPages: number
 }
 
 export interface QojArchiveEntry {

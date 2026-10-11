@@ -1,12 +1,13 @@
 import { defineStore } from 'pinia'
 import { afterPaint, waitForPaint } from '../utils/afterPaint'
-import { qojProblemUrl } from '../utils/qoj'
-import { ref, computed, onScopeDispose } from 'vue'
+import { qojProblemUrl, isQojPlaceholderTitle } from '../utils/qoj'
+import { ref, computed, reactive, onScopeDispose } from 'vue'
 import { invoke } from '@tauri-apps/api/core'
 import { listen } from '@tauri-apps/api/event'
-import type { Problem, Language, Platform, Submission, Verdict, RunResult, DebugResult, DebugSessionState, ToolchainInfo, DraftFileInfo, LuoguProblemPage, LuoguTag, LocalTestCase, LuoguRecordDetail, QojArchivePage, QojArchiveEntry, QojArchiveProblem } from '../types'
+import type { Problem, Language, Platform, Submission, Verdict, RunResult, DebugResult, DebugSessionState, ToolchainInfo, DraftFileInfo, LuoguProblemPage, LuoguTag, LocalTestCase, LuoguRecordDetail, QojArchivePage, QojArchiveEntry, QojArchiveProblem, QojProblemPage } from '../types'
 import { useLearningStore } from './learningStore'
 import { useSettingsStore } from './settingsStore'
+import { useWorkbenchStore } from './workbenchStore'
 import { selectWorkbenchResult } from '../utils/runDiagnostics'
 import { getDataCenterValue, saveDataCenterValue } from '../dataCenter'
 import { withOjDiagnostic } from '../diagnostics'
@@ -16,7 +17,7 @@ import { isLuoguJudging, luoguSubmissionVerdicts as luoguVerdicts, resolveLuoguR
 
 export const useProblemStore = defineStore('problem', () => {
   type CatalogCache = { version: 1; updatedAt: number; cf: Problem[]; luogu: Problem[]; atcoder?: Problem[]; luoguTotal: number; luoguPerPage: number; luoguTags: LuoguTag[] }
-  type QojArchiveCache = { version: 3; pages: Record<string, QojArchivePage> }
+  type QojArchiveCache = { version: 4; pages: Record<string, QojArchivePage> }
   // ── 认证状态 ──
   const isLoggedIn = ref(false)
   const luoguLoggedIn = ref(false)
@@ -31,6 +32,7 @@ export const useProblemStore = defineStore('problem', () => {
   const isLuoguLoginOpening = ref(false)
   const isAtcoderLoginOpening = ref(false)
   const isQojLoginOpening = ref(false)
+  let qojAccountCheckSequence = 0
   const activeView = ref<'workspace' | 'learning' | 'ai'>('workspace')
   const showProblemTags = ref(getDataCenterValue('show-problem-tags', false))
   const isLoading = ref(false)
@@ -60,6 +62,7 @@ export const useProblemStore = defineStore('problem', () => {
     : '')
   const isLoadingDetail = computed(() => (detailLoadCounts.value[currentProblemKey.value] ?? 0) > 0)
   const isRunning = ref(false)
+  const runSequence = ref(0)
   const runResult = ref<RunResult | null>(null)
   const debugResult = ref<DebugResult | null>(null)
   const isDebugging = ref(false)
@@ -179,7 +182,129 @@ export const useProblemStore = defineStore('problem', () => {
   }
   let catalogCache = getDataCenterValue<CatalogCache | null>('problem-catalog', null)
   const savedQojArchiveCache = getDataCenterValue<QojArchiveCache | null>('qoj-archive', null)
-  let qojArchiveCache: QojArchiveCache = savedQojArchiveCache?.version === 3 ? savedQojArchiveCache : { version: 3, pages: {} }
+  let qojArchiveCache: QojArchiveCache = savedQojArchiveCache?.version === 4 ? savedQojArchiveCache : { version: 4, pages: {} }
+
+  const qojCatalogPage = ref<QojProblemPage | null>(null)
+  const qojCatalogCache = reactive(getDataCenterValue<Record<string, QojProblemPage>>('qoj-catalog-pages', {}))
+  let qojCountRevision = 0
+  const qojCountError = ref('')
+  const isCountingQoj = ref(false)
+  const qojCatalogTotal = computed(() => {
+    const pages = qojCatalogPage.value?.totalPages
+    if (!pages) return null
+    const ids = new Set<string>()
+    for (let index = 1; index <= pages; index++) {
+      const cached = qojCatalogCache[`${searchQuery.value.trim()}:${index}`]
+      if (!cached || !cached.updatedAt || Date.now() - cached.updatedAt > 86400000) return null
+      for (const item of cached.problems) ids.add(item.id)
+    }
+    return ids.size
+  })
+  const qojCountProgress = computed(() => {
+    const pages = qojCatalogPage.value?.totalPages ?? 0
+    let completed = 0
+    const ids = new Set<string>()
+    for (let index = 1; index <= pages; index++) {
+      const cached = qojCatalogCache[`${searchQuery.value.trim()}:${index}`]
+      if (!cached?.updatedAt || Date.now() - cached.updatedAt > 86400000) continue
+      completed++
+      for (const item of cached.problems) ids.add(item.id)
+    }
+    return { completed, pages, problems: ids.size }
+  })
+  async function countQojCatalog() {
+    if (isCountingQoj.value || qojCatalogTotal.value !== null || !qojCatalogPage.value) return
+    const keyword = searchQuery.value.trim()
+    let pages = qojCatalogPage.value.totalPages
+    const revision = qojCountRevision
+    let nextPage = 1
+    let failed = false
+    isCountingQoj.value = true
+    qojCountError.value = ''
+    const cancelled = () => revision !== qojCountRevision || searchQuery.value.trim() !== keyword
+    const worker = async () => {
+      while (!failed && !cancelled() && nextPage <= pages) {
+        const index = nextPage++
+        const key = `${keyword}:${index}`
+        const cached = qojCatalogCache[key]
+        if (cached?.updatedAt && Date.now() - cached.updatedAt <= 86400000) continue
+        await new Promise(resolve => window.setTimeout(resolve, 150))
+        if (cancelled()) return
+        try {
+          let result: QojProblemPage | undefined
+          for (let attempt = 0; attempt < 3; attempt++) {
+            try {
+              result = await withOjDiagnostic('qoj', 'fetch-catalog', () => invoke<QojProblemPage>('fetch_problems_qoj', { page: index, keyword }))
+              break
+            } catch (cause) {
+              if (attempt === 2 || cancelled()) throw cause
+              await new Promise(resolve => window.setTimeout(resolve, 1000 * (attempt + 1)))
+            }
+          }
+          if (cancelled() || !result) return
+          pages = result.totalPages
+          if (qojCatalogPage.value && searchQuery.value.trim() === keyword) qojCatalogPage.value.totalPages = pages
+          if (result.page !== index) {
+            if (index > pages) continue
+            throw new Error('QOJ 题库分页发生变化，请更新题库后重试')
+          }
+          qojCatalogCache[key] = { ...result, updatedAt: Date.now() }
+          if (index % 10 === 0) await saveDataCenterValue('qoj-catalog-pages', qojCatalogCache)
+        } catch (cause) {
+          failed = true
+          throw cause
+        }
+      }
+    }
+    try {
+      // Three bounded workers keep counting when the catalog panel is hidden.
+      // They fill only the cache and never replace the visible page or its rows.
+      const results = await Promise.allSettled(Array.from({ length: 3 }, worker))
+      const failure = results.find(result => result.status === 'rejected')
+      if (failure?.status === 'rejected') qojCountError.value = String(failure.reason)
+    } finally {
+      try { await saveDataCenterValue('qoj-catalog-pages', qojCatalogCache) }
+      catch (cause) { qojCountError.value = String(cause) }
+      isCountingQoj.value = false
+      if (currentPlatform.value === 'qoj' && (searchQuery.value.trim() !== keyword || revision !== qojCountRevision)) void countQojCatalog()
+    }
+  }
+  let qojCatalogRequestId = 0
+  async function fetchQojProblems(targetPage = 1, force = false) {
+    const request = ++qojCatalogRequestId
+    const keyword = searchQuery.value.trim()
+    const key = `${keyword}:${targetPage}`
+    if (force) {
+      qojCountRevision++
+      for (const cachedKey of Object.keys(qojCatalogCache)) {
+        if (cachedKey.slice(0, cachedKey.lastIndexOf(':')) === keyword) delete qojCatalogCache[cachedKey]
+      }
+    }
+    isLoadingCatalog.value = true
+    error.value = null
+    // Do not show rows belonging to the previous query or page while reading.
+    qojCatalogPage.value = qojCatalogCache[key] ?? null
+    try {
+      const result = !force && qojCatalogCache[key] ? qojCatalogCache[key]
+        : await withOjDiagnostic('qoj', 'fetch-catalog', () => invoke<QojProblemPage>('fetch_problems_qoj', { page: targetPage, keyword }))
+      result.updatedAt ??= Date.now()
+      qojCatalogCache[key] = result
+      void saveDataCenterValue('qoj-catalog-pages', qojCatalogCache)
+      if (request !== qojCatalogRequestId || currentPlatform.value !== 'qoj') return
+      qojCatalogPage.value = result
+      page.value = result.page
+      const merged = new Map(problems.value.map(p => [`${p.platform}:${p.id}`, p]))
+      for (const item of result.problems) {
+        const previous = merged.get(`qoj:${item.id}`)
+        merged.set(`qoj:${item.id}`, previous?.description ? previous : item)
+      }
+      problems.value = [...merged.values()]
+    } catch (cause) {
+      if (request === qojCatalogRequestId && currentPlatform.value === 'qoj') error.value = String(cause)
+    } finally {
+      if (request === qojCatalogRequestId && currentPlatform.value === 'qoj') isLoadingCatalog.value = false
+    }
+  }
 
   function qojArchiveKey(url = 'https://qoj.ac/category') {
     return url.replace(/\/$/, '').replace(/^http:/i, 'https:')
@@ -204,7 +329,7 @@ export const useProblemStore = defineStore('problem', () => {
     error.value = null
     try {
       const page = await withOjDiagnostic('qoj', 'fetch-archive', () => invoke<QojArchivePage>('fetch_qoj_archive', { url: key }))
-      qojArchiveCache = { version: 3, pages: { ...qojArchiveCache.pages, [qojArchiveKey(page.url)]: page } }
+      qojArchiveCache = { version: 4, pages: { ...qojArchiveCache.pages, [qojArchiveKey(page.url)]: page } }
       await saveDataCenterValue('qoj-archive', qojArchiveCache)
       const discovered = qojArchiveProblems(page.entries).map(({ entry, problem }) => ({
         id: problem.id,
@@ -226,7 +351,7 @@ export const useProblemStore = defineStore('problem', () => {
     } finally { isLoadingQojArchive.value = false }
   }
 
-  async function openQojArchiveEntry(entry: QojArchiveEntry) {
+  async function openQojArchiveEntry(entry: QojArchiveEntry, force = false) {
     if (isLoadingQojArchive.value) return
     if (entry.kind === 'group') {
       if (qojArchivePage.value) qojArchiveHistory.value.push(qojArchivePage.value)
@@ -242,11 +367,11 @@ export const useProblemStore = defineStore('problem', () => {
       isLoadingQojArchive.value = true
       error.value = null
       try {
-        const page = await withOjDiagnostic('qoj', 'fetch-contest', () => invoke<QojArchivePage>('fetch_qoj_archive', { url: entry.url }))
+        const page = (!force && qojArchiveCache.pages[`contest:${entry.url}`]) || await withOjDiagnostic('qoj', 'fetch-contest', () => invoke<QojArchivePage>('fetch_qoj_archive', { url: entry.url }))
         const resolved = page.entries.find((candidate) => candidate.kind === 'contest')
         if (!resolved?.problems.length) throw new Error('QOJ 比赛中没有可读取的公开题目')
         qojSelectedContest.value = { ...entry, ...resolved }
-        qojArchiveCache = { version: 3, pages: { ...qojArchiveCache.pages, [`contest:${entry.url}`]: page } }
+        qojArchiveCache = { version: 4, pages: { ...qojArchiveCache.pages, [`contest:${entry.url}`]: page } }
         await saveDataCenterValue('qoj-archive', qojArchiveCache)
         const merged = new Map(problems.value.map((problem) => [`${problem.platform}:${problem.id}`, problem]))
         for (const problem of resolved.problems) {
@@ -270,6 +395,10 @@ export const useProblemStore = defineStore('problem', () => {
     }
     const previous = qojArchiveHistory.value.pop()
     if (previous) qojArchivePage.value = previous
+  }
+
+  async function readQojContest(url: string): Promise<QojArchivePage> {
+    return qojArchiveCache.pages[`contest:${url}`] || await withOjDiagnostic('qoj', 'fetch-contest', () => invoke<QojArchivePage>('fetch_qoj_archive', { url }))
   }
 
   async function openQojArchiveProblem(problem: QojArchiveProblem) {
@@ -515,6 +644,7 @@ export const useProblemStore = defineStore('problem', () => {
 
   // 筛选后的全部结果（未分页）
   const filteredProblems = computed(() => {
+    if (currentPlatform.value === 'qoj') return qojCatalogPage.value?.problems ?? []
     let list = problems.value.filter((p) => p.platform === currentPlatform.value)
 
     // 洛谷题库由服务端完成筛选和分页；这里直接展示当前响应页。
@@ -552,13 +682,14 @@ export const useProblemStore = defineStore('problem', () => {
 
   // 分页后的结果
   const pagedProblems = computed(() => {
-    if (currentPlatform.value === 'luogu') return filteredProblems.value
+    if (currentPlatform.value === 'luogu' || currentPlatform.value === 'qoj') return filteredProblems.value
     const start = (page.value - 1) * pageSize
     return filteredProblems.value.slice(start, start + pageSize)
   })
 
   const totalPages = computed(() => currentPlatform.value === 'luogu'
     ? Math.max(1, Math.ceil(luoguTotal.value / luoguPerPage.value))
+    : currentPlatform.value === 'qoj' ? qojCatalogPage.value?.totalPages ?? 1
     : Math.max(1, Math.ceil(filteredProblems.value.length / pageSize)),
   )
 
@@ -612,16 +743,19 @@ export const useProblemStore = defineStore('problem', () => {
   async function setPage(p: number) {
     page.value = Math.max(1, Math.min(p, totalPages.value))
     if (currentPlatform.value === 'luogu') await fetchLuoguProblems(page.value)
+    if (currentPlatform.value === 'qoj') await fetchQojProblems(page.value)
   }
 
   async function applyProblemFilters() {
     page.value = 1
     if (currentPlatform.value === 'luogu') await fetchLuoguProblems(1)
+    if (currentPlatform.value === 'qoj') await fetchQojProblems(1)
   }
 
   async function resetProblemFilters() {
     clearFilters()
     if (currentPlatform.value === 'luogu') await fetchLuoguProblems(1)
+    if (currentPlatform.value === 'qoj') await fetchQojProblems(1)
   }
 
   // ── 认证操作 ──
@@ -650,8 +784,9 @@ export const useProblemStore = defineStore('problem', () => {
 
   /** 监听来自 Rust 的登录事件 */
   function setupEventListener() {
-    listen<boolean>('cf-login-success', async (_event) => {
+    listen<string | boolean>('cf-login-success', async (event) => {
       isLoggedIn.value = true
+      if (typeof event.payload === 'string') cfAccount.value = event.payload.trim()
       isCfLoginOpening.value = false
       error.value = null
       await Promise.allSettled([refreshAccounts(), fetchProblems(true)])
@@ -667,6 +802,15 @@ export const useProblemStore = defineStore('problem', () => {
       error.value = null
     })
     listen<string>('luogu-login-error', (event) => { isLuoguLoginOpening.value = false; error.value = event.payload })
+    listen<{ loggedIn: boolean; username?: string }>('qoj-login-success', event => {
+      // Invalidate checks started before the login navigation completed.
+      qojAccountCheckSequence++
+      qojLoggedIn.value = event.payload.loggedIn
+      qojAccount.value = event.payload.username?.trim() || qojAccount.value
+      isQojLoginOpening.value = false
+      error.value = null
+    })
+    listen('qoj-login-closed', () => { isQojLoginOpening.value = false })
   }
 
   async function loginLuogu() {
@@ -688,17 +832,29 @@ export const useProblemStore = defineStore('problem', () => {
     luoguAccount.value = result.loggedIn ? (username || luoguAccount.value) : ''
   }
 
-  async function ensureOjAccount(platform: 'codeforces' | 'luogu') {
+  async function inspectQojAccount() {
+    const sequence = ++qojAccountCheckSequence
+    const account = await withOjDiagnostic('qoj', 'inspect-account', () => invoke<{ loggedIn: boolean; username?: string }>('inspect_external_account', { platform: 'qoj' }))
+    if (sequence === qojAccountCheckSequence) {
+      qojLoggedIn.value = account.loggedIn
+      qojAccount.value = account.loggedIn ? (account.username?.trim() || qojAccount.value) : ''
+      if (account.loggedIn) isQojLoginOpening.value = false
+    }
+    return account
+  }
+
+  async function ensureOjAccount(platform: 'codeforces' | 'luogu' | 'qoj') {
     try {
-      const result = await withOjDiagnostic(platform, 'inspect-account', () => invoke<{ loggedIn: boolean; username?: string }>(platform === 'luogu' ? 'inspect_luogu_account' : 'inspect_cf_account'))
+      const result = platform === 'qoj' ? await inspectQojAccount()
+        : await withOjDiagnostic(platform, 'inspect-account', () => invoke<{ loggedIn: boolean; username?: string }>(platform === 'luogu' ? 'inspect_luogu_account' : 'inspect_cf_account'))
       if (platform === 'luogu') {
         applyLuoguAccountStatus(result)
-      } else {
+      } else if (platform !== 'qoj') {
         isLoggedIn.value = result.loggedIn
-        cfAccount.value = result.username ?? ''
+        cfAccount.value = result.loggedIn ? (result.username?.trim() || cfAccount.value) : ''
       }
-      const loggedIn = platform === 'luogu' ? luoguLoggedIn.value : isLoggedIn.value
-      if (!loggedIn) lastSubmitError.value = `尚未登录${platform === 'luogu' ? '洛谷' : ' Codeforces'}，请先到顶部“设置 → OJ 账号”登录`
+      const loggedIn = platform === 'luogu' ? luoguLoggedIn.value : platform === 'qoj' ? qojLoggedIn.value : isLoggedIn.value
+      if (!loggedIn) lastSubmitError.value = `尚未登录${platform === 'luogu' ? '洛谷' : platform === 'qoj' ? ' QOJ' : ' Codeforces'}，请先到顶部“设置 → OJ 账号”登录`
       return loggedIn
     } catch (reason) {
       lastSubmitError.value = `无法确认登录状态：${String(reason)}`
@@ -827,9 +983,10 @@ export const useProblemStore = defineStore('problem', () => {
   async function refreshAccounts() {
     isRefreshingAccounts.value = true
     try {
-      // 登录辅助窗口属于独立进程，设置页每次刷新时都以真实进程状态
-      // 校准按钮，能够修复热更新或异常退出前遗留的前端“登录中”状态。
+      // Calibrate pending login buttons; QOJ can be inspected in its open window.
       isAtcoderLoginOpening.value = await invoke<boolean>('external_account_session_status', { platform: 'atcoder' }).catch(() => false)
+      isQojLoginOpening.value = await invoke<boolean>('qoj_account_window_open').catch(() => false)
+      const qojCheck = inspectQojAccount()
       const atcoderCheck = isAtcoderLoginOpening.value
         ? Promise.resolve({ loggedIn: atcoderLoggedIn.value, username: atcoderAccount.value })
         : withOjDiagnostic('atcoder', 'inspect-account', () => invoke<{ loggedIn: boolean; username?: string }>('inspect_external_account', { platform: 'atcoder' }))
@@ -837,10 +994,11 @@ export const useProblemStore = defineStore('problem', () => {
         withOjDiagnostic('codeforces', 'inspect-account', () => invoke<{ loggedIn: boolean; username?: string }>('inspect_cf_account')),
         withOjDiagnostic('luogu', 'inspect-account', () => invoke<{ loggedIn: boolean; username?: string }>('inspect_luogu_account')),
         atcoderCheck,
+        qojCheck,
       ])
       if (cf.status === 'fulfilled') {
         isLoggedIn.value = cf.value.loggedIn
-        cfAccount.value = cf.value.username ?? ''
+        cfAccount.value = cf.value.loggedIn ? (cf.value.username?.trim() || cfAccount.value) : ''
       }
       if (luogu.status === 'fulfilled') {
         applyLuoguAccountStatus(luogu.value)
@@ -854,24 +1012,26 @@ export const useProblemStore = defineStore('problem', () => {
     }
   }
 
-  async function loginExternalAccount(platform: 'atcoder') {
-    const opening = isAtcoderLoginOpening
+  async function loginExternalAccount(platform: 'atcoder' | 'qoj') {
+    const opening = platform === 'qoj' ? isQojLoginOpening : isAtcoderLoginOpening
     if (opening.value) return
     opening.value = true
     error.value = null
     try {
-      await invoke('open_external_account', { platform, switchAccount: atcoderLoggedIn.value })
+      await invoke('open_external_account', { platform, switchAccount: platform === 'qoj' ? qojLoggedIn.value : atcoderLoggedIn.value })
+      // QOJ's native monitor follows login redirects and emits success/close events.
+      if (platform === 'qoj') return
       const watch = async () => {
         const running = await invoke<boolean>('external_account_session_status', { platform }).catch(() => false)
         opening.value = running
-        if (running) window.setTimeout(watch, 700)
-        else {
-          const account = await withOjDiagnostic('atcoder', 'inspect-account', () => invoke<{ loggedIn: boolean; username?: string }>('inspect_external_account', { platform: 'atcoder' })).catch(() => null)
+        if (!running) {
+          const account = await withOjDiagnostic(platform, 'inspect-account', () => invoke<{ loggedIn: boolean; username?: string }>('inspect_external_account', { platform })).catch(() => null)
           if (account) {
             atcoderLoggedIn.value = account.loggedIn
             atcoderAccount.value = account.username ?? ''
           }
         }
+        if (running) window.setTimeout(watch, 700)
       }
       window.setTimeout(watch, 300)
     } catch (cause) {
@@ -889,16 +1049,15 @@ export const useProblemStore = defineStore('problem', () => {
     difficulty?: Problem['difficulty']
     tags?: string[]
   }) {
-    if (reference.platform === 'qoj') throw new Error('该平台当前未启用')
     error.value = null
-    let problem = [...problems.value, ...importedProblems.value]
-      .find((item) => item.platform === reference.platform && item.id.toUpperCase() === reference.id.toUpperCase())
+    const cached = [...importedProblems.value, ...problems.value]
+      .filter((item) => item.platform === reference.platform && item.id.toUpperCase() === reference.id.toUpperCase())
+    let problem = cached.find(item => item.description) ?? cached[0]
     if (!problem) {
-      problem = await invoke<Problem>('import_problem_url', { url: reference.url })
-      const key = `${problem.platform}:${problem.id}`
-      importedProblems.value = [problem, ...importedProblems.value.filter((item) => `${item.platform}:${item.id}` !== key)]
-      problems.value = [problem, ...problems.value.filter((item) => `${item.platform}:${item.id}` !== key)]
-      await invoke('save_imported_problems', { problems: importedProblems.value })
+      // A set already has enough metadata to open the editor. Fetch after its first paint.
+      problem = { ...reference, tags: [...(reference.tags ?? [])] }
+      importedProblems.value = [problem, ...importedProblems.value]
+      problems.value = [problem, ...problems.value]
     } else {
       const merged = {
         url: problem.url ?? reference.url,
@@ -912,12 +1071,10 @@ export const useProblemStore = defineStore('problem', () => {
           Object.assign(cached, merged)
         }
       }
-      if (importedProblems.value.some((item) => item.platform === problem!.platform && item.id.toUpperCase() === problem!.id.toUpperCase())) {
-        await invoke('save_imported_problems', { problems: importedProblems.value }).catch(() => undefined)
-      }
     }
     activeView.value = 'workspace'
-    await selectProblem(problem)
+    if (reference.platform === 'qoj' && reference.title && isQojPlaceholderTitle(problem.title, problem.id)) problem.title = reference.title
+    await useWorkbenchStore().openProblem(problem)
   }
 
   /** 应用初始化：恢复会话 + 拉取题目列表（题目 API 公开，无需登录） */
@@ -939,10 +1096,10 @@ export const useProblemStore = defineStore('problem', () => {
           contentFormat: problem.contentFormat
             ?? (problem.platform === 'luogu' ? 'markdown' : problem.platform === 'atcoder' ? 'text' : undefined),
         }))
-      problems.value = importedProblems.value.filter((problem) => problem.platform !== 'qoj')
+      problems.value = importedProblems.value
       if (catalogCache?.version === 1) {
         const merged = new Map<string, Problem>()
-        for (const problem of [...catalogCache.cf, ...catalogCache.luogu, ...(catalogCache.atcoder ?? []), ...importedProblems.value.filter((item) => item.platform !== 'qoj')]) {
+        for (const problem of [...catalogCache.cf, ...catalogCache.luogu, ...(catalogCache.atcoder ?? []), ...importedProblems.value]) {
           merged.set(`${problem.platform}:${problem.id.toUpperCase()}`, problem)
         }
         problems.value = [...merged.values()]
@@ -1067,10 +1224,6 @@ export const useProblemStore = defineStore('problem', () => {
 
   async function importProblem() {
     if (!importUrl.value.trim()) return
-    if (/https?:\/\/(?:www\.)?qoj\.ac\//i.test(importUrl.value)) {
-      error.value = '该平台当前未启用'
-      return
-    }
     isImporting.value = true
     error.value = null
     try {
@@ -1096,14 +1249,16 @@ export const useProblemStore = defineStore('problem', () => {
   // ── 业务操作 ──
 
   async function setPlatform(platform: Platform) {
-    if (platform === 'qoj') return
     if (platform !== 'luogu') {
       luoguCatalogRequestId++
       isLoadingCatalog.value = false
     }
+    qojCatalogRequestId++
+    isLoadingCatalog.value = false
     currentPlatform.value = platform
     page.value = 1
     clearFilters()
+    if (platform === 'qoj') { await fetchQojProblems(1); return }
     if (platform === 'luogu') {
       if (!problems.value.some((problem) => problem.platform === 'luogu')) await fetchLuoguProblems(1)
       return
@@ -1295,14 +1450,15 @@ export const useProblemStore = defineStore('problem', () => {
   }
 
   async function fetchProblemDetail(problem: Problem, force = false) {
-    if (problem.platform === 'qoj' || problem.platform === 'local') return
+    if (problem.platform === 'local') return
     const isCfMissingRich = problem.platform === 'codeforces'
       && !(problem.description && problem.contentFormat === 'html')
     const isLuoguMissingRich = problem.platform === 'luogu'
       && !(problem.description && problem.contentFormat === 'markdown')
     const isAtCoderMissingRich = problem.platform === 'atcoder'
       && !(problem.description && problem.contentFormat === 'html')
-    if (!force && !isCfMissingRich && !isLuoguMissingRich && !isAtCoderMissingRich) return
+    const isQojMissingRich = problem.platform === 'qoj' && (problem.source === 'QOJ' || isQojPlaceholderTitle(problem.title, problem.id) || ((problem.contentFormat !== 'text' || !problem.samples?.length) && /(?:输入|输出)格式\s*#?\d+/.test(problem.description ?? '')) || (!problem.samples?.length && /(?:输入样例|输出样例|样例输入|样例输出)/.test(problem.description ?? '')) || !(problem.description && (problem.contentFormat === 'markdown' || problem.contentFormat === 'html' || (problem.contentFormat === 'text' && problem.note?.startsWith('PDF statement: ')))))
+    if (!force && !isCfMissingRich && !isLuoguMissingRich && !isAtCoderMissingRich && !isQojMissingRich) return
     changeDetailLoadCount(problem, 1)
     if (isCurrentProblem(problem)) error.value = null
     try {
@@ -1314,9 +1470,10 @@ export const useProblemStore = defineStore('problem', () => {
               ? `https://www.luogu.com.cn/problem/${problem.id}`
               : problem.platform === 'atcoder'
                 ? `https://atcoder.jp/contests/${problem.id.split('_')[0]}/tasks/${problem.id}`
-                : problem.url ?? ''),
+                : problem.platform === 'qoj' ? qojProblemUrl(problem.id) : problem.url ?? ''),
           }))
       Object.assign(problem, detail, {
+        title: problem.platform === 'qoj' && isQojPlaceholderTitle(detail.title, detail.id) && !isQojPlaceholderTitle(problem.title, problem.id) ? problem.title : detail.title,
         rating: preserved.rating ?? detail.rating,
         tags: preserved.tags.length ? preserved.tags : detail.tags,
         difficulty: preserved.difficulty ?? detail.difficulty,
@@ -1327,8 +1484,10 @@ export const useProblemStore = defineStore('problem', () => {
       )
       if (importedIndex >= 0) {
         importedProblems.value[importedIndex] = { ...problem }
-        await invoke('save_imported_problems', { problems: importedProblems.value })
+      } else {
+        importedProblems.value = [{ ...problem }, ...importedProblems.value]
       }
+      await invoke('save_imported_problems', { problems: importedProblems.value })
       if (isCurrentProblem(problem)) error.value = null
     } catch (e: any) {
       if (isCurrentProblem(problem)) error.value = typeof e === 'string' ? e : e?.message ?? '题面抓取失败'
@@ -1413,8 +1572,9 @@ export const useProblemStore = defineStore('problem', () => {
   }
 
   async function runLocally(input = runInput.value) {
-    if (!currentProblem.value || !currentCode.value.trim()) return
+    if (!currentProblem.value || !currentCode.value.trim() || isRunning.value) return
     isRunning.value = true
+    runSequence.value++
     runResult.value = null
     try {
       await persistDraft()
@@ -1484,6 +1644,7 @@ export const useProblemStore = defineStore('problem', () => {
     allTestRunSummary.value = null
     selectTestCase(id)
     isRunning.value = true
+    runSequence.value++
     runResult.value = null
     try {
       await persistDraft()
@@ -1497,6 +1658,7 @@ export const useProblemStore = defineStore('problem', () => {
   async function runAllTestCases() {
     if (!currentProblem.value || !currentCode.value.trim() || isRunning.value || !testCases.value.length) return
     isRunning.value = true
+    runSequence.value++
     runResult.value = null
     allTestRunSummary.value = { status: 'running', text: `运行中 0/${testCases.value.length}` }
     try {
@@ -1632,17 +1794,18 @@ export const useProblemStore = defineStore('problem', () => {
 
   /** 复制代码并打开 CF / AtCoder / QOJ 官方提交页，评测结果由用户确认。 */
   async function submitCode() {
-    if (!currentProblem.value || !currentCode.value.trim()) return
+    if (isSubmitting.value || !currentProblem.value || !currentCode.value.trim()) return
     if (cfManualConfirmation.value) {
       lastSubmitError.value = `请先确认 ${cfManualConfirmation.value.problemId} 的提交结果`
       return
     }
     isSubmitting.value = true
     lastSubmitError.value = null
-    if (currentProblem.value.platform === 'codeforces' && !(await ensureOjAccount('codeforces'))) { isSubmitting.value = false; return }
     const submittedProblem = currentProblem.value
     const submittedTags = [...submittedProblem.tags]
     const submittedLanguage = currentLanguage.value
+    const submittedCode = currentCode.value
+    if ((submittedProblem.platform === 'codeforces' || submittedProblem.platform === 'qoj') && !(await ensureOjAccount(submittedProblem.platform))) { isSubmitting.value = false; return }
     const sub: Submission = {
       id: `SUB-${Date.now()}`,
       problemId: submittedProblem.id,
@@ -1655,12 +1818,14 @@ export const useProblemStore = defineStore('problem', () => {
     await persistSubmissions().catch(() => undefined)
 
     try {
-      if (submittedProblem.platform !== 'codeforces' && submittedProblem.platform !== 'atcoder') throw new Error('当前平台不支持人工提交')
+      if (!['codeforces', 'atcoder', 'qoj'].includes(submittedProblem.platform)) throw new Error('当前平台不支持辅助提交')
       await persistDraft()
       sub.message = submittedProblem.platform === 'codeforces'
-        ? await invoke<string>('open_cf_manual_submit', { problemId: submittedProblem.id, code: currentCode.value })
-        : await invoke<string>('open_atcoder_manual_submit', { problemUrl: submittedProblem.url, code: currentCode.value })
-      cfManualConfirmation.value = { submissionId: sub.id, platform: submittedProblem.platform, problemId: submittedProblem.id, title: submittedProblem.title, tags: submittedTags, language: submittedLanguage, code: currentCode.value }
+        ? await invoke<string>('open_cf_manual_submit', { problemId: submittedProblem.id, code: submittedCode })
+        : submittedProblem.platform === 'qoj'
+          ? await invoke<string>('open_qoj_manual_submit', { problemId: submittedProblem.id, problemUrl: submittedProblem.url ?? qojProblemUrl(submittedProblem.id), code: submittedCode })
+          : await invoke<string>('open_atcoder_manual_submit', { problemUrl: submittedProblem.url, code: submittedCode })
+      cfManualConfirmation.value = { submissionId: sub.id, platform: submittedProblem.platform as 'codeforces' | 'atcoder' | 'qoj', problemId: submittedProblem.id, title: submittedProblem.title, tags: submittedTags, language: submittedLanguage, code: submittedCode }
       await persistSubmissions().catch(() => undefined)
     } catch (e: any) {
       sub.status = 'Failed'
@@ -1675,6 +1840,7 @@ export const useProblemStore = defineStore('problem', () => {
   async function confirmCfSubmission(accepted: boolean) {
     const confirmation = cfManualConfirmation.value
     if (!confirmation) return
+    lastSubmitError.value = null
     const submission = submissions.value.find((item) => item.id === confirmation.submissionId)
     if (submission) {
       submission.status = accepted ? 'Accepted' : 'Failed'
@@ -1755,6 +1921,7 @@ export const useProblemStore = defineStore('problem', () => {
     isLoadingTests,
     isPreparingStatement,
     isRunning,
+    runSequence,
     runResult,
     debugResult,
     isDebugging,
@@ -1787,6 +1954,13 @@ export const useProblemStore = defineStore('problem', () => {
     importedProblems,
     importUrl,
     isImporting,
+    qojCatalogPage,
+    fetchQojProblems,
+    countQojCatalog,
+    qojCatalogTotal,
+    qojCountError,
+    qojCountProgress,
+    isCountingQoj,
     qojArchivePage,
     qojArchiveHistory,
     qojSelectedContest,
@@ -1835,6 +2009,7 @@ export const useProblemStore = defineStore('problem', () => {
     openQojArchiveEntry,
     backQojArchive,
     openQojArchiveProblem,
+    readQojContest,
     fetchLuoguProblems,
     importProblem,
     setPlatform,

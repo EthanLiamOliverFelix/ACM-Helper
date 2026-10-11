@@ -11,6 +11,7 @@ import { normalizeAiMarkdown } from '../utils/aiMarkdown'
 import { atCoderVarMarkupToTex } from '../utils/atcoderMath'
 import { splitCodeforcesMathText } from '../utils/codeforcesMath'
 import { openUrl } from '@tauri-apps/plugin-opener'
+import { qojStatementPdfUrl } from '../utils/qoj'
 import { ojTranslationKey } from '../utils/ojTranslation'
 import 'katex/dist/katex.min.css'
 import { useWorkbenchStore } from '../stores/workbenchStore'
@@ -23,7 +24,7 @@ const problemKey = computed(() => store.currentProblem ? `${store.currentProblem
 const translationKey = computed(() => store.currentProblem ? ojTranslationKey(store.currentProblem.platform, store.currentProblem.id) : '')
 const translationSupported = computed(() => {
   const problem = store.currentProblem
-  if (!problem || !['codeforces', 'luogu', 'atcoder'].includes(problem.platform)) return false
+  if (!problem || !['codeforces', 'luogu', 'atcoder', 'qoj'].includes(problem.platform)) return false
   if (ai.translations[translationKey.value]) return true
   const source = `${problem.title} ${problem.description ?? ''} ${problem.input ?? ''} ${problem.output ?? ''}`
     .replace(/<[^>]+>/g, ' ')
@@ -31,6 +32,11 @@ const translationSupported = computed(() => {
   const cjk = (source.match(/[\u3400-\u9fff]/g) ?? []).length
   return latin >= 24 && latin > cjk * 2
 })
+const pdfUrl = computed(() => store.currentProblem?.platform === 'qoj' ? qojStatementPdfUrl(store.currentProblem.note) : null)
+const pdfMode = ref<'pdf' | 'text'>('pdf')
+watch(problemKey, () => { pdfMode.value = ai.translations[translationKey.value] ? 'text' : 'pdf' })
+watch(() => ai.translations[translationKey.value], value => { if (value) pdfMode.value = 'text' })
+const showPdf = computed(() => Boolean(pdfUrl.value && pdfMode.value === 'pdf' && !store.isLoadingDetail))
 const translationError = computed(() => ai.error)
 const refreshError = ref('')
 const linkError = ref('')
@@ -130,6 +136,28 @@ function safeRichText(value = '', format: 'html' | 'markdown' | 'text' = 'text',
       const display = script.type.toLowerCase().includes('mode=display')
       replaceWithKatex(script, script.textContent ?? '', display)
     })
+    if (store.currentProblem?.platform === 'qoj') {
+      const walker = sourceDoc.createTreeWalker(sourceRoot, NodeFilter.SHOW_TEXT)
+      const textNodes: Text[] = []
+      while (walker.nextNode()) {
+        const node = walker.currentNode as Text
+        if (node.data.includes('$') && !node.parentElement?.closest('pre,code,script,style,.katex')) textNodes.push(node)
+      }
+      for (const node of textNodes) {
+        const pattern = /\$\$([\s\S]+?)\$\$|\$([^$\n]+?)\$/g
+        const fragment = sourceDoc.createDocumentFragment()
+        let offset = 0
+        for (const match of node.data.matchAll(pattern)) {
+          fragment.append(sourceDoc.createTextNode(node.data.slice(offset, match.index)))
+          const placeholder = sourceDoc.createElement('span')
+          fragment.append(placeholder)
+          replaceWithKatex(placeholder, match[1] ?? match[2] ?? '', Boolean(match[1]))
+          offset = match.index! + match[0].length
+        }
+        fragment.append(sourceDoc.createTextNode(node.data.slice(offset)))
+        node.replaceWith(fragment)
+      }
+    }
     html = sourceRoot.innerHTML
   }
   else html = value.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/\n/g, '<br/>')
@@ -195,7 +223,7 @@ async function retranslate() {
 
 watch(problemKey, async () => {
   const problem = store.currentProblem
-  if (!problem || !['codeforces', 'luogu', 'atcoder'].includes(problem.platform)) return
+  if (!problem || !['codeforces', 'luogu', 'atcoder', 'qoj'].includes(problem.platform)) return
   try { await ai.loadCachedTranslation(problem.id, problem.platform) } catch (e) { ai.error = String(e) }
 }, { immediate: true })
 
@@ -320,8 +348,14 @@ async function closeLocalStatement() {
       <span class="problem-desc__title">未选择题目</span>
     </div>
     <div class="problem-desc__content">
+      <div v-if="pdfUrl" class="qoj-pdf-tools">
+        <button :class="{ active: pdfMode === 'pdf' }" @click="pdfMode = 'pdf'">原始 PDF</button>
+        <button :class="{ active: pdfMode === 'text' }" @click="pdfMode = 'text'">提取文字</button>
+        <a :href="pdfUrl" @click="openStatementLink">打开原始 PDF ↗</a><span>公式和版式请以原始 PDF 为准</span>
+      </div>
+      <iframe v-if="showPdf" class="qoj-pdf-preview" :src="pdfUrl!" title="QOJ 原始 PDF 题面" />
       <MarkdownNoteEditor
-        v-if="store.currentProblem?.platform === 'local' && store.localStatement.trim() && store.draftPath"
+        v-else-if="store.currentProblem?.platform === 'local' && store.localStatement.trim() && store.draftPath"
         class="local-statement-view"
         :model-value="store.localStatement"
         :note-path="store.draftPath"
@@ -568,4 +602,12 @@ async function closeLocalStatement() {
 :deep(.statement-skeleton i:nth-child(3)) { width:65%; }
 @keyframes statement-loading { from { background-position:100% 0; } to { background-position:-100% 0; } }
 @media (prefers-reduced-motion:reduce) { :deep(.statement-skeleton i) { animation:none; } }
+</style>
+
+<style scoped>
+.qoj-pdf-tools { display: flex; align-items: center; flex-wrap: wrap; gap: 8px; margin-bottom: 12px; }
+.qoj-pdf-tools button { padding: 5px 10px; border: 1px solid var(--color-border); border-radius: 4px; background: var(--color-bg-panel); color: var(--color-text-secondary); cursor: pointer; }
+.qoj-pdf-tools button.active { color: var(--color-accent-text); border-color: var(--color-accent); }
+.qoj-pdf-tools span { color: var(--color-text-muted); font-size: 12px; }
+.qoj-pdf-preview { width: 100%; height: max(600px, 75vh); border: 0; border-radius: 4px; }
 </style>

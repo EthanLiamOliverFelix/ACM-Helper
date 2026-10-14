@@ -1,7 +1,6 @@
 <script setup lang="ts">
 import { computed, ref } from 'vue'
 import { useProblemStore } from '../stores/problemStore'
-import { diffOutput, type OutputDiffSegment } from '../utils/outputDiff'
 import { getTestCaseStatusText } from '../utils/runDiagnostics'
 import '@vscode/codicons/dist/codicon.css'
 
@@ -49,32 +48,6 @@ async function runAllTestCases() {
   syncCollapsedResults(testIds)
 }
 
-const diffCache = new Map<string, { expected: string; actual: string; segments: OutputDiffSegment[] }>()
-function outputSegments(id: string, expected: string, actual: string): OutputDiffSegment[] {
-  const cached = diffCache.get(id)
-  if (cached?.expected === expected && cached.actual === actual) return cached.segments
-  const segments = expected.trim()
-    ? diffOutput(expected, actual)
-    : actual ? [{ text: actual, kind: 'match' }] : []
-  if (diffCache.size >= 64) diffCache.delete(diffCache.keys().next().value!)
-  diffCache.set(id, { expected, actual, segments: segments as OutputDiffSegment[] })
-  return segments as OutputDiffSegment[]
-}
-
-function visibleDiffText(segment: OutputDiffSegment) {
-  if (segment.kind === 'match') return segment.text
-  return segment.text
-    .replace(/ /g, '·')
-    .replace(/\t/g, '→')
-    .replace(/\n/g, '↵\n')
-}
-
-function diffTitle(segment: OutputDiffSegment) {
-  if (segment.kind === 'changed') return `应为：${segment.expected || '空内容'}`
-  if (segment.kind === 'extra') return '实际输出中多余的内容'
-  if (segment.kind === 'missing') return '实际输出缺少这部分内容'
-  return ''
-}
 </script>
 
 <template>
@@ -108,7 +81,7 @@ function diffTitle(segment: OutputDiffSegment) {
           <div v-if="!collapsed.has(test.id)" class="case-body">
             <label><span>输入:</span><button @click.stop="copy(test.input, `${test.id}:input`)">{{ copied === `${test.id}:input` ? '已复制' : '复制' }}</button><textarea v-model="test.input" spellcheck="false" @input="store.updateTestCase(test.id)" /></label>
             <label><span>预期输出:</span><button @click.stop="copy(test.expectedOutput, `${test.id}:expected`)">{{ copied === `${test.id}:expected` ? '已复制' : '复制' }}</button><textarea v-model="test.expectedOutput" spellcheck="false" @input="store.updateTestCase(test.id)" /></label>
-            <label v-if="test.status !== 'idle' && test.status !== 'running'" class="actual"><span>实际输出:</span><button @click.stop="copy(test.actualOutput, `${test.id}:actual`)">{{ copied === `${test.id}:actual` ? '已复制' : '复制' }}</button><div class="output-diff" role="textbox" aria-readonly="true" tabindex="0"><template v-if="test.actualOutput || test.expectedOutput.trim()"><span v-for="(segment, segmentIndex) in outputSegments(test.id, test.expectedOutput, test.actualOutput)" :key="segmentIndex" :class="`diff-${segment.kind}`" :title="diffTitle(segment)">{{ visibleDiffText(segment) }}</span></template><span v-else class="output-empty">程序没有输出</span></div></label>
+            <label v-if="test.status !== 'idle' && test.status !== 'running'" class="actual"><span>实际输出:</span><button @click.stop="copy(test.actualOutput, `${test.id}:actual`)">{{ copied === `${test.id}:actual` ? '已复制' : '复制' }}</button><textarea :value="test.actualOutput" readonly wrap="off" spellcheck="false" aria-label="实际输出" placeholder="程序没有输出" /></label>
           </div>
         </article>
 
@@ -130,8 +103,7 @@ function diffTitle(segment: OutputDiffSegment) {
 .case-body { padding: 0 10px 10px; border-top: 1px solid var(--color-border-soft); }
 label { display: grid; grid-template-columns: 1fr auto; align-items: center; margin-top: 9px; color: var(--color-text-soft); font-size: 13px; > button { padding: 2px 3px; border: 0; background: transparent; color: var(--color-text-faint); font-size: 10px; cursor: pointer; &:hover { color: var(--color-accent-text); } } }
 textarea { grid-column: 1 / -1; box-sizing: border-box; width: 100%; min-height: 140px; margin-top: 4px; resize: vertical; padding: 7px 9px; border: 1px solid var(--color-border); border-radius: 2px; outline: none; background: var(--color-bg-deep); color: var(--color-text-strong); font: 13px/1.45 Consolas, monospace; &:focus { border-color: var(--color-accent); } }
-.output-diff { grid-column: 1 / -1; box-sizing: border-box; width: 100%; min-height: 140px; margin-top: 4px; overflow: auto; resize: vertical; padding: 7px 9px; border: 1px solid var(--color-border); border-radius: 2px; outline: none; background: var(--color-bg-deep); color: #fff; font: 13px/1.45 Consolas, monospace; white-space: pre-wrap; overflow-wrap: anywhere; &:focus { border-color: var(--color-accent); } .diff-changed, .diff-extra, .diff-missing { border-radius: 2px; background: rgba(208, 48, 48, .68); } .diff-extra { text-decoration: line-through; text-decoration-thickness: 2px; } .diff-missing { border-bottom: 1px dashed currentColor; opacity: .72; } .output-empty { color: var(--color-text-faint); font-family: var(--font-ui); font-style: italic; } }
-:global(html[data-theme='light']) .output-diff { color: #000; .diff-changed, .diff-extra, .diff-missing { background: rgba(255, 92, 92, .48); } }
+.actual textarea::placeholder { color: var(--color-text-faint); font-family: var(--font-ui); font-style: italic; }
 .add-case { width: 100%; display: flex; align-items: center; justify-content: center; gap: 8px; padding: 11px; border: 0; border-radius: 6px; background: var(--color-tone-2e7d32); color: var(--color-text-on-accent); font-size: 14px; font-weight: 700; cursor: pointer; &:hover { background: var(--color-tone-388e3c); } .codicon { font-size: 18px; } }
 .empty { padding: 32px 18px; color: var(--color-text-faint); text-align: center; font-size: 12px; line-height: 1.6; }
 </style>

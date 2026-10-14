@@ -1318,6 +1318,10 @@ fn fetch_qoj_via_webview(app: &AppHandle, target: &QojProblemTarget) -> Result<P
         var pdf = document.querySelector('iframe#statements-pdf');
         var heading = document.querySelector('.page-header');
         if (!heading || ((!article || !article.innerHTML.trim()) && !pdf)) {{if(document.readyState==='complete'&&/\/statement\/zh_cn/.test(location.pathname))location.replace({public_url_json});return;}}
+        if(document.readyState!=='complete')return;
+        var snapshot=(article?article.innerHTML:'')+'|'+(pdf?pdf.src:'');
+        if(window.__acmQojSnapshot!==snapshot){{window.__acmQojSnapshot=snapshot;window.__acmQojStableAt=Date.now();return;}}
+        if(Date.now()-window.__acmQojStableAt<1200)return;
         var title = clean(heading.textContent).replace(/^#\d+\.\s*/, '');
         var text = document.body ? document.body.innerText : '';
         var time = text.match(/Time Limit:\s*([0-9.]+)\s*(ms|s)/i);
@@ -1438,7 +1442,8 @@ async fn fetch_qoj_direct(target: &QojProblemTarget) -> Result<Problem, String> 
         .as_deref()
         .and_then(|note| note.strip_prefix("PDF statement: "))
     {
-        if let Ok(bytes) = qoj_pdf_bytes(url).await {
+        {
+            let bytes = qoj_pdf_bytes(url).await?;
             if let Ok(Ok(text)) = tauri::async_runtime::spawn_blocking(move || {
                 pdf_extract::extract_text_from_mem(&bytes)
             })

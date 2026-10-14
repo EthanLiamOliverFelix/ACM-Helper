@@ -8,6 +8,8 @@ import { parseChatProblemSetResponse, parseSkillPlanResponse } from '../utils/sk
 import { getDataCenterValue, saveDataCenterValue } from '../dataCenter'
 import { ojTranslationKey } from '../utils/ojTranslation'
 import { hasTranslationBody, normalizeAiMarkdown } from '../utils/aiMarkdown'
+import { decodeTranslation, encodeTranslation, statementSource, translationSourceError, translationCoverageError } from '../utils/statementIntegrity'
+import type { Problem } from '../types'
 
 export function appendAiStreamingMessage(messages: AiMessage[], timestamp = Date.now()) {
   messages.push({ role: 'assistant', content: '', timestamp })
@@ -37,8 +39,15 @@ export const useAiStore = defineStore('ai', () => {
   const isSending = ref(false)
   const error = ref<string | null>(null)
   const translations = ref<Record<string, string>>({})
+  const translationSources = ref<Record<string, string | undefined>>({})
+  function translationFor(problem: Problem | null) {
+    if (!problem) return undefined
+    const key = ojTranslationKey(problem.platform, problem.id)
+    return translationSources.value[key] === statementSource(problem) ? translations.value[key] : undefined
+  }
   const isTranslating = ref(false)
   const translationLoads = new Map<string, Promise<string | null>>()
+  const translationRevisions = new Map<string, number>()
   const isConfigured = computed(() => Boolean(endpoint.value.trim() && model.value.trim() && apiKey.value.trim()))
   const translationConfigured = computed(() => Boolean(translationEndpoint.value.trim() && translationModel.value.trim() && translationApiKey.value.trim()))
 
@@ -150,14 +159,20 @@ export const useAiStore = defineStore('ai', () => {
     if (platform !== 'codeforces' && platform !== 'luogu' && platform !== 'atcoder' && platform !== 'qoj') return null
     const normalizedId = problemId.trim().toUpperCase()
     const key = ojTranslationKey(platform, normalizedId)
-    if (translations.value[key]) return translations.value[key]
+    const problem = useProblemStore().currentProblem
+    if (problem && translationFor(problem) && ojTranslationKey(problem.platform, problem.id) === key) return translationFor(problem)!
     const pending = translationLoads.get(key)
     if (pending) return pending
+    const revision = translationRevisions.get(key) ?? 0
     const task = invoke<string | null>('load_oj_translation', { platform, problemId: normalizedId })
       .then((content) => {
-        if (content && hasTranslationBody(content)) {
-          translations.value[key] = normalizeAiMarkdown(content)
-          return translations.value[key]
+        if (revision !== (translationRevisions.get(key) ?? 0)) return translationFor(useProblemStore().currentProblem) ?? null
+        const decoded = decodeTranslation(content ?? '')
+        if (decoded.content && hasTranslationBody(decoded.content)) {
+          translations.value[key] = normalizeAiMarkdown(decoded.content)
+          translationSources.value[key] = decoded.source
+          const current = useProblemStore().currentProblem
+          return current && ojTranslationKey(current.platform, current.id) === key ? translationFor(current) ?? null : null
         }
         return null
       })
@@ -172,13 +187,21 @@ export const useAiStore = defineStore('ai', () => {
     if (!problem || !['codeforces', 'luogu', 'atcoder', 'qoj'].includes(problem.platform)) throw new Error('当前题目不支持 AI 翻译')
     const problemId = problem.id.toUpperCase()
     const key = ojTranslationKey(problem.platform, problemId)
+    if (isTranslating.value) throw new Error('请等待当前翻译完成')
+    if (problems.isLoadingDetail || problems.isPreparingStatement) throw new Error('请等待题面抓取完成后再翻译')
+    const invalid = translationSourceError(problem)
+    if (invalid) throw new Error(`${invalid}，请先重新抓取完整题面`)
+    const sourceVersion = statementSource(problem)
     if (!force) {
-      if (translations.value[key]) return translations.value[key]
+      if (translationFor(problem)) return translationFor(problem)!
       const cached = await loadCachedTranslation(problemId, problem.platform)
       if (cached) return cached
     }
+    if (isTranslating.value) throw new Error('请等待当前翻译完成')
+    if (statementSource(problem) !== sourceVersion || problems.isLoadingDetail || problems.isPreparingStatement) throw new Error('题面正在更新，请等待抓取完成后再翻译')
     if (!translationConfigured.value) throw new Error('请先在顶部“设置 → 翻译模型”中配置模型、API 地址和 API Key')
     isTranslating.value = true
+    translationRevisions.set(key, (translationRevisions.get(key) ?? 0) + 1)
     error.value = null
     try {
       if (!problem.description?.trim()) throw new Error('原题面为空，请先重新抓取题面后再翻译')
@@ -201,8 +224,12 @@ export const useAiStore = defineStore('ai', () => {
       })
       const content = normalizeAiMarkdown(result.text)
       if (!hasTranslationBody(content)) throw new Error('AI 返回的译文为空或只有标题，未覆盖原有题面，请重新翻译')
-      await invoke('save_oj_translation', { platform: problem.platform, problemId, content })
+      const missingSection = translationCoverageError(content, problem)
+      if (missingSection) throw new Error(`${missingSection}，本次译文未保存，请重新翻译`)
+      if (statementSource(problem) !== sourceVersion || problems.isLoadingDetail) throw new Error('翻译期间题面已更新，本次译文未保存，请重试')
+      await invoke('save_oj_translation', { platform: problem.platform, problemId, content: encodeTranslation(content, sourceVersion) })
       translations.value[key] = content
+      translationSources.value[key] = sourceVersion
       return content
     } finally {
       isTranslating.value = false
@@ -285,5 +312,5 @@ export const useAiStore = defineStore('ai', () => {
   }
 
   function clear() { messages.value = []; error.value = null }
-  return { endpoint, model, protocol, apiKey, rememberApiKey, translationEndpoint, translationModel, translationProtocol, translationApiKey, translationRememberApiKey, assistanceLevel, messages, draft, isSending, error, translations, isTranslating, isConfigured, translationConfigured, saveConfig, send, loadCachedTranslation, translateCurrentProblem, generateSkillPlan, clear }
+  return { endpoint, model, protocol, apiKey, rememberApiKey, translationEndpoint, translationModel, translationProtocol, translationApiKey, translationRememberApiKey, assistanceLevel, messages, draft, isSending, error, translations, translationFor, isTranslating, isConfigured, translationConfigured, saveConfig, send, loadCachedTranslation, translateCurrentProblem, generateSkillPlan, clear }
 })

@@ -475,7 +475,10 @@ fn start_signal_server() -> Result<(u16, std::sync::mpsc::Receiver<String>), Str
 const CF_STATEMENT_PROBE: &str = r#"(function () {
     var node = document.querySelector('.problem-statement');
     return {
-        html: node && node.querySelector('.title') ? node.outerHTML : null,
+        html: document.readyState === 'complete' && node && node.querySelector('.title')
+            && node.querySelector('.input-specification') && node.querySelector('.output-specification')
+            && node.querySelector('.sample-test .input pre') && node.querySelector('.sample-test .output pre')
+            ? node.outerHTML : null,
         challenge: /just a moment|checking your browser/i.test(document.title || '')
             || Boolean(document.querySelector('#challenge-running, #challenge-form'))
     };
@@ -487,6 +490,8 @@ fn capture_cf_statement(
 ) -> Result<String, String> {
     let started = std::time::Instant::now();
     let deadline = started + std::time::Duration::from_secs(60);
+    let mut previous_html = String::new();
+    let mut stable_since = std::time::Instant::now();
     loop {
         if stop.load(Ordering::Relaxed) {
             return Err("已取消 Codeforces 题面加载".into());
@@ -503,7 +508,14 @@ fn capture_cf_statement(
             if let Ok(value) = serde_json::from_str::<serde_json::Value>(&payload) {
                 if let Some(html) = value.get("html").and_then(serde_json::Value::as_str) {
                     if is_cf_statement_html(html) {
-                        return Ok(html.to_string());
+                        if previous_html != html {
+                            previous_html = html.to_string();
+                            stable_since = std::time::Instant::now();
+                        } else if stable_since.elapsed() >= std::time::Duration::from_millis(750) {
+                            return Ok(html.to_string());
+                        }
+                    } else {
+                        previous_html.clear();
                     }
                 }
                 // Give automatic browser checks time to finish, without opening a window.
@@ -698,8 +710,19 @@ pub async fn fetch_problems_cf() -> Result<Vec<Problem>, String> {
 /// 抓取 Codeforces 题面、输入输出说明与样例。
 fn is_cf_statement_html(html: &str) -> bool {
     let document = Html::parse_document(html);
-    let selector = Selector::parse(".problem-statement .title").unwrap();
-    document.select(&selector).next().is_some()
+    [".title", ".input-specification", ".output-specification", ".sample-test .input pre", ".sample-test .output pre"]
+        .iter().all(|part| document.select(&Selector::parse(&format!(".problem-statement {part}")).unwrap()).next().is_some())
+        && document.select(&Selector::parse(".sample-test .input pre").unwrap()).count()
+            == document.select(&Selector::parse(".sample-test .output pre").unwrap()).count()
+}
+
+fn cf_description(document: &Html) -> Option<String> {
+    let statement = document.select(&Selector::parse(".problem-statement").unwrap()).next()?;
+    let body: String = statement.children().filter_map(scraper::ElementRef::wrap)
+        .filter(|element| !["header", "input-specification", "output-specification", "sample-tests", "note"]
+            .iter().any(|class| element.value().has_class(class, scraper::CaseSensitivity::CaseSensitive)))
+        .map(|element| element.html()).collect();
+    (!body.trim().is_empty()).then_some(body)
 }
 
 #[tauri::command]
@@ -772,15 +795,9 @@ pub async fn fetch_problem_detail_cf(
         .map(|(_, name)| name.to_string())
         .unwrap_or(raw_title);
 
-    let description_selector = Selector::parse(
-        ".problem-statement > div:not(.header):not(.input-specification):not(.output-specification):not(.sample-tests):not(.note)",
-    ).unwrap();
     // 保留 OJ 原始结构（段落、公式、上下标、列表），前端会进行净化后渲染。
     // 旧实现把 DOM 压成逐行纯文本，导致截图中变量 n/h 被拆成单独段落。
-    let description = document
-        .select(&description_selector)
-        .next()
-        .map(|e| e.inner_html());
+    let description = cf_description(&document);
 
     let input_selector = Selector::parse(".sample-test .input pre").unwrap();
     let output_selector = Selector::parse(".sample-test .output pre").unwrap();
@@ -1308,7 +1325,13 @@ mod tests {
         assert!(!super::is_cf_statement_html(
             "<div class='problem-statement'>Loading</div>"
         ));
-        assert!(super::is_cf_statement_html("<div class='problem-statement'><div class='header'><div class='title'>A. Test</div></div><p>Body</p></div>"));
+        assert!(!super::is_cf_statement_html("<div class='problem-statement'><div class='header'><div class='title'>A. Test</div></div><p>Body</p></div>"));
+        let full = "<div class='problem-statement'><div class='header'><div class='title'>A. Test</div></div><div><p>Opening</p></div><div><p>Final body</p></div><div class='input-specification'>Input</div><div class='output-specification'>Output</div><div class='sample-tests'><div class='sample-test'><div class='input'><pre>1</pre></div><div class='output'><pre>2</pre></div></div></div></div>";
+        assert!(super::is_cf_statement_html(full));
+        assert!(!super::is_cf_statement_html(&full.replace("<div class='output'><pre>2</pre></div>", "")));
+        let description = cf_description(&Html::parse_document(full)).unwrap();
+        assert!(description.contains("Opening") && description.contains("Final body"));
+        assert!(!description.contains("sample-tests") && !description.contains("input-specification"));
     }
 
     use super::*;
@@ -1329,7 +1352,7 @@ mod tests {
             std::thread::spawn(move || {
                 let result = (|| {
                     std::thread::sleep(std::time::Duration::from_millis(250));
-                    window.eval(r#"document.head.innerHTML='<meta http-equiv="Content-Security-Policy" content="connect-src &apos;none&apos;; img-src &apos;none&apos;">';document.body.innerHTML='<div class="problem-statement"><div class="title">A. Theatre Square</div><p>Body</p><pre>6 6 4</pre></div>';"#).map_err(|error| error.to_string())?;
+                    window.eval(r#"document.head.innerHTML='<meta http-equiv="Content-Security-Policy" content="connect-src &apos;none&apos;; img-src &apos;none&apos;">';document.body.innerHTML='<div class="problem-statement"><div class="title">A. Theatre Square</div><p>Body</p></div>';setTimeout(function(){document.querySelector('.problem-statement').insertAdjacentHTML('beforeend','<p>Final paragraph</p><div class="input-specification">Input</div><div class="output-specification">Output</div><div class="sample-test"><div class="input"><pre>6 6 4</pre></div><div class="output"><pre>4</pre></div></div>');},1200);"#).map_err(|error| error.to_string())?;
                     let html = capture_cf_statement(&window, &AtomicBool::new(false))?;
                     if window.is_visible().map_err(|error| error.to_string())? {
                         return Err("statement capture opened a visible window".to_string());
@@ -1349,6 +1372,7 @@ mod tests {
         let html = receiver.recv_timeout(std::time::Duration::from_secs(1)).unwrap().unwrap();
         assert!(html.contains("Theatre Square"));
         assert!(html.contains("6 6 4"));
+        assert!(html.contains("Final paragraph"));
     }
 
     #[test]

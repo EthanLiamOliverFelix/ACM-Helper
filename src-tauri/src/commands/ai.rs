@@ -153,6 +153,18 @@ fn response_text(body: &Value, protocol: &str) -> String {
     }
 }
 
+fn validate_completed_response(body: &Value, protocol: &str) -> Result<(), String> {
+    let reason = if protocol == "chat_completions" {
+        body.pointer("/choices/0/finish_reason").and_then(Value::as_str)
+            .filter(|reason| *reason != "stop")
+    } else {
+        body.get("status").and_then(Value::as_str).filter(|status| *status != "completed")
+    };
+    if let Some(reason) = reason { return Err(format!("AI 回复未完整生成（{reason}），未保存译文，请重新翻译")); }
+    if let Some(message) = extract_api_error(body) { return Err(format!("AI 返回错误: {message}")); }
+    Ok(())
+}
+
 fn stream_delta(body: &Value, protocol: &str) -> Option<String> {
     if protocol == "chat_completions" {
         body.pointer("/choices/0/delta/content")
@@ -321,6 +333,7 @@ pub async fn ai_chat(
         let message = extract_api_error(&body).unwrap_or("未知 API 错误");
         return Err(format!("AI API {}: {}", status, message));
     }
+    validate_completed_response(&body, &protocol)?;
     let text = response_text(&body, &protocol);
     if text.trim().is_empty() {
         return Err("模型没有返回文本内容".into());
@@ -498,6 +511,17 @@ mod tests {
             ]
         });
         assert_eq!(extract_responses_text(&body), "第一段\n第二段");
+    }
+
+    #[test]
+    fn rejects_truncated_translation_responses() {
+        assert!(validate_completed_response(&json!({"choices":[{"finish_reason":"length"}]}), "chat_completions").is_err());
+        assert!(validate_completed_response(&json!({"status":"incomplete"}), "responses").is_err());
+        assert!(validate_completed_response(&json!({"status":"failed","error":{"message":"failed"}}), "responses").is_err());
+        assert!(validate_completed_response(&json!({"choices":[{"finish_reason":"stop"}]}), "chat_completions").is_ok());
+        assert!(validate_completed_response(&json!({"status":"completed"}), "responses").is_ok());
+        // Some compatible gateways omit completion metadata entirely.
+        assert!(validate_completed_response(&json!({}), "chat_completions").is_ok());
     }
 
     #[test]

@@ -14,7 +14,7 @@ const emit = defineEmits<{ 'diagnostic-delivered': [id: number] }>()
 const store = useProblemStore()
 const workbench = useWorkbenchStore()
 const { startPointerResize } = usePointerResize()
-type Session = { key: number; id?: number; label: string; directory: string; terminal: Terminal; fit: FitAddon; host?: HTMLElement; observer?: ResizeObserver; inputCleanup?: () => void; busy: boolean; exited: boolean; disposed: boolean; error: string; pending: string; queue: Promise<void>; starting?: Promise<void>; lastOutputAt: number; promptReady: boolean; inputUsed: boolean }
+type Session = { key: number; id?: number; label: string; directory: string; terminal: Terminal; fit: FitAddon; host?: HTMLElement; observer?: ResizeObserver; inputCleanup?: () => void; busy: boolean; exited: boolean; disposed: boolean; error: string; pending: string; queue: Promise<void>; starting?: Promise<void>; lastOutputAt: number; promptReady: boolean; inputUsed: boolean; diagnostic: string }
 const sessions = ref<Session[]>([])
 const selected = ref(0)
 const active = computed(() => sessions.value.find(session => session.key === selected.value))
@@ -26,7 +26,7 @@ let disposed = false
 let lastRequest = 0
 let themeObserver: MutationObserver | undefined
 let initialSession: Promise<Session> | undefined
-let diagnosticSessionKey: number | undefined
+
 const terminalSizes = new Map<number, string>()
 
 function updateTheme(session: Session) {
@@ -69,7 +69,7 @@ async function createSession(diagnostic = false) {
   const terminal = markRaw(new Terminal({ fontSize: 13, fontFamily: '"Cascadia Mono", Consolas, monospace', cursorBlink: true, scrollback: 5000 }))
   const fit = markRaw(new FitAddon())
   terminal.loadAddon(fit)
-  const session = reactive<Session>({ key, label: diagnostic ? 'CPH 编译报错' : `${path?.split(/[\\/]/).pop() || 'PowerShell'} · ${key}`, directory: '', terminal, fit, busy: true, exited: false, disposed: false, error: '', pending: '', queue: markRaw(Promise.resolve()), lastOutputAt: Date.now(), promptReady: false, inputUsed: false })
+  const session = reactive<Session>({ key, label: diagnostic ? 'CPH 编译报错' : `${path?.split(/[\\/]/).pop() || 'PowerShell'} · ${key}`, directory: '', terminal, fit, busy: true, exited: false, disposed: false, error: '', pending: '', queue: markRaw(Promise.resolve()), lastOutputAt: Date.now(), promptReady: false, inputUsed: false, diagnostic: '' })
   sessions.value.push(session)
   selected.value = key
   session.starting = markRaw((async () => {
@@ -113,7 +113,7 @@ async function createSession(diagnostic = false) {
 async function removeSession(session: Session) {
   if (session.disposed) return
   session.disposed = true
-  if (diagnosticSessionKey === session.key) diagnosticSessionKey = undefined
+
   terminalSizes.delete(session.key)
   const index = sessions.value.findIndex(item => item.key === session.key)
   if (index >= 0) sessions.value.splice(index, 1)
@@ -133,6 +133,7 @@ async function run(action: 'run' | 'compile-run' | 'compile') {
     if (!store.draftPath) throw new Error('请先修改并保存代码，再运行')
     if (!session || session.exited || session.id == null) session = await createSession()
     if (session.id == null || session.exited || session.disposed) return
+    session.diagnostic = ''
     session.busy = true
     session.inputUsed = true
     session.error = ''
@@ -157,59 +158,38 @@ async function handleRequest() {
   if (request.action !== 'show') await run(request.action === 'run' ? 'compile-run' : request.action === 'run-existing' ? 'run' : 'compile')
   else { if (!active.value) await createSession(); await nextTick(); resize(); active.value?.terminal.focus() }
 }
+const dismissedDiagnostics = new Set<number>()
 const deliverDiagnostics = createDiagnosticDelivery(async (diagnostic, isCurrent) => {
   if (initialSession) await initialSession
-  // A terminal may be deleted while startup or delivery is in flight. Recover
-  // once for this diagnostic; startup failures must never create a retry loop.
-  for (let attempt = 0; attempt < 2; attempt++) {
-    if (!isCurrent()) return
-    if (disposed) throw new Error('终端已关闭')
-    let session = sessions.value.find(item => item.key === diagnosticSessionKey)
-    // Never inject a command into a user's partial input or a running program.
-    if (!session || session.disposed || session.exited || session.inputUsed || (!session.busy && session.id == null)) {
-      session = await createSession(true)
-      if (!session.disposed && !disposed) diagnosticSessionKey = session.key
-    }
-    if (!isCurrent()) return
-    selected.value = session.key
-    if (session.starting) await session.starting
-    await nextTick()
-    resize(session)
-    if (!session.disposed && !session.exited && session.id == null) throw new Error(session.error || '终端未就绪')
-    // Wait until the shell can accept its diagnostic printing command.
-    const deadline = Date.now() + 5000
-    const windows = /Windows/i.test(navigator.userAgent)
-    while (isCurrent() && !disposed && !session.disposed && !session.exited && !session.inputUsed && Date.now() < deadline
-        && ((windows && !session.promptReady) || Date.now() - session.lastOutputAt < 150)) {
-      await new Promise(resolve => window.setTimeout(resolve, 50))
-    }
-    if (!isCurrent()) return
-    if (disposed) throw new Error('终端已关闭')
-    if (session.disposed || session.exited || session.inputUsed) {
-      if (attempt === 0) continue
-      throw new Error('报错终端已关闭或正在输入命令；请重新运行测试点')
-    }
-    if (session.id == null) throw new Error(session.error || '终端未就绪')
-    try {
-      await invoke('print_terminal_diagnostic', { id: session.id, text: diagnosticText(diagnostic) })
-    } catch (cause) {
-      // The backend can notice a closed shell before its channel exit event.
-      if (attempt === 0 && (session.disposed || session.exited || String(cause) === '终端已结束')) {
-        if (!session.disposed) await removeSession(session)
-        continue
-      }
-      throw cause
-    }
-    if (!session.disposed) session.terminal.scrollToBottom()
-    error.value = ''
-    return
+  if (!isCurrent() || disposed || dismissedDiagnostics.has(diagnostic.id)) return
+  // Compiler stderr is independent of the interactive shell. Display it inside
+  // the selected tab without injecting commands into PowerShell/PSReadLine.
+  let session = active.value
+  if (!session || session.disposed) session = await createSession(true)
+  if (!isCurrent() || disposed || dismissedDiagnostics.has(diagnostic.id)) return
+  if (session.disposed) {
+    // Recover once if the user deleted the tab during startup.
+    session = active.value ?? await createSession(true)
+    if (!isCurrent() || disposed || dismissedDiagnostics.has(diagnostic.id)) return
+    if (session.disposed) throw new Error('终端已关闭，请重新运行测试点')
   }
+  selected.value = session.key
+  session.diagnostic = diagnosticText(diagnostic).trimEnd()
+  error.value = ''
+  await nextTick()
+  resize(session)
 }, id => emit('diagnostic-delivered', id), cause => { if (!disposed) error.value = String(cause) })
 watch(() => props.diagnostics, items => { void deliverDiagnostics(items) })
 function clearActiveTerminal() {
-  if (!active.value) return
-  active.value.terminal.clear()
-  active.value.terminal.focus()
+  const session = active.value
+  if (!session) return
+  session.diagnostic = ''
+  for (const diagnostic of props.diagnostics) {
+    dismissedDiagnostics.add(diagnostic.id)
+    emit('diagnostic-delivered', diagnostic.id)
+  }
+  session.terminal.clear()
+  session.terminal.focus()
 }
 watch(() => workbench.terminalRequest.sequence, () => { void handleRequest() })
 watch([selected, () => props.visible, () => sessions.value.length], async () => { await nextTick(); resize(); if (props.visible) active.value?.terminal.focus() })
@@ -218,8 +198,8 @@ onMounted(async () => {
   themeObserver.observe(document.documentElement, { attributes: true, attributeFilter: ['data-theme'] })
   const forDiagnostic = props.diagnostics.length > 0
   initialSession = createSession(forDiagnostic)
-  const session = await initialSession
-  if (forDiagnostic && !session.disposed && !disposed) diagnosticSessionKey = session.key
+  await initialSession
+
   if (!disposed) { void deliverDiagnostics(props.diagnostics); await handleRequest() }
 })
 onBeforeUnmount(() => {
@@ -240,6 +220,7 @@ onBeforeUnmount(() => {
     <div v-if="error || active?.error" class="terminal-error" role="alert">{{ error || active?.error }}</div>
     <div ref="body" class="terminal-body">
       <div class="terminal-content">
+        <pre v-if="active?.diagnostic" class="terminal-diagnostic" aria-label="CPH 编译报错" tabindex="0">{{ active.diagnostic }}</pre>
         <div v-for="session in sessions" v-show="selected === session.key" :key="session.key" :ref="element => mountHost(session, element)" class="terminal-host" />
         <div v-if="!sessions.length" class="terminal-empty">点击 + 新建终端</div>
       </div>
@@ -264,7 +245,8 @@ onBeforeUnmount(() => {
 .terminal-actions button:disabled { opacity:.4; cursor:default; }
 .terminal-actions .codicon { font-size:17px; }
 .terminal-body { display:flex; flex:1; min-height:0; }
-.terminal-content { flex:1; min-width:0; display:flex; }
+.terminal-content { flex:1; min-width:0; min-height:0; display:flex; flex-direction:column; }
+.terminal-diagnostic { flex:0 1 auto; min-height:0; max-height:65%; overflow:auto; margin:0; padding:6px 10px; border-bottom:1px solid var(--color-border-soft); color:var(--color-text-primary); background:var(--color-bg-deep); font:13px/1.45 "Cascadia Mono",Consolas,monospace; white-space:pre; }
 .terminal-host { flex:1; min-width:0; min-height:0; padding:6px 10px; overflow:hidden; }
 .terminal-host :deep(.xterm) { height:100%; }
 .terminal-error { padding:4px 10px; color:var(--color-danger); font-size:12px; }

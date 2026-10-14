@@ -176,7 +176,7 @@ describe('code-first navigation', () => {
     expect(mocks.invoke.mock.calls.filter(([command]) => command === 'fetch_problem_detail_cf')).toEqual([
       ['fetch_problem_detail_cf', { problemId: '1A' }],
     ])
-    finish({ id: '1A', title: 'Theatre Square', platform: 'codeforces', tags: [], contentFormat: 'html', description: '<p>Statement</p>' })
+    finish({ id: '1A', title: 'Theatre Square', platform: 'codeforces', tags: [], contentFormat: 'html', description: '<p>Statement</p>', input: 'Input', output: 'Output', samples: [{ input: '1', output: '2' }] })
     for (let index = 0; index < 8; index++) await Promise.resolve()
     expect(store.currentProblem?.description).toBe('<p>Statement</p>')
     expect(store.importedProblems[0]?.description).toBe('<p>Statement</p>')
@@ -186,7 +186,7 @@ describe('code-first navigation', () => {
     const store = useProblemStore()
     const reference = { id: '1A', title: 'Theatre Square', platform: 'codeforces' as const, tags: [], url: 'https://codeforces.com/problemset/problem/1/A' }
     store.problems = [{ ...reference }]
-    store.importedProblems = [{ ...reference, contentFormat: 'html', description: '<p>Cached</p>' }]
+    store.importedProblems = [{ ...reference, contentFormat: 'html', description: '<p>Cached</p>', input: 'Input', output: 'Output', samples: [{ input: '1', output: '2' }] }]
     await store.openRecommendedProblem(reference)
     await paint()
     expect(store.currentProblem?.description).toBe('<p>Cached</p>')

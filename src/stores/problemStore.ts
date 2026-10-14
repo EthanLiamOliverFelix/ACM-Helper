@@ -13,6 +13,7 @@ import { getDataCenterValue, saveDataCenterValue } from '../dataCenter'
 import { withOjDiagnostic } from '../diagnostics'
 import { normalizeOutput } from '../utils/outputDiff'
 import { compareCodeforcesProblems } from '../utils/problemSort'
+import { statementError } from '../utils/statementIntegrity'
 import { isLuoguJudging, luoguSubmissionVerdicts as luoguVerdicts, resolveLuoguRecordVerdict } from '../utils/luoguSubmission'
 
 export const useProblemStore = defineStore('problem', () => {
@@ -1452,7 +1453,7 @@ export const useProblemStore = defineStore('problem', () => {
   async function fetchProblemDetail(problem: Problem, force = false) {
     if (problem.platform === 'local') return
     const isCfMissingRich = problem.platform === 'codeforces'
-      && !(problem.description && problem.contentFormat === 'html')
+      && (!(problem.description && problem.contentFormat === 'html') || !!statementError(problem))
     const isLuoguMissingRich = problem.platform === 'luogu'
       && !(problem.description && problem.contentFormat === 'markdown')
     const isAtCoderMissingRich = problem.platform === 'atcoder'
@@ -1472,6 +1473,8 @@ export const useProblemStore = defineStore('problem', () => {
                 ? `https://atcoder.jp/contests/${problem.id.split('_')[0]}/tasks/${problem.id}`
                 : problem.platform === 'qoj' ? qojProblemUrl(problem.id) : problem.url ?? ''),
           }))
+      const incomplete = statementError(detail, problem)
+      if (incomplete) throw new Error(`${incomplete}，未覆盖已有题面，请重试`)
       Object.assign(problem, detail, {
         title: problem.platform === 'qoj' && isQojPlaceholderTitle(detail.title, detail.id) && !isQojPlaceholderTitle(problem.title, problem.id) ? problem.title : detail.title,
         rating: preserved.rating ?? detail.rating,

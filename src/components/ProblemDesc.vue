@@ -12,7 +12,7 @@ import { atCoderVarMarkupToTex } from '../utils/atcoderMath'
 import { splitCodeforcesMathText } from '../utils/codeforcesMath'
 import { openUrl } from '@tauri-apps/plugin-opener'
 import { qojStatementPdfUrl } from '../utils/qoj'
-import { ojTranslationKey } from '../utils/ojTranslation'
+import { statementSource } from '../utils/statementIntegrity'
 import 'katex/dist/katex.min.css'
 import { useWorkbenchStore } from '../stores/workbenchStore'
 
@@ -21,11 +21,13 @@ const learning = useLearningStore()
 const ai = useAiStore()
 const workbench = useWorkbenchStore()
 const problemKey = computed(() => store.currentProblem ? `${store.currentProblem.platform}:${store.currentProblem.id}` : '')
-const translationKey = computed(() => store.currentProblem ? ojTranslationKey(store.currentProblem.platform, store.currentProblem.id) : '')
+const currentTranslation = computed(() => ai.translationFor(store.currentProblem))
+const showOriginal = ref(false)
+watch(problemKey, () => { showOriginal.value = false })
 const translationSupported = computed(() => {
   const problem = store.currentProblem
   if (!problem || !['codeforces', 'luogu', 'atcoder', 'qoj'].includes(problem.platform)) return false
-  if (ai.translations[translationKey.value]) return true
+  if (currentTranslation.value) return true
   const source = `${problem.title} ${problem.description ?? ''} ${problem.input ?? ''} ${problem.output ?? ''}`
     .replace(/<[^>]+>/g, ' ')
   const latin = (source.match(/[A-Za-z]/g) ?? []).length
@@ -34,8 +36,12 @@ const translationSupported = computed(() => {
 })
 const pdfUrl = computed(() => store.currentProblem?.platform === 'qoj' ? qojStatementPdfUrl(store.currentProblem.note) : null)
 const pdfMode = ref<'pdf' | 'text'>('pdf')
-watch(problemKey, () => { pdfMode.value = ai.translations[translationKey.value] ? 'text' : 'pdf' })
-watch(() => ai.translations[translationKey.value], value => { if (value) pdfMode.value = 'text' })
+watch(problemKey, () => { pdfMode.value = currentTranslation.value ? 'text' : 'pdf' })
+watch(() => currentTranslation.value, value => { if (value) { pdfMode.value = 'text'; showOriginal.value = false } })
+function toggleOriginal() {
+  showOriginal.value = !showOriginal.value
+  pdfMode.value = showOriginal.value && pdfUrl.value ? 'pdf' : 'text'
+}
 const showPdf = computed(() => Boolean(pdfUrl.value && pdfMode.value === 'pdf' && !store.isLoadingDetail))
 const translationError = computed(() => ai.error)
 const refreshError = ref('')
@@ -183,8 +189,8 @@ function renderStatementHtml() {
   if (store.isPreparingStatement || store.isLoadingDetail) return '<div class="desc-placeholder desc-placeholder--loading">正在加载题面…<div class="statement-skeleton"><i></i><i></i><i></i></div></div>'
   const esc = (value = '') => value.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
   if (!p.description) return `<div class="desc-placeholder">题面抓取失败或暂不可用<br/><a href="${esc(p.url)}" target="_blank">在原 OJ 打开 →</a></div>`
-  const translated = ai.translations[ojTranslationKey(p.platform, p.id)]
-  if (translated) return safeRichText(translated, 'markdown', p.url)
+  const translated = ai.translationFor(p)
+  if (translated && !showOriginal.value) return safeRichText(translated, 'markdown', p.url)
   const format = p.contentFormat ?? 'text'
   const section = (title: string, value?: string) => value ? `<h2 class="desc-h2">${title}</h2><div>${safeRichText(value, format, p.url)}</div>` : ''
   return `<div>${safeRichText(p.description, format, p.url)}</div>${section('输入', p.input)}${section('输出', p.output)}${section('说明', p.note)}`
@@ -196,7 +202,7 @@ let cancelStatementRender: (() => void) | undefined
 watch(() => {
   const p = store.currentProblem
   return [p?.platform, p?.id, p?.description, p?.input, p?.output, p?.note, p?.contentFormat, p?.url,
-    store.isLoadingDetail, store.isPreparingStatement, p ? ai.translations[ojTranslationKey(p.platform, p.id)] : undefined]
+    store.isLoadingDetail, store.isPreparingStatement, showOriginal.value, p ? ai.translationFor(p) : undefined]
 }, source => {
   cancelStatementRender?.()
   const key = JSON.stringify(source)
@@ -221,9 +227,9 @@ async function retranslate() {
   try { await ai.translateCurrentProblem(true) } catch (e) { ai.error = String(e) }
 }
 
-watch(problemKey, async () => {
+watch(() => [problemKey.value, store.currentProblem ? statementSource(store.currentProblem) : '', store.isLoadingDetail, store.isPreparingStatement], async () => {
   const problem = store.currentProblem
-  if (!problem || !['codeforces', 'luogu', 'atcoder', 'qoj'].includes(problem.platform)) return
+  if (!problem || store.isLoadingDetail || store.isPreparingStatement || !['codeforces', 'luogu', 'atcoder', 'qoj'].includes(problem.platform)) return
   try { await ai.loadCachedTranslation(problem.id, problem.platform) } catch (e) { ai.error = String(e) }
 }, { immediate: true })
 
@@ -338,9 +344,10 @@ async function closeLocalStatement() {
       <div class="problem-desc__actions">
         <button class="note-btn" :disabled="noteLoading" title="在编辑区打开这道题的本地 Markdown 笔记" @click="openProblemNote">{{ noteLoading ? '打开中…' : '▧ 题目笔记' }}</button>
         <button v-if="store.currentProblem.platform === 'local' && store.draftPath" class="statement-edit-btn" title="用 Markdown 记录这份本地代码对应的题面" @click="openLocalStatement">▤ 编辑题面</button>
-        <button v-if="store.currentProblem.platform !== 'local'" class="refresh-btn" :disabled="store.isLoadingDetail" title="忽略已有题面，重新从原 OJ 抓取；不会影响本地代码" @click="refreshStatement">{{ store.isLoadingDetail ? '抓取中…' : '↻ 重新抓取' }}</button>
-        <button v-if="translationSupported && !ai.translations[translationKey]" class="translate-btn" :disabled="ai.isTranslating || !ai.translationConfigured" :title="ai.translationConfigured ? '使用已配置的翻译模型翻译完整题面' : '请先在顶部设置中配置翻译模型'" @click="translate">{{ ai.isTranslating ? '翻译中…' : '译 AI 翻译' }}</button>
-        <button v-if="translationSupported && ai.translations[translationKey]" class="retranslate-btn" :disabled="ai.isTranslating || !ai.translationConfigured" :title="ai.translationConfigured ? '重新调用翻译模型并覆盖本地译文' : '请先在顶部设置中配置翻译模型'" @click="retranslate">{{ ai.isTranslating ? '重新翻译中…' : '译 重新翻译' }}</button>
+        <button v-if="store.currentProblem.platform !== 'local'" class="refresh-btn" :disabled="store.isLoadingDetail || ai.isTranslating" title="忽略已有题面，重新从原 OJ 抓取；不会影响本地代码" @click="refreshStatement">{{ store.isLoadingDetail ? '抓取中…' : '↻ 重新抓取' }}</button>
+        <button v-if="translationSupported && !currentTranslation" class="translate-btn" :disabled="ai.isTranslating || store.isLoadingDetail || store.isPreparingStatement || !ai.translationConfigured" :title="ai.translationConfigured ? '使用已配置的翻译模型翻译完整题面' : '请先在顶部设置中配置翻译模型'" @click="translate">{{ ai.isTranslating ? '翻译中…' : '译 AI 翻译' }}</button>
+        <button v-if="translationSupported && currentTranslation" class="retranslate-btn" :disabled="ai.isTranslating || store.isLoadingDetail || store.isPreparingStatement || !ai.translationConfigured" :title="ai.translationConfigured ? '重新调用翻译模型并覆盖本地译文' : '请先在顶部设置中配置翻译模型'" @click="retranslate">{{ ai.isTranslating ? '重新翻译中…' : '译 重新翻译' }}</button>
+        <button v-if="translationSupported && currentTranslation" class="original-btn" :aria-pressed="showOriginal" :disabled="store.isLoadingDetail || store.isPreparingStatement" @click="toggleOriginal">{{ showOriginal ? '显示译文' : '显示原文' }}</button>
         <span v-if="learning.profile.solvedProblems.includes(problemKey)" class="solved-btn solved-btn--active">✓ 已完成</span>
       </div>
     </div>
@@ -349,7 +356,7 @@ async function closeLocalStatement() {
     </div>
     <div class="problem-desc__content">
       <div v-if="pdfUrl" class="qoj-pdf-tools">
-        <button :class="{ active: pdfMode === 'pdf' }" @click="pdfMode = 'pdf'">原始 PDF</button>
+        <button :class="{ active: pdfMode === 'pdf' }" @click="pdfMode = 'pdf'; showOriginal = true">原始 PDF</button>
         <button :class="{ active: pdfMode === 'text' }" @click="pdfMode = 'text'">提取文字</button>
         <a :href="pdfUrl" @click="openStatementLink">打开原始 PDF ↗</a><span>公式和版式请以原始 PDF 为准</span>
       </div>
@@ -383,6 +390,7 @@ async function closeLocalStatement() {
     </div>
     <div v-if="refreshNotice" class="problem-desc__notice">{{ refreshNotice }}</div>
     <div v-if="refreshError" class="problem-desc__error">重新抓取失败：{{ refreshError }}（已保留原题面）</div>
+    <div v-if="store.currentProblem && ai.translations[`${store.currentProblem.platform}:${store.currentProblem.id.trim().toUpperCase()}`] && !currentTranslation && !store.isLoadingDetail" class="problem-desc__notice">旧译文与当前题面版本不匹配或无法校验，已显示原题面，请重新翻译。</div>
     <div v-if="translationError" class="problem-desc__error">{{ translationError }}</div>
     <div v-if="linkError" class="problem-desc__error">链接打开失败：{{ linkError }}</div>
     <div v-if="noteError" class="problem-desc__error">笔记打开失败：{{ noteError }}</div>
@@ -564,6 +572,7 @@ async function closeLocalStatement() {
 }
 .translate-btn, .retranslate-btn { padding: 4px 9px; border: 1px solid var(--color-tone-7c5bb5); border-radius: 4px; background: var(--color-tone-34264b); color: var(--color-tone-d8c3ff); cursor: pointer; &:disabled { opacity: .38; cursor: not-allowed; } }
 .retranslate-btn { border-color: var(--color-tone-66527f); background: var(--color-tone-2b2435); color: var(--color-tone-bda8d7); }
+.original-btn { padding: 4px 9px; border: 1px solid var(--color-accent-border); border-radius: 4px; background: var(--color-accent-surface); color: var(--color-accent-text); cursor: pointer; &:disabled { opacity: .4; cursor: not-allowed; } }
 .refresh-btn { padding: 4px 9px; border: 1px solid var(--color-accent-border); border-radius: 4px; background: var(--color-tone-233544); color: var(--color-accent-text); cursor: pointer; white-space: nowrap; &:disabled { opacity: .45; cursor: wait; } }
 .note-btn { padding: 4px 9px; border: 1px solid var(--color-tone-4c7d4d); border-radius: 4px; background: var(--color-tone-203b27); color: var(--color-tone-a9dbb1); cursor: pointer; white-space: nowrap; &:disabled { opacity: .45; cursor: wait; } }
 .statement-edit-btn { padding: 4px 9px; border: 1px solid var(--color-tone-7b6841); border-radius: 4px; background: var(--color-tone-3a3020); color: var(--color-tone-e5c77d); cursor: pointer; white-space: nowrap; }

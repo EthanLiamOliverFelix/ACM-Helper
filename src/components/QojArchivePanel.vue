@@ -2,11 +2,13 @@
 import { computed, onMounted, ref } from 'vue'
 import { useProblemStore } from '../stores/problemStore'
 import { useProblemSetStore } from '../stores/problemSetStore'
+import { useLearningStore } from '../stores/learningStore'
 import type { QojArchiveEntry, QojArchiveProblem } from '../types'
 
 const emit = defineEmits<{ back: [] }>()
 const store = useProblemStore()
 const sets = useProblemSetStore()
+const learning = useLearningStore()
 const importing = ref('')
 const notice = ref('')
 async function importContest(entry: QojArchiveEntry) {
@@ -69,7 +71,7 @@ onMounted(() => { if (!store.qojArchivePage) void load() })
     <div v-else class="archive-content">
       <template v-if="store.qojSelectedContest">
         <button v-for="problem in contestProblems" :key="problem.id" class="problem-row" :disabled="!!opening" @click="openProblem(problem)">
-          <span class="problem-label">{{ problem.label }}</span><span class="problem-name">{{ problem.title }}<small v-if="opening === problem.id">正在打开…</small></span>
+          <span class="problem-label">{{ problem.label }}</span><span class="problem-name"><span v-if="learning.profile.solvedProblems.includes(`qoj:${problem.id}`)" class="problem-solved" title="已完成" aria-label="已完成">✓</span>{{ problem.title }}<small v-if="opening === problem.id">正在打开…</small></span>
           <span v-if="problem.acceptedTeams != null && problem.submittedTeams != null" class="team-ratio" title="通过队伍 / 所有提交队伍">{{ problem.acceptedTeams }}/{{ problem.submittedTeams }}</span>
         </button>
         <p v-if="!contestProblems.length" class="empty">没有找到对应题目</p>
@@ -102,6 +104,7 @@ header button { padding: 6px; color: var(--color-accent-text); }
 .archive-section { margin-bottom: 16px; h3 { font-size: 17px; margin: 8px 0; padding-bottom: 8px; border-bottom: 1px solid var(--color-border-soft); } }
 .archive-row { display: flex; align-items: center; gap: 10px; padding: 12px 10px; width: 100%; border: 1px solid var(--color-border-soft); border-radius: 5px; margin-bottom: 6px; text-align: left; background: var(--color-bg-control-alt); &:hover { background: var(--color-accent-surface); border-color: var(--color-accent-border); } > i:first-child { color: var(--color-accent-text); font-size: 18px; } > span { flex: 1; min-width: 0; } strong { font-weight: 500; font-size: 13px; overflow-wrap: anywhere; } small { display: block; color: var(--color-text-soft); font-size: 11px; margin-top: 5px; } }
 .problem-row { display: flex; align-items: center; gap: 10px; padding: 12px 8px; width: 100%; border-bottom: 1px solid var(--color-border-soft); text-align: left; &:hover { background: var(--color-accent-surface); } }
+.problem-solved { display: inline-block; margin-right: 6px; color: var(--color-success-bright); font-weight: 700; }
 .problem-label { color: var(--color-accent-text); font-weight: 700; min-width: 20px; }.problem-name { flex: 1; min-width: 0; overflow-wrap: anywhere; font-size: 13px; small { display: block; color: var(--color-text-soft); } }.team-ratio { background: var(--color-bg-control-alt); padding: 4px 7px; border-radius: 4px; font-size: 12px; white-space: nowrap; color: var(--color-accent-text); }
 .loading, .empty { padding: 25px 12px; color: var(--color-text-soft); font-size: 12px; }.loading { display: flex; gap: 8px; }.error { padding: 10px; color: var(--color-danger); font-size: 12px; overflow-wrap: anywhere; }
 footer { display: flex; gap: 8px; align-items: center; border-top: 1px solid var(--color-border-soft); padding: 10px; input { width: 100%; background: var(--color-bg-control-alt); border: 1px solid var(--color-border-control); border-radius: 4px; color: inherit; padding: 7px; outline: none; &:focus { border-color: var(--color-accent-border); } } }

@@ -189,6 +189,14 @@ function removeGroup(id: string) {
   flash('已删除组，内容已移到上一级')
 }
 
+function removeSet(id: string) {
+  itemMenu.value = null
+  sets.deleteSet(id)
+  selection.replace([...selection.selected].filter(selectedId => selectedId !== id))
+  confirmBulkDelete.value = false
+  flash('已删除题单')
+}
+
 function startItemDrag(id: string, event: DragEvent) {
   // Keep an in-progress pointer gesture; starting a second native drag would
   // cancel its pointer stream and remove the floating preview.
@@ -593,8 +601,9 @@ async function addBatch() {
     const result = await sets.addProblemsBatch(batchInput.value)
     const parts = [`成功添加 ${result.added} 道`]
     if (result.duplicates) parts.push(`${result.duplicates} 道已存在`)
+    if (result.failed.length) parts.push(`${result.failed.length} 项失败`)
     flash(parts.join('，'))
-    if (result.failed.length) error.value = `未识别 ${result.failed.length} 项：${result.failed.join('；')}`
+    if (result.failures.length) error.value = `添加失败 ${result.failures.length} 项：\n${result.failures.map(item => `第 ${item.line} 行「${item.raw}」：${item.reason}`).join('\n')}`
     if (result.added || result.duplicates) batchInput.value = result.failed.join('\n')
   } catch (reason) { error.value = String(reason) }
   finally { batchAdding.value = false }
@@ -865,7 +874,20 @@ watch(() => itemDialog.mode, mode => {
       <div class="detail-progress-label"><span>{{ solvedCount }}/{{ visibleActiveSetProblemCount }} 已完成</span><em v-if="metadataLoading">正在补全题目信息…</em></div>
       <div class="progress"><i :style="{ width: `${visibleActiveSetProblemCount ? solvedCount / visibleActiveSetProblemCount * 100 : 0}%` }" /></div>
       <div v-if="sets.activeSet.source" class="source-info">来自洛谷 #{{ sets.activeSet.source.trainingId }} · {{ sets.activeSet.source.providerName }}</div>
-      <div v-if="editingSet" class="add-actions"><button :disabled="!problems.currentProblem || (problems.currentProblem.platform !== 'codeforces' && problems.currentProblem.platform !== 'luogu')" @click="addCurrent">＋ 加入当前题目</button><form @submit.prevent="addBatch"><textarea v-model="batchInput" rows="2" placeholder="批量粘贴链接、题号或题名；空格或换行分隔链接"></textarea><button :disabled="!batchInput.trim() || batchAdding">{{ batchAdding ? '添加中…' : '批量添加' }}</button></form><small>支持 P1000、977A、题目名称，以及“洛谷-P1000/题名”等格式</small></div>
+      <div v-if="editingSet" class="add-actions">
+        <button :disabled="!problems.currentProblem || (problems.currentProblem.platform !== 'codeforces' && problems.currentProblem.platform !== 'luogu')" @click="addCurrent">＋ 加入当前题目</button>
+        <form @submit.prevent="addBatch"><textarea v-model="batchInput" rows="2" placeholder="批量粘贴链接、题号或题名；空格或换行分隔链接"></textarea><button :disabled="!batchInput.trim() || batchAdding">{{ batchAdding ? '添加中…' : '批量添加' }}</button></form>
+        <details class="add-format-help">
+          <summary>支持链接、题号或题名，点击查看添加格式</summary>
+          <div class="add-format-help__body">
+            <p>链接：<code>https://www.luogu.com.cn/problem/P1000</code>，多个链接用空格或换行分隔。</p>
+            <p>洛谷：<code>P1000</code>、<code>洛谷-P1000</code> 或 <code>洛谷-P1000/超级玛丽游戏</code></p>
+            <p>Codeforces：<code>977A</code>、<code>1163C2</code> 或 <code>CF-1163C2</code></p>
+            <p>AtCoder：<code>abc250_f</code> 或 <code>AT-abc250_f</code></p>
+            <p>QOJ：<code>QOJ-14687</code>，纯数字题号需加 <code>QOJ-</code> 前缀。</p>
+          </div>
+        </details>
+      </div>
       <div v-if="notice" class="notice">{{ notice }}</div><div v-if="error" class="error">{{ error }}</div>
       <ul ref="problemListElement" class="problem-items set-problem-items">
         <li v-for="problem in filteredProblems" :key="`${problem.platform}:${problem.id}`" :data-problem-key="`${problem.platform}:${problem.id}`" :class="{ moving: movingProblemKey === `${problem.platform}:${problem.id}`, 'drop-before': problemDrop?.key === `${problem.platform}:${problem.id}` && problemDrop.side === 'before', 'drop-after': problemDrop?.key === `${problem.platform}:${problem.id}` && problemDrop.side === 'after' }">
@@ -938,6 +960,7 @@ watch(() => itemDialog.mode, mode => {
             <button role="menuitem" @click="editItem('rename', menuItem.id, menuItem.name)"><i aria-hidden="true" class="codicon codicon-edit" />重命名</button>
             <button role="menuitem" @click="editItem('move', menuItem.id, menuItem.name, menuItem.parentId)"><i aria-hidden="true" class="codicon codicon-arrow-right" />移动到…</button>
             <button v-if="menuIsGroup" class="danger" role="menuitem" title="组内题单和子组将移至上一级" @click="removeGroup(menuItem.id)"><i aria-hidden="true" class="codicon codicon-trash" />删除组</button>
+            <button v-else class="danger" role="menuitem" @click="removeSet(menuItem.id)"><i aria-hidden="true" class="codicon codicon-trash" />删除题单</button>
           </template>
         </div>
       </div>
@@ -979,7 +1002,7 @@ button, input { font: inherit; }.panel-header { display: flex; align-items: cent
 .categories { display: flex; gap: 4px; padding: 2px 9px 7px; overflow-x: auto; button { flex: 0 0 auto; padding: 4px 6px; border: 1px solid var(--color-tone-3d3d3d); border-radius: 4px; background: var(--color-bg-panel); color: var(--color-tone-999); font-size: 8px; cursor: pointer; &.active { border-color: var(--color-accent-border); background: var(--color-accent-surface); color: var(--color-accent-text); } } }.training-items li { align-items: center; div > span { color: var(--color-text-faint); font-size: 8px; } > button { padding: 5px 8px; border: 1px solid var(--color-tone-3b6e90); border-radius: 4px; background: var(--color-accent-surface-hover); color: var(--color-accent-text); font-size: 9px; &:disabled { opacity: .4; } } }.pagination { display: flex; justify-content: center; align-items: center; gap: 9px; padding: 6px; border-top: 1px solid var(--color-bg-subtle); color: var(--color-text-faint); font-size: 9px; button { width: 25px; border: 1px solid var(--color-border-control); border-radius: 3px; background: var(--color-bg-control-alt); color: var(--color-text-secondary); cursor: pointer; &:disabled { opacity: .3; } } }
 .contest-items { flex: 1; min-height: 0; overflow-y: auto; list-style: none; margin: 0; padding: 0 8px 10px; li { display: flex; align-items: stretch; gap: 4px; margin: 6px 0; border: 1px solid var(--color-border-soft); border-radius: 7px; background: var(--color-bg-panel); &:hover { border-color: var(--color-tone-536f85); } }.contest-open { display: grid; min-width: 0; flex: 1; grid-template-columns: 54px 1fr; align-items: center; gap: 11px; padding: 12px 14px; border: 0; background: transparent; color: var(--color-tone-ccc); text-align: left; cursor: pointer; > span { display: grid; place-items: center; min-height: 37px; border-radius: 6px; background: var(--color-accent-surface); color: var(--color-accent-text); font-size: 11px; } > div { display: flex; min-width: 0; flex-direction: column; gap: 6px; } strong { overflow: hidden; color: var(--color-text-strong); font-size: 14px; text-overflow: ellipsis; white-space: nowrap; } small { display: flex; align-items: center; gap: 10px; min-width: 0; color: var(--color-text-faint); font: 10px Consolas, monospace; > span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; } em { flex: 0 0 auto; padding: 2px 6px; border-radius: 4px; background: var(--color-bg-subtle); color: var(--color-text-secondary); font: 10px var(--font-ui); font-style: normal; &.complete { background: var(--color-success-surface); color: var(--color-success); } } } }.contest-remove { width: 34px; border: 0; border-left: 1px solid var(--color-border-soft); background: transparent; color: var(--color-text-faint); cursor: pointer; &:hover { color: var(--color-danger); } } }
 .contest-tabs { display: flex; gap: 5px; padding: 0 10px 8px; button { flex: 1; padding: 7px; border: 1px solid var(--color-border-control); border-radius: 5px; background: var(--color-bg-control-alt); color: var(--color-tone-888); font-size: 11px; cursor: pointer; &.active { border-color: var(--color-accent-border); background: var(--color-accent-surface); color: var(--color-accent-text); } } }.contest-section-title { padding: 4px 12px; color: var(--color-text-soft); font-size: 11px; }.contest-catalog-items { flex: 1; }.contest-pagination { flex: 0 0 auto; }.contest-favorite { width: 40px; border: 0; border-left: 1px solid var(--color-border-soft); background: transparent; color: var(--color-tone-888); font-size: 19px; cursor: pointer; &.active { color: var(--color-warning); } }.contest-problem-items { flex: 1; }.contest-problem-items > li > button { color: var(--color-tone-75beff); }
-.bottom-search { display: flex; align-items: center; gap: 5px; flex: 0 0 auto; padding: 8px 9px; border-top: 1px solid var(--color-border); background: var(--color-bg-panel); color: var(--color-text-faint); input { min-width: 0; flex: 1; padding: 6px 7px; border: 1px solid var(--color-border-control); border-radius: 4px; background: var(--color-bg-app); color: var(--color-text-strong); font-size: 10px; outline: none; &:focus { border-color: var(--color-accent); } } button { padding: 5px 8px; border: 0; border-radius: 3px; background: var(--color-accent-strong); color: var(--color-text-on-accent); font-size: 9px; cursor: pointer; } }.notice, .error { padding: 4px 10px; font-size: 9px; }.notice { color: var(--color-success); }.error { color: var(--color-danger); word-break: break-all; }.empty { padding: 28px 12px; color: var(--color-text-faint); text-align: center; font-size: 10px; }
+.bottom-search { display: flex; align-items: center; gap: 5px; flex: 0 0 auto; padding: 8px 9px; border-top: 1px solid var(--color-border); background: var(--color-bg-panel); color: var(--color-text-faint); input { min-width: 0; flex: 1; padding: 6px 7px; border: 1px solid var(--color-border-control); border-radius: 4px; background: var(--color-bg-app); color: var(--color-text-strong); font-size: 10px; outline: none; &:focus { border-color: var(--color-accent); } } button { padding: 5px 8px; border: 0; border-radius: 3px; background: var(--color-accent-strong); color: var(--color-text-on-accent); font-size: 9px; cursor: pointer; } }.notice, .error { padding: 4px 10px; font-size: 9px; }.notice { color: var(--color-success); }.error { color: var(--color-danger); word-break: break-all; white-space: pre-line; }.empty { padding: 28px 12px; color: var(--color-text-faint); text-align: center; font-size: 10px; }
 </style>
 
 <style scoped>
@@ -1019,6 +1042,9 @@ button, input { font: inherit; }.panel-header { display: flex; align-items: cent
 .set-problem-difficulty, .set-problem-rating { flex: 0 0 auto; border-radius: 3px; padding: 3px 5px; font-size: 11px; white-space: nowrap; }
 .set-problem-difficulty { color: #fff; }
 .set-problem-rating { color: var(--color-warning); font-weight: 600; }
+.add-format-help { margin-top: 5px; font-size: 10px; line-height: 1.6; summary { width: fit-content; max-width: 100%; color: var(--color-accent-text); text-decoration: underline; text-underline-offset: 2px; cursor: pointer; list-style: none; &::-webkit-details-marker { display: none; } &:focus-visible { outline: 1px solid var(--color-accent); outline-offset: 2px; border-radius: 2px; } } &__body { margin-top: 6px; padding: 7px 9px; border: 1px solid var(--color-border-control); border-radius: 4px; background: var(--color-bg-panel); color: var(--color-text-soft); overflow-wrap: anywhere; p { margin: 0 0 5px; &:last-child { margin-bottom: 0; } } code { color: var(--color-text-primary); font-family: Consolas, monospace; } } }
+.add-format-help { font-family: 'YouYuan', '幼圆', 'Microsoft YaHei UI', 'Microsoft YaHei', sans-serif; font-size: 12px; line-height: 1.75; }
+.add-format-help__body code { font-family: inherit; font-size: inherit; }
 .set-problem-solved { color: var(--color-success); font-size: 12px; }
 .set-problem-items > li > .set-problem-tags { display: flex; flex-direction: row; flex-wrap: wrap; gap: 4px; padding: 0 5px 6px; }
 .set-problem-tags span { padding: 1px 4px; border-radius: 3px; background: var(--color-bg-subtle); color: var(--color-text-muted); font-size: 10px; }

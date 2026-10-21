@@ -81,7 +81,7 @@ async function runAllTestCases() {
           <div v-if="!collapsed.has(test.id)" class="case-body">
             <label><span>输入:</span><button @click.stop="copy(test.input, `${test.id}:input`)">{{ copied === `${test.id}:input` ? '已复制' : '复制' }}</button><textarea v-model="test.input" spellcheck="false" @input="store.updateTestCase(test.id)" /></label>
             <label><span>预期输出:</span><button @click.stop="copy(test.expectedOutput, `${test.id}:expected`)">{{ copied === `${test.id}:expected` ? '已复制' : '复制' }}</button><textarea v-model="test.expectedOutput" spellcheck="false" @input="store.updateTestCase(test.id)" /></label>
-            <label v-if="test.status !== 'idle' && test.status !== 'running'" class="actual"><span>实际输出:</span><button @click.stop="copy(test.actualOutput, `${test.id}:actual`)">{{ copied === `${test.id}:actual` ? '已复制' : '复制' }}</button><textarea :value="test.actualOutput" readonly wrap="off" spellcheck="false" aria-label="实际输出" placeholder="程序没有输出" /></label>
+            <label v-if="test.status !== 'idle' && test.status !== 'running'" class="actual"><span>实际输出:</span><button @click.stop="copy(test.actualOutput, `${test.id}:actual`)">{{ copied === `${test.id}:actual` ? '已复制' : '复制' }}</button><textarea :value="test.actualOutput" readonly wrap="soft" spellcheck="false" aria-label="实际输出" placeholder="程序没有输出" /></label>
           </div>
         </article>
 
@@ -104,6 +104,7 @@ async function runAllTestCases() {
 label { display: grid; grid-template-columns: 1fr auto; align-items: center; margin-top: 9px; color: var(--color-text-soft); font-size: 13px; > button { padding: 2px 3px; border: 0; background: transparent; color: var(--color-text-faint); font-size: 10px; cursor: pointer; &:hover { color: var(--color-accent-text); } } }
 textarea { grid-column: 1 / -1; box-sizing: border-box; width: 100%; min-height: 140px; margin-top: 4px; resize: vertical; padding: 7px 9px; border: 1px solid var(--color-border); border-radius: 2px; outline: none; background: var(--color-bg-deep); color: var(--color-text-strong); font: 13px/1.45 Consolas, monospace; &:focus { border-color: var(--color-accent); } }
 .actual textarea::placeholder { color: var(--color-text-faint); font-family: var(--font-ui); font-style: italic; }
+.actual textarea { white-space: pre-wrap; overflow-wrap: anywhere; }
 .add-case { width: 100%; display: flex; align-items: center; justify-content: center; gap: 8px; padding: 11px; border: 0; border-radius: 6px; background: var(--color-tone-2e7d32); color: var(--color-text-on-accent); font-size: 14px; font-weight: 700; cursor: pointer; &:hover { background: var(--color-tone-388e3c); } .codicon { font-size: 18px; } }
 .empty { padding: 32px 18px; color: var(--color-text-faint); text-align: center; font-size: 12px; line-height: 1.6; }
 </style>

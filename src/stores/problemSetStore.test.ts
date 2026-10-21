@@ -1,6 +1,8 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 import { createPinia, setActivePinia } from 'pinia'
 import { useProblemSetStore } from './problemSetStore'
+import { useProblemStore } from './problemStore'
+import { invoke } from '@tauri-apps/api/core'
 
 const data = vi.hoisted(() => new Map<string, unknown>())
 vi.mock('../dataCenter', () => ({
@@ -13,8 +15,66 @@ vi.mock('../dataCenter', () => ({
 vi.mock('@tauri-apps/api/core', () => ({ invoke: vi.fn() }))
 
 beforeEach(() => {
+  vi.mocked(invoke).mockReset()
   data.clear()
   setActivePinia(createPinia())
+})
+
+describe('batch input validation', () => {
+  it('rejects malformed ids even with the ±1 problem in the local library', async () => {
+    useProblemStore().problems = [{ platform: 'codeforces', id: '1971H', title: '±1', tags: [] }]
+    const store = useProblemSetStore()
+    const result = await store.addProblemsBatch('PG1000\nl100')
+    expect(result).toMatchObject({ added: 0, failed: ['PG1000', 'l100'] })
+    expect(store.activeSet?.problems).toEqual([])
+    expect(invoke).not.toHaveBeenCalled()
+  })
+
+  it('does not add a single unrelated search result as a title match', async () => {
+    vi.mocked(invoke).mockResolvedValue({ problems: [{ platform: 'luogu', id: 'P1000', title: '超级玛丽游戏', tags: [] }] })
+    const store = useProblemSetStore()
+    const result = await store.addProblemsBatch('不存在的题目')
+    expect(result).toMatchObject({ added: 0, failed: ['不存在的题目'] })
+    expect(store.activeSet?.problems).toEqual([])
+  })
+
+  it('reuses one catalog index for multiple ids in a large local library', async () => {
+    let idReads = 0
+    useProblemStore().problems = Array.from({ length: 20000 }, (_, index) => ({
+      platform: 'codeforces' as const,
+      get id() { idReads++; return `${index + 1}A` },
+      title: `Problem ${index + 1}`,
+      tags: [],
+    }))
+    const store = useProblemSetStore()
+    const result = await store.addProblemsBatch('19997A\n19998A\n19999A\n20000A')
+    expect(result).toMatchObject({ added: 4, failed: [] })
+    expect(idReads).toBeLessThan(20100)
+    expect(invoke).not.toHaveBeenCalled()
+  })
+
+  it('never fetches malformed entries and reports fetch failures alongside validation failures', async () => {
+    vi.mocked(invoke).mockImplementation(async (_command, args) => {
+      const url = (args as { url: string }).url
+      if (url.includes('P1001')) throw new Error('题目不存在')
+      return { id: '14687', title: 'Grand Voting', platform: 'qoj', tags: [], url } as never
+    })
+    const store = useProblemSetStore()
+    const result = await store.addProblemsBatch('CF-977A??\nQOJ-14687\nP1001\n1234')
+    expect(invoke).toHaveBeenCalledTimes(2)
+    expect(invoke).toHaveBeenCalledWith('import_problem_url', { url: 'https://qoj.ac/problem/14687' })
+    expect(result).toMatchObject({ total: 4, added: 1, duplicates: 0, failed: ['CF-977A??', 'P1001', '1234'] })
+    expect(result.failures.map(item => item.line)).toEqual([1, 3, 4])
+    expect(result.failures[1].reason).toContain('题目不存在')
+    expect(store.activeSet?.problems.some(item => item.id === '14687')).toBe(true)
+  })
+
+  it('returns failures for an entirely invalid batch without issuing requests', async () => {
+    const result = await useProblemSetStore().addProblemsBatch('CF-P1000\nhttps://qoj.ac/profile/user')
+    expect(result).toMatchObject({ total: 2, added: 0, duplicates: 0 })
+    expect(result.failed).toHaveLength(2)
+    expect(invoke).not.toHaveBeenCalled()
+  })
 })
 
 describe('contest imports', () => {

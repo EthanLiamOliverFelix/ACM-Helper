@@ -14,7 +14,7 @@ const emit = defineEmits<{ 'diagnostic-delivered': [id: number] }>()
 const store = useProblemStore()
 const workbench = useWorkbenchStore()
 const { startPointerResize } = usePointerResize()
-type Session = { key: number; id?: number; label: string; directory: string; terminal: Terminal; fit: FitAddon; host?: HTMLElement; observer?: ResizeObserver; inputCleanup?: () => void; busy: boolean; exited: boolean; disposed: boolean; error: string; pending: string; queue: Promise<void>; starting?: Promise<void>; lastOutputAt: number; promptReady: boolean; inputUsed: boolean; diagnostic: string }
+type Session = { key: number; id?: number; label: string; directory: string; terminal: Terminal; fit: FitAddon; host?: HTMLElement; observer?: ResizeObserver; inputCleanup?: () => void; busy: boolean; exited: boolean; disposed: boolean; error: string; pending: string; queue: Promise<void>; starting?: Promise<void>; lastOutputAt: number; promptReady: boolean; inputUsed: boolean }
 const sessions = ref<Session[]>([])
 const selected = ref(0)
 const active = computed(() => sessions.value.find(session => session.key === selected.value))
@@ -28,6 +28,11 @@ let themeObserver: MutationObserver | undefined
 let initialSession: Promise<Session> | undefined
 
 const terminalSizes = new Map<number, string>()
+const diagnosticWrites = new Map<number, Set<() => void>>()
+function cancelDiagnosticWrites(session: Session) {
+  for (const cancel of diagnosticWrites.get(session.key) ?? []) cancel()
+  diagnosticWrites.delete(session.key)
+}
 
 function updateTheme(session: Session) {
   if (!session.host) return
@@ -69,7 +74,7 @@ async function createSession(diagnostic = false) {
   const terminal = markRaw(new Terminal({ fontSize: 13, fontFamily: '"Cascadia Mono", Consolas, monospace', cursorBlink: true, scrollback: 5000 }))
   const fit = markRaw(new FitAddon())
   terminal.loadAddon(fit)
-  const session = reactive<Session>({ key, label: diagnostic ? 'CPH 编译报错' : `${path?.split(/[\\/]/).pop() || 'PowerShell'} · ${key}`, directory: '', terminal, fit, busy: true, exited: false, disposed: false, error: '', pending: '', queue: markRaw(Promise.resolve()), lastOutputAt: Date.now(), promptReady: false, inputUsed: false, diagnostic: '' })
+  const session = reactive<Session>({ key, label: diagnostic ? 'CPH 编译报错' : `${path?.split(/[\\/]/).pop() || 'PowerShell'} · ${key}`, directory: '', terminal, fit, busy: true, exited: false, disposed: false, error: '', pending: '', queue: markRaw(Promise.resolve()), lastOutputAt: Date.now(), promptReady: false, inputUsed: false })
   sessions.value.push(session)
   selected.value = key
   session.starting = markRaw((async () => {
@@ -113,6 +118,7 @@ async function createSession(diagnostic = false) {
 async function removeSession(session: Session) {
   if (session.disposed) return
   session.disposed = true
+  cancelDiagnosticWrites(session)
 
   terminalSizes.delete(session.key)
   const index = sessions.value.findIndex(item => item.key === session.key)
@@ -133,7 +139,6 @@ async function run(action: 'run' | 'compile-run' | 'compile') {
     if (!store.draftPath) throw new Error('请先修改并保存代码，再运行')
     if (!session || session.exited || session.id == null) session = await createSession()
     if (session.id == null || session.exited || session.disposed) return
-    session.diagnostic = ''
     session.busy = true
     session.inputUsed = true
     session.error = ''
@@ -162,8 +167,7 @@ const dismissedDiagnostics = new Set<number>()
 const deliverDiagnostics = createDiagnosticDelivery(async (diagnostic, isCurrent) => {
   if (initialSession) await initialSession
   if (!isCurrent() || disposed || dismissedDiagnostics.has(diagnostic.id)) return
-  // Compiler stderr is independent of the interactive shell. Display it inside
-  // the selected tab without injecting commands into PowerShell/PSReadLine.
+  // Copy compiler stderr into the existing xterm display, not the shell's stdin.
   let session = active.value
   if (!session || session.disposed) session = await createSession(true)
   if (!isCurrent() || disposed || dismissedDiagnostics.has(diagnostic.id)) return
@@ -174,22 +178,51 @@ const deliverDiagnostics = createDiagnosticDelivery(async (diagnostic, isCurrent
     if (session.disposed) throw new Error('终端已关闭，请重新运行测试点')
   }
   selected.value = session.key
-  session.diagnostic = diagnosticText(diagnostic).trimEnd()
-  error.value = ''
   await nextTick()
   resize(session)
+  const target = session
+  await new Promise<void>(resolve => {
+    let cancelled = false
+    const finish = () => {
+      const writes = diagnosticWrites.get(target.key)
+      writes?.delete(cancel)
+      if (!writes?.size) diagnosticWrites.delete(target.key)
+      resolve()
+    }
+    const cancel = () => { cancelled = true; finish() }
+    const writes = diagnosticWrites.get(target.key) ?? new Set<() => void>()
+    writes.add(cancel)
+    diagnosticWrites.set(target.key, writes)
+    // Flush pending PTY output before reading the visible prompt/input line.
+    target.terminal.write('', () => {
+      if (cancelled || !isCurrent() || disposed || target.disposed || dismissedDiagnostics.has(diagnostic.id)) { finish(); return }
+      const buffer = target.terminal.buffer.active
+      const line = buffer.getLine(buffer.baseY + buffer.cursorY)?.translateToString(true) ?? ''
+      const prompt = /^PS .*?>/.test(line) ? line : ''
+      target.terminal.write(diagnosticText(diagnostic) + prompt, () => {
+        if (!target.disposed) target.terminal.scrollToBottom()
+        finish()
+      })
+    })
+  })
+  error.value = ''
 }, id => emit('diagnostic-delivered', id), cause => { if (!disposed) error.value = String(cause) })
 watch(() => props.diagnostics, items => { void deliverDiagnostics(items) })
 function clearActiveTerminal() {
   const session = active.value
   if (!session) return
-  session.diagnostic = ''
+  cancelDiagnosticWrites(session)
   for (const diagnostic of props.diagnostics) {
     dismissedDiagnostics.add(diagnostic.id)
     emit('diagnostic-delivered', diagnostic.id)
   }
-  session.terminal.clear()
-  session.terminal.focus()
+  // Clear after all already queued writes; otherwise an older async write can
+  // repaint the error just after the user has cleared the visible buffer.
+  session.terminal.write('', () => {
+    if (session.disposed) return
+    session.terminal.clear()
+    session.terminal.focus()
+  })
 }
 watch(() => workbench.terminalRequest.sequence, () => { void handleRequest() })
 watch([selected, () => props.visible, () => sessions.value.length], async () => { await nextTick(); resize(); if (props.visible) active.value?.terminal.focus() })
@@ -220,7 +253,6 @@ onBeforeUnmount(() => {
     <div v-if="error || active?.error" class="terminal-error" role="alert">{{ error || active?.error }}</div>
     <div ref="body" class="terminal-body">
       <div class="terminal-content">
-        <pre v-if="active?.diagnostic" class="terminal-diagnostic" aria-label="CPH 编译报错" tabindex="0">{{ active.diagnostic }}</pre>
         <div v-for="session in sessions" v-show="selected === session.key" :key="session.key" :ref="element => mountHost(session, element)" class="terminal-host" />
         <div v-if="!sessions.length" class="terminal-empty">点击 + 新建终端</div>
       </div>
@@ -246,7 +278,6 @@ onBeforeUnmount(() => {
 .terminal-actions .codicon { font-size:17px; }
 .terminal-body { display:flex; flex:1; min-height:0; }
 .terminal-content { flex:1; min-width:0; min-height:0; display:flex; flex-direction:column; }
-.terminal-diagnostic { flex:0 1 auto; min-height:0; max-height:65%; overflow:auto; margin:0; padding:6px 10px; border-bottom:1px solid var(--color-border-soft); color:var(--color-text-primary); background:var(--color-bg-deep); font:13px/1.45 "Cascadia Mono",Consolas,monospace; white-space:pre; }
 .terminal-host { flex:1; min-width:0; min-height:0; padding:6px 10px; overflow:hidden; }
 .terminal-host :deep(.xterm) { height:100%; }
 .terminal-error { padding:4px 10px; color:var(--color-danger); font-size:12px; }

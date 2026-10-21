@@ -9,7 +9,11 @@ const native = vi.hoisted(() => ({ invoke: vi.fn(), terminals: [] as any[], next
 vi.mock('@tauri-apps/api/core', () => ({ invoke: native.invoke, Channel: class { onmessage: any } }))
 vi.mock('@xterm/xterm', () => ({ Terminal: class {
   options = {}; cols = 80; rows = 24
-  clear = vi.fn(); write = vi.fn(); writeln = vi.fn(); dispose = vi.fn(); focus = vi.fn(); scrollToBottom = vi.fn()
+  text = ''; prompt = 'PS F:/ > '
+  buffer = { active: { baseY: 0, cursorY: 0, getLine: () => ({ translateToString: () => this.prompt }) } }
+  clear = vi.fn(() => { this.text = '' })
+  write = vi.fn((data: string | Uint8Array, callback?: () => void) => { this.text += typeof data === 'string' ? data : new TextDecoder().decode(data); callback?.() })
+  writeln = vi.fn(); dispose = vi.fn(); focus = vi.fn(); scrollToBottom = vi.fn()
   constructor() { native.terminals.push(this) }
   keyHandler?: () => void
   loadAddon() {} open() {} onData() {} onKey(handler: () => void) { this.keyHandler = handler; return { dispose() {} } }
@@ -96,10 +100,11 @@ describe('CPH terminal deletion', () => {
   it('uses the current tab for successive CPH errors without shell printing commands', async () => {
     const { props, delivered, root } = mount()
     await settle(); fail(props, 1); await settle()
-    expect(find(root, 'CPH 编译报错')!.text).toContain('error 1')
+    expect(native.terminals[0].text).toContain('error 1')
     fail(props, 2); await settle()
-    expect(find(root, 'CPH 编译报错')!.text).toContain('error 2')
-    expect(find(root, 'CPH 编译报错')!.text).not.toContain('error 1')
+    expect(native.terminals[0].text).toContain('error 2')
+    expect(native.terminals[0].text.match(/error 1/g)).toHaveLength(1)
+    expect(find(root, 'CPH 编译报错')).toBeUndefined()
     expect(native.terminals).toHaveLength(1)
     expect(native.invoke.mock.calls.some(([command]) => command === 'print_terminal_diagnostic' || command === 'write_terminal')).toBe(false)
     expect(delivered.mock.calls).toEqual([[1], [2]])
@@ -110,22 +115,23 @@ describe('CPH terminal deletion', () => {
     find(actions, '清屏')!.props.onClick(); await settle()
     expect(native.terminals[0].clear).toHaveBeenCalledOnce()
     expect(find(root, 'CPH 编译报错')).toBeUndefined()
+    expect(native.terminals[0].text).not.toContain('error 1')
     const channel = native.invoke.mock.calls.find(([command]) => command === 'start_terminal')![1].output
     channel.onmessage({ data: Array.from(new TextEncoder().encode('PS F:/ > ')), exited: false })
     // Even re-delivering an acknowledged result cannot bring it back.
     fail(props, 1); await settle()
     expect(find(root, 'CPH 编译报错')).toBeUndefined()
     fail(props, 2); await settle()
-    expect(find(root, 'CPH 编译报错')!.text).toContain('error 2')
-    expect(find(root, 'CPH 编译报错')!.text).not.toContain('error 1')
+    expect(native.terminals[0].text).toContain('error 2')
+    expect(native.terminals[0].text).not.toContain('error 1')
     expect(native.terminals).toHaveLength(1)
   })
   it('creates one replacement if the user deleted the current terminal', async () => {
-    const { props, delivered, root } = mount()
+    const { props, delivered } = mount()
     await settle(); fail(props, 1); await settle()
     find(actions, '终止并删除终端')!.props.onClick(); await settle()
     fail(props, 2); await settle()
-    expect(find(root, 'CPH 编译报错')!.text).toContain('error 2')
+    expect(native.terminals[1].text).toContain('error 2')
     expect(native.terminals).toHaveLength(2)
     expect(delivered.mock.calls).toEqual([[1], [2]])
   })
@@ -133,21 +139,22 @@ describe('CPH terminal deletion', () => {
     const { props, root } = mount()
     await settle()
     const terminal = native.terminals[0]
-    const writes = terminal.write.mock.calls.length
+    terminal.prompt = 'PS F:/ > partially typed command'
     terminal.keyHandler()
     fail(props, 1); await settle()
-    expect(find(root, 'CPH 编译报错')!.text).toContain('error 1')
-    expect(terminal.write.mock.calls).toHaveLength(writes)
+    expect(terminal.text).toContain('error 1')
+    expect(terminal.text).toMatch(/error 1\r\nPS F:\/ > partially typed command$/)
+    expect(find(root, 'CPH 编译报错')).toBeUndefined()
     expect(native.terminals).toHaveLength(1)
     expect(native.invoke.mock.calls.some(([command]) => command === 'write_terminal')).toBe(false)
   })
   it('shows errors without disturbing a shell that has exited or is running a command', async () => {
-    const { props, root } = mount()
+    const { props } = mount()
     await settle()
     const channel = native.invoke.mock.calls.find(([command]) => command === 'start_terminal')![1].output
     channel.onmessage({ data: [65], exited: true })
     fail(props, 1); await settle()
-    expect(find(root, 'CPH 编译报错')!.text).toContain('error 1')
+    expect(native.terminals[0].text).toContain('error 1')
     expect(native.terminals).toHaveLength(1)
     expect(native.invoke.mock.calls.some(([command]) => command === 'write_terminal')).toBe(false)
   })
@@ -161,7 +168,31 @@ describe('CPH terminal deletion', () => {
     ready({ id: 1, directory: 'F:/' }); await settle()
     expect(find(root, 'CPH 编译报错')).toBeUndefined()
     fail(props, 2); await settle()
-    expect(find(root, 'CPH 编译报错')!.text).toContain('error 2')
+    expect(native.terminals[0].text).toContain('error 2')
     expect(native.terminals).toHaveLength(1)
+  })
+  it('cancels queued xterm writes on clear and still prints the next run', async () => {
+    const { props } = mount()
+    await settle()
+    const terminal = native.terminals[0]
+    const callbacks: (() => void)[] = []
+    terminal.write.mockImplementationOnce((_data: unknown, callback: () => void) => { callbacks.push(callback) })
+    fail(props, 1); await nextTick(); await nextTick(); await Promise.resolve(); await nextTick()
+    find(actions, '清屏')!.props.onClick()
+    for (const callback of callbacks) callback()
+    await settle(); fail(props, 2); await settle()
+    expect(terminal.text).not.toContain('error 1')
+    expect(terminal.text).toContain('error 2')
+  })
+  it('does not block later errors if the tab is disposed before xterm finishes a write', async () => {
+    const { props } = mount()
+    await settle()
+    const terminal = native.terminals[0]
+    terminal.write.mockImplementationOnce(() => {})
+    fail(props, 1); await nextTick(); await nextTick(); await Promise.resolve(); await nextTick()
+    find(actions, '终止并删除终端')!.props.onClick()
+    await settle(); fail(props, 2); await settle()
+    expect(native.terminals[1].text).toContain('error 2')
+    expect(native.terminals).toHaveLength(2)
   })
 })

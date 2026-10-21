@@ -8,6 +8,105 @@ export interface BatchProblemToken {
   query?: string
 }
 
+export interface BatchProblemFailure {
+  raw: string
+  line: number
+  reason: string
+}
+
+export function normalizeBatchProblemTitle(value: string) {
+  return value.trim().toLocaleLowerCase().replace(/\s+/gu, ' ')
+}
+
+/** Build once per import, rather than deduplicating the full catalog for every token. */
+export function createBatchCatalogLookup<T extends { platform: string; id: string; title: string }>(items: Iterable<T>) {
+  const byId = new Map<string, T>()
+  for (const item of items) {
+    if (!['codeforces', 'luogu', 'atcoder', 'qoj'].includes(item.platform)) continue
+    const key = `${item.platform}:${item.id.toUpperCase()}`
+    if (!byId.has(key)) byId.set(key, item)
+  }
+  let titles: { item: T; title: string }[] | undefined
+  return (token: BatchProblemToken): T | undefined => {
+    if (token.id && token.platform) return byId.get(`${token.platform}:${token.id.toUpperCase()}`)
+    if (!token.query) return undefined
+    titles ??= Array.from(byId.values(), item => ({ item, title: normalizeBatchProblemTitle(item.title) }))
+    const wanted = normalizeBatchProblemTitle(token.query)
+    if (!wanted) return undefined
+    let exact: T | undefined
+    let exactCount = 0
+    for (const entry of titles) {
+      if (token.platform && entry.item.platform !== token.platform) continue
+      if (entry.title === wanted) { exact = entry.item; exactCount++ }
+    }
+    return exactCount === 1 ? exact : undefined
+  }
+}
+
+const idPatterns: Record<BatchProblemPlatform, RegExp> = {
+  luogu: /^(?:[PBTU]\d+|CF\d+[A-Z]\d*|AT_[A-Z0-9_]+|SP\d+|UVA\d+)$/i,
+  codeforces: /^\d+[A-Z]\d*$/i,
+  atcoder: /^[A-Z0-9]+_[A-Z0-9]+(?:_[A-Z0-9]+)*$/i,
+  qoj: /^(?:\d+|C\d+[A-Z][A-Z0-9_]*)$/i,
+}
+
+function validateToken(token: BatchProblemToken): BatchProblemToken | string {
+  if (token.url) {
+    try {
+      const url = new URL(token.url)
+      const routes: Record<string, RegExp> = {
+        'codeforces.com': /^\/(?:problemset\/problem\/\d+\/[A-Z]\d*|contest\/\d+\/problem\/[A-Z]\d*)\/?$/i,
+        'luogu.com.cn': /^\/problem\/(?:[PBTU]\d+|CF\d+[A-Z]\d*|AT_[A-Z0-9_]+|SP\d+|UVA\d+)\/?$/i,
+        'luogu.com': /^\/problem\/(?:[PBTU]\d+|CF\d+[A-Z]\d*|AT_[A-Z0-9_]+|SP\d+|UVA\d+)\/?$/i,
+        'atcoder.jp': /^\/contests\/[A-Z0-9_-]+\/tasks\/[A-Z0-9]+(?:_[A-Z0-9]+)+\/?$/i,
+        'qoj.ac': /^\/(?:problem\/\d+|contest\/\d+\/problem\/[A-Z0-9_]+)(?:\/statement\/[A-Z_]+)?\/?$/i,
+      }
+      const route = routes[url.hostname.replace(/^www\./, '')]
+      if (!/^https?:$/.test(url.protocol) || url.username || url.password || url.port || !route?.test(url.pathname)) {
+        return '链接格式不正确，请使用所支持 OJ 的具体题目链接'
+      }
+      return token
+    } catch { return '链接格式不正确' }
+  }
+  const prefix = token.raw.match(/^(cf|codeforces|洛谷|luogu|at|atcoder|qoj)\s*[-—:：]\s*(.*)$/i)
+  const platform = prefix ? platformName(prefix[1]) : undefined
+  const body = (prefix?.[2] ?? token.raw).trim()
+  const slash = body.indexOf('/')
+  const id = (slash < 0 ? body : body.slice(0, slash)).trim()
+  const inferred = platform ?? (['luogu', 'codeforces', 'atcoder'] as const).find(name => idPatterns[name].test(id))
+  if (inferred && idPatterns[inferred].test(id)) {
+    const query = slash < 0 ? undefined : body.slice(slash + 1).trim() || undefined
+    return { raw: token.raw, platform: inferred, id: id.toUpperCase(), query }
+  }
+  // Titles remain supported; ID-shaped input must never silently become a title search.
+  if (prefix || !body || slash >= 0 || /^\d|^[A-Z][A-Z0-9_-]*\d|^[A-Z0-9]+_/i.test(body)
+    || /^[^\s]*[:/\\?#]/.test(body) || /^(?:cf|codeforces|洛谷|luogu|at|atcoder|qoj)\s*[-—:：]/i.test(body)) {
+    return /^\d+$/.test(body) && !platform ? '纯数字题号请加 QOJ- 前缀' : '题号格式不正确或与 OJ 前缀不匹配'
+  }
+  return { raw: token.raw, platform, query: body }
+}
+
+/** Validate before resolving anything, retaining the original line for failure feedback. */
+export function validateBatchProblemInput(input: string) {
+  const tokens: (BatchProblemToken & { line: number })[] = []
+  const failures: BatchProblemFailure[] = []
+  const seen = new Set<string>()
+  input.split(/\r\n|\n|\r/).forEach((line, index) => {
+    for (const token of parseBatchProblemInput(line)) {
+      const checked = validateToken(token)
+      if (typeof checked === 'string') {
+        failures.push({ raw: token.raw, line: index + 1, reason: checked })
+        continue
+      }
+      const key = checked.url ?? `${checked.platform ?? ''}:${checked.id ?? ''}:${checked.query ?? ''}`.toLowerCase()
+      if (seen.has(key)) continue
+      seen.add(key)
+      tokens.push({ ...checked, line: index + 1 })
+    }
+  })
+  return { tokens, failures }
+}
+
 /** Run each batch concurrently while keeping results in the original input order. */
 export async function mapInOrderedBatches<T, R>(
   items: T[],

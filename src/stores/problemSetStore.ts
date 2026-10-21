@@ -3,7 +3,7 @@ import { defineStore } from 'pinia'
 import { invoke } from '@tauri-apps/api/core'
 import type { Difficulty, LuoguProblemPage, LuoguTrainingDetail, Problem, QojProblemPage, SkillPlanProblem } from '../types'
 import { useProblemStore } from './problemStore'
-import { mapInOrderedBatches, parseBatchProblemInput, type BatchProblemToken } from '../utils/problemBatch'
+import { createBatchCatalogLookup, mapInOrderedBatches, normalizeBatchProblemTitle, validateBatchProblemInput, type BatchProblemToken } from '../utils/problemBatch'
 import { qojProblemUrl } from '../utils/qoj'
 import { getDataCenterValue, saveDataCenterValue } from '../dataCenter'
 
@@ -376,25 +376,7 @@ export const useProblemSetStore = defineStore('problemSets', () => {
     return addProblem(problem, setId)
   }
 
-  function normalized(value: string) {
-    return value.trim().toLocaleLowerCase().replace(/[\s\p{P}\p{S}]+/gu, '')
-  }
-
-  function findCatalogProblem(token: BatchProblemToken) {
-    const store = useProblemStore()
-    const catalog = [...store.problems, ...store.importedProblems]
-      .filter((problem, index, all) => all.findIndex((item) => item.platform === problem.platform && item.id.toUpperCase() === problem.id.toUpperCase()) === index)
-      .filter((problem) => (problem.platform === 'codeforces' || problem.platform === 'luogu' || problem.platform === 'atcoder') && (!token.platform || problem.platform === token.platform))
-    if (token.id) return catalog.find((problem) => problem.id.toUpperCase() === token.id!.toUpperCase())
-    if (!token.query) return undefined
-    const wanted = normalized(token.query)
-    const exact = catalog.filter((problem) => normalized(problem.title) === wanted)
-    if (exact.length === 1) return exact[0]
-    const partial = catalog.filter((problem) => normalized(problem.title).includes(wanted) || wanted.includes(normalized(problem.title)))
-    return partial.length === 1 ? partial[0] : undefined
-  }
-
-  async function resolveProblem(token: BatchProblemToken): Promise<Problem> {
+  async function resolveProblem(token: BatchProblemToken, findCatalogProblem: (token: BatchProblemToken) => Problem | undefined): Promise<Problem> {
     if (token.url) return invoke<Problem>('import_problem_url', { url: token.url })
     const known = findCatalogProblem(token)
     if (known) return known
@@ -408,9 +390,8 @@ export const useProblemSetStore = defineStore('problemSets', () => {
     }
     if (token.query && token.platform === 'qoj') {
       const page = await invoke<QojProblemPage>('fetch_problems_qoj', { page: 1, keyword: token.query })
-      const exact = page.problems.filter(problem => normalized(problem.title) === normalized(token.query!))
+      const exact = page.problems.filter(problem => normalizeBatchProblemTitle(problem.title) === normalizeBatchProblemTitle(token.query!))
       if (exact.length === 1) return exact[0]
-      if (page.problems.length === 1) return page.problems[0]
     } else if (token.query && token.platform !== 'codeforces') {
       const page = await invoke<LuoguProblemPage>('fetch_problems_luogu', {
         page: 1,
@@ -419,38 +400,46 @@ export const useProblemSetStore = defineStore('problemSets', () => {
         difficulty: null,
         tagNames: [],
       })
-      const exact = page.problems.filter((problem) => normalized(problem.title) === normalized(token.query!))
+      const exact = page.problems.filter((problem) => normalizeBatchProblemTitle(problem.title) === normalizeBatchProblemTitle(token.query!))
       if (exact.length === 1) return exact[0]
-      if (page.problems.length === 1) return page.problems[0]
     }
     throw new Error(`无法唯一识别“${token.raw}”`)
   }
 
   async function addProblemsBatch(input: string, setId = activeSetId.value) {
-    const tokens = parseBatchProblemInput(input)
-    if (!tokens.length) throw new Error('请输入题目链接、题号或题目名称')
+    const { tokens, failures } = validateBatchProblemInput(input)
+    if (!tokens.length && !failures.length) throw new Error('请输入题目链接、题号或题目名称')
+    const total = tokens.length + failures.length
     let added = 0
     let duplicates = 0
-    const failed: string[] = []
+
+    // Let the pending button render before preparing the catalog. URL-only batches
+    // do not need a local catalog at all.
+    await new Promise<void>(resolve => setTimeout(resolve, 0))
+    const store = useProblemStore()
+    const findCatalogProblem = tokens.some(token => !token.url)
+      ? createBatchCatalogLookup([...store.problems, ...store.importedProblems])
+      : () => undefined
 
     // 网络抓取仍以四个为一组并发，但所有写入都在抓取完成后按输入下标执行，
     // 避免响应较快的后置链接先进入题单。
-    const resolved = await mapInOrderedBatches(tokens, 4, resolveProblem)
+    const resolved = await mapInOrderedBatches(tokens, 4, token => resolveProblem(token, findCatalogProblem))
     for (let index = 0; index < resolved.length; index++) {
       const result = resolved[index]
       if (result.status === 'rejected') {
-        failed.push(tokens[index].raw)
+        failures.push({ raw: tokens[index].raw, line: tokens[index].line, reason: String(result.reason) })
         continue
       }
       const problem = result.value
-      if (problem.platform !== 'codeforces' && problem.platform !== 'luogu' && problem.platform !== 'atcoder') {
-        failed.push(tokens[index].raw)
+      if (problem.platform !== 'codeforces' && problem.platform !== 'luogu' && problem.platform !== 'atcoder' && problem.platform !== 'qoj') {
+        failures.push({ raw: tokens[index].raw, line: tokens[index].line, reason: '暂不支持该 OJ' })
         continue
       }
       if (addProblem(problem, setId)) added++
       else duplicates++
     }
-    return { total: tokens.length, added, duplicates, failed }
+    failures.sort((a, b) => a.line - b.line)
+    return { total, added, duplicates, failed: failures.map(item => item.raw), failures }
   }
 
   async function importLuoguTraining(source: string | number) {

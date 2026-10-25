@@ -2,6 +2,30 @@ export type CodeforcesMathSegment =
   | { kind: 'text'; value: string }
   | { kind: 'math'; value: string }
 
+/** Cached CF pages may contain MathJax's rendered copy alongside its TeX script. */
+export function removeMathJaxRenderedCopies(root: Element) {
+  root.querySelectorAll('.MathJax_Preview').forEach(node => node.remove())
+  const rendered = '.MathJax,.MathJax_Display,.MathJax_SVG,.MathJax_SVG_Display,mjx-container'
+  root.querySelectorAll('script[type^="math/tex"]').forEach(script => {
+    // MathJax normally places its output immediately before the source script.
+    let previous = script.previousElementSibling
+    while (previous?.matches(rendered)) {
+      const node = previous
+      previous = node.previousElementSibling
+      node.remove()
+    }
+    // Also cover cached layouts with intervening elements, using MathJax's ID pair.
+    if (script.id) {
+      const frame = root.ownerDocument.getElementById(`${script.id}-Frame`)
+      if (frame && root.contains(frame) && frame.matches(rendered)) {
+        const display = frame.closest('.MathJax_Display,.MathJax_SVG_Display')
+        if (display && root.contains(display) && !display.contains(script)) display.remove()
+        else frame.remove()
+      }
+    }
+  })
+}
+
 /**
  * Split Polygon's inline $$$...$$$ syntax without changing unmatched text.
  * Some cached/translated statements duplicate the delimiter, so every run of

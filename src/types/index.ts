@@ -23,6 +23,8 @@ export interface Problem {
   id: string
   title: string
   rating?: number
+  acceptedTeams?: number
+  submittedTeams?: number
   difficulty?: Difficulty
   tags: string[]
   platform: Platform

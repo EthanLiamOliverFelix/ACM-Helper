@@ -19,7 +19,7 @@ async function importContest(entry: QojArchiveEntry) {
     const page = entry.problems.length ? null : await store.readQojContest(entry.url)
     const contest = page?.entries.find(item => item.kind === 'contest') ?? entry
     const result = sets.importContest({ platform: 'qoj', contestId: entry.id, title: contest.title, url: entry.url },
-      contest.problems.map(p => ({ id: p.id, title: p.title, url: p.url, platform: 'qoj', tags: [] })))
+      contest.problems.map(p => ({ ...p, platform: 'qoj', tags: [] })))
     notice.value = result.added ? `已加入题单：${result.set.name}（${result.set.problems.length} 道题目）` : '这场比赛已在题单中'
   } catch (reason) { error.value = String(reason) }
   finally { importing.value = '' }

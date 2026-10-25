@@ -1,4 +1,5 @@
 import type { Problem } from '../types'
+import { isChineseQojPdf } from './statementTranslation'
 
 export function statementSource(problem: Problem) {
   return JSON.stringify([problem.title, problem.description ?? '', problem.input ?? '', problem.output ?? '', problem.note ?? '', problem.contentFormat, problem.samples ?? []])
@@ -30,6 +31,7 @@ export function statementError(problem: Problem, previous?: Problem) {
 }
 
 export function translationSourceError(problem: Problem) {
+  if (isChineseQojPdf(problem)) return '该题已有中文 PDF，请直接阅读原始 PDF，无需翻译提取文字'
   return statementError(problem) || (/^该题使用 PDF 题面/.test(problem.description ?? '') ? 'PDF 正文尚未提取，不能翻译预览提示文字' : null)
 }
 

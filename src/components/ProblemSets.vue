@@ -897,6 +897,7 @@ watch(() => itemDialog.mode, mode => {
             <button class="set-problem-name" :title="`${problem.id} ${problem.title}`" @click="openSetProblem(problem)"><small>{{ problem.platform === 'codeforces' ? 'CF' : problem.platform === 'atcoder' ? 'ATC' : problem.platform === 'luogu' ? '洛谷' : 'QOJ' }} · {{ problem.id }}</small><strong>{{ problem.title }}</strong></button>
             <span v-if="problem.platform === 'luogu' && problem.difficulty" class="set-problem-difficulty" :style="{ backgroundColor: difficultyColors[problem.difficulty] }">{{ problem.difficulty }}</span>
             <span v-else-if="problem.rating" class="set-problem-rating">★ {{ problem.rating }}</span>
+            <span v-if="problem.platform === 'qoj' && problem.acceptedTeams != null && problem.submittedTeams != null" class="set-problem-team-ratio" title="通过队伍 / 所有提交队伍">{{ problem.acceptedTeams }}/{{ problem.submittedTeams }}</span>
             <button v-if="editingSet" class="problem-remove" :aria-label="`从题单移除 ${problem.id}`" title="从题单移除" @click="sets.removeProblem(sets.activeSet!.id, problem.platform, problem.id)">×</button>
           </div>
           <div v-if="problems.showProblemTags && problem.tags.length" class="set-problem-tags"><span v-for="tag in problem.tags" :key="tag">{{ tag }}</span></div>
@@ -1046,6 +1047,7 @@ button, input { font: inherit; }.panel-header { display: flex; align-items: cent
 .add-format-help { font-family: 'YouYuan', '幼圆', 'Microsoft YaHei UI', 'Microsoft YaHei', sans-serif; font-size: 12px; line-height: 1.75; }
 .add-format-help__body code { font-family: inherit; font-size: inherit; }
 .set-problem-solved { color: var(--color-success); font-size: 12px; }
+.set-problem-team-ratio { flex: 0 0 auto; padding: 4px 7px; border-radius: 4px; background: var(--color-bg-control-alt); color: var(--color-accent-text); font-size: 12px; white-space: nowrap; }
 .set-problem-items > li > .set-problem-tags { display: flex; flex-direction: row; flex-wrap: wrap; gap: 4px; padding: 0 5px 6px; }
 .set-problem-tags span { padding: 1px 4px; border-radius: 3px; background: var(--color-bg-subtle); color: var(--color-text-muted); font-size: 10px; }
 </style>

@@ -78,6 +78,35 @@ describe('batch input validation', () => {
 })
 
 describe('contest imports', () => {
+  it('persists QOJ team counts including zero accepted teams', () => {
+    const store = useProblemSetStore()
+    const result = store.importContest({ platform: 'qoj', contestId: '1096', title: 'Finals', url: 'https://qoj.ac/contest/1096' }, [
+      { platform: 'qoj', id: '14719', title: 'Planting Trees', tags: [], acceptedTeams: 0, submittedTeams: 153 },
+    ])
+    expect(result.set.problems[0]).toMatchObject({ acceptedTeams: 0, submittedTeams: 153 })
+    setActivePinia(createPinia())
+    expect(useProblemSetStore().sets.find(set => set.id === result.set.id)?.problems[0]).toMatchObject({ acceptedTeams: 0, submittedTeams: 153 })
+  })
+
+  it('backfills legacy QOJ contest counts from the archive without fetching statements', async () => {
+    const store = useProblemSetStore()
+    const result = store.importContest({ platform: 'qoj', contestId: '1096', title: 'Finals', url: 'https://qoj.ac/contest/1096' }, [
+      { platform: 'qoj', id: '14719', title: 'Planting Trees', tags: [] },
+    ])
+    vi.mocked(invoke).mockResolvedValue({ entries: [{ kind: 'contest', id: '1096', problems: [
+      { id: '14719', title: 'Planting Trees', url: 'https://qoj.ac/problem/14719', acceptedTeams: 76, submittedTeams: 153 },
+    ] }] })
+    await store.enrichSetMetadata(result.set.id, { fetchMissing: false })
+    expect(result.set.problems[0]).toMatchObject({ acceptedTeams: 76, submittedTeams: 153 })
+    expect(vi.mocked(invoke).mock.calls.filter(([command]) => command === 'fetch_qoj_archive')).toHaveLength(1)
+    expect(vi.mocked(invoke).mock.calls.some(([command]) => command === 'import_problem_url')).toBe(false)
+    expect(invoke).toHaveBeenCalledWith('fetch_qoj_archive', { url: 'https://qoj.ac/contest/1096' })
+    await store.enrichSetMetadata(result.set.id, { fetchMissing: false })
+    expect(vi.mocked(invoke).mock.calls.filter(([command]) => command === 'fetch_qoj_archive')).toHaveLength(1)
+    setActivePinia(createPinia())
+    expect(useProblemSetStore().sets.find(set => set.id === result.set.id)?.problems[0]).toMatchObject({ acceptedTeams: 76, submittedTeams: 153 })
+  })
+
   it('imports QOJ archive rows with original titles and links and deduplicates contests', () => {
     const store = useProblemSetStore()
     const contest = { platform: 'qoj' as const, contestId: '1096', title: 'ICPC Finals', url: 'https://qoj.ac/contest/1096' }

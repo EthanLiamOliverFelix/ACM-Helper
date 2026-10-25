@@ -13,6 +13,8 @@ export interface ProblemSetEntry {
   title: string
   url?: string
   rating?: number
+  acceptedTeams?: number
+  submittedTeams?: number
   difficulty?: Difficulty
   tags: string[]
   reason?: string
@@ -85,7 +87,7 @@ export const useProblemSetStore = defineStore('problemSets', () => {
     if (!problems.length) throw new Error('这场比赛没有可加入题单的公开题目')
     const seen = new Set<string>()
     const entries: ProblemSetEntry[] = problems.filter(p => p.platform === contest.platform && !seen.has(p.id) && !!seen.add(p.id)).map(p => ({
-      platform: contest.platform, id: p.id, title: p.title, url: p.url, rating: p.rating, tags: [...p.tags], addedAt: Date.now(),
+      platform: contest.platform, id: p.id, title: p.title, url: p.url, rating: p.rating, acceptedTeams: p.acceptedTeams, submittedTeams: p.submittedTeams, tags: [...p.tags], addedAt: Date.now(),
     }))
     if (!entries.length) throw new Error('这场比赛没有可加入题单的公开题目')
     const set: ProblemSet = { id: makeId(), name: contest.title, createdAt: Date.now(), problems: entries,
@@ -255,16 +257,22 @@ export const useProblemSetStore = defineStore('problemSets', () => {
         const nextTitle = problem.title?.trim() || entry.title
         const nextTags = problem.tags?.length ? [...problem.tags] : entry.tags
         const nextRating = problem.rating ?? entry.rating
+        const nextAccepted = problem.acceptedTeams ?? entry.acceptedTeams
+        const nextSubmitted = problem.submittedTeams ?? entry.submittedTeams
         const nextDifficulty = entry.platform === 'luogu' ? (problem.difficulty ?? entry.difficulty) : undefined
         if (entry.title !== nextTitle
           || entry.url !== (problem.url ?? entry.url)
           || entry.rating !== nextRating
+          || entry.acceptedTeams !== nextAccepted
+          || entry.submittedTeams !== nextSubmitted
           || entry.difficulty !== nextDifficulty
           || JSON.stringify(entry.tags) !== JSON.stringify(nextTags)
           || entry.metadataFetchedAt !== fetchedAt) {
           entry.title = nextTitle
           entry.url = problem.url ?? entry.url
           entry.rating = nextRating
+          entry.acceptedTeams = nextAccepted
+          entry.submittedTeams = nextSubmitted
           entry.difficulty = nextDifficulty
           entry.tags = nextTags
           entry.metadataFetchedAt = fetchedAt
@@ -290,20 +298,38 @@ export const useProblemSetStore = defineStore('problemSets', () => {
     const problems = useProblemStore()
     const catalog = [...problems.importedProblems, ...problems.problems]
     let updated = 0
+    let failed = 0
+    // Older imported contests did not store team counts. Read the contest once
+    // (using the archive cache when available), without refetching every statement.
+    if (set.contestSource?.platform === 'qoj' && set.problems.some(entry => entry.acceptedTeams == null || entry.submittedTeams == null)) {
+      try {
+        const page = await problems.readQojContest(set.contestSource.url)
+        const visit = (entries: typeof page.entries) => {
+          for (const entry of entries) {
+            if (entry.kind === 'contest' && entry.id === set.contestSource!.contestId) {
+              for (const row of entry.problems) {
+                if (applyMetadata({ ...row, platform: 'qoj', tags: [] })) updated++
+              }
+            }
+            if (entry.children) visit(entry.children)
+          }
+        }
+        visit(page.entries)
+      } catch { failed++ }
+    }
     for (const entry of set.problems) {
       const known = catalog.find((problem) => problem.platform === entry.platform && problem.id.toUpperCase() === entry.id.toUpperCase())
-      if (known && (known.tags.length || known.rating != null || known.difficulty)) {
+      if (known && (known.tags.length || known.rating != null || known.difficulty || known.acceptedTeams != null || known.submittedTeams != null)) {
         if (applyMetadata(known)) updated++
       }
     }
 
     if (options.fetchMissing === false) {
       if (updated) save()
-      return { updated, failed: 0 }
+      return { updated, failed }
     }
     const pending = set.problems.filter((entry) => entry.platform !== 'qoj' && !entry.metadataFetchedAt && (!entry.tags.length || (entry.platform === 'luogu' && !entry.difficulty)))
     let cursor = 0
-    let failed = 0
     async function worker() {
       while (cursor < pending.length) {
         const entry = pending[cursor++]
@@ -337,6 +363,8 @@ export const useProblemSetStore = defineStore('problemSets', () => {
       title: problem.title,
       url: problem.url,
       rating: problem.rating,
+      acceptedTeams: problem.acceptedTeams,
+      submittedTeams: problem.submittedTeams,
       difficulty: problem.difficulty,
       tags: [...problem.tags],
       addedAt: Date.now(),

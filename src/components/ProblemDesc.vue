@@ -9,10 +9,11 @@ import DOMPurify from 'dompurify'
 import { renderLuoguMarkdown } from '../utils/luoguMarkdown'
 import { normalizeAiMarkdown } from '../utils/aiMarkdown'
 import { atCoderVarMarkupToTex } from '../utils/atcoderMath'
-import { splitCodeforcesMathText } from '../utils/codeforcesMath'
+import { removeMathJaxRenderedCopies, splitCodeforcesMathText } from '../utils/codeforcesMath'
 import { openUrl } from '@tauri-apps/plugin-opener'
 import { qojStatementPdfUrl } from '../utils/qoj'
 import { statementSource } from '../utils/statementIntegrity'
+import { isChineseQojPdf, supportsStatementTranslation } from '../utils/statementTranslation'
 import 'katex/dist/katex.min.css'
 import { useWorkbenchStore } from '../stores/workbenchStore'
 
@@ -21,23 +22,14 @@ const learning = useLearningStore()
 const ai = useAiStore()
 const workbench = useWorkbenchStore()
 const problemKey = computed(() => store.currentProblem ? `${store.currentProblem.platform}:${store.currentProblem.id}` : '')
-const currentTranslation = computed(() => ai.translationFor(store.currentProblem))
+const currentTranslation = computed(() => isChineseQojPdf(store.currentProblem) ? undefined : ai.translationFor(store.currentProblem))
 const showOriginal = ref(false)
 watch(problemKey, () => { showOriginal.value = false })
-const translationSupported = computed(() => {
-  const problem = store.currentProblem
-  if (!problem || !['codeforces', 'luogu', 'atcoder', 'qoj'].includes(problem.platform)) return false
-  if (currentTranslation.value) return true
-  const source = `${problem.title} ${problem.description ?? ''} ${problem.input ?? ''} ${problem.output ?? ''}`
-    .replace(/<[^>]+>/g, ' ')
-  const latin = (source.match(/[A-Za-z]/g) ?? []).length
-  const cjk = (source.match(/[\u3400-\u9fff]/g) ?? []).length
-  return latin >= 24 && latin > cjk * 2
-})
+const translationSupported = computed(() => supportsStatementTranslation(store.currentProblem, Boolean(currentTranslation.value)))
 const pdfUrl = computed(() => store.currentProblem?.platform === 'qoj' ? qojStatementPdfUrl(store.currentProblem.note) : null)
 const pdfMode = ref<'pdf' | 'text'>('pdf')
-watch(problemKey, () => { pdfMode.value = currentTranslation.value ? 'text' : 'pdf' })
-watch(() => currentTranslation.value, value => { if (value) { pdfMode.value = 'text'; showOriginal.value = false } })
+watch(problemKey, () => { pdfMode.value = 'pdf' })
+watch(() => currentTranslation.value, value => { if (value && !pdfUrl.value) { pdfMode.value = 'text'; showOriginal.value = false } })
 function toggleOriginal() {
   showOriginal.value = !showOriginal.value
   pdfMode.value = showOriginal.value && pdfUrl.value ? 'pdf' : 'text'
@@ -93,7 +85,7 @@ function safeRichText(value = '', format: 'html' | 'markdown' | 'text' = 'text',
     // 自动结束原段落，造成变量各占一行的严重错位。
     const sourceDoc = new DOMParser().parseFromString(`<div id="acm-rich-root">${value}</div>`, 'text/html')
     const sourceRoot = sourceDoc.getElementById('acm-rich-root')!
-    sourceRoot.querySelectorAll('.MathJax_Preview,.MathJax_SVG').forEach((node) => node.remove())
+    removeMathJaxRenderedCopies(sourceRoot)
     const replaceWithKatex = (node: Element, tex: string, display = false) => {
       if (!tex) return
       const wrapper = sourceDoc.createElement(display ? 'div' : 'span')
@@ -189,7 +181,7 @@ function renderStatementHtml() {
   if (store.isPreparingStatement || store.isLoadingDetail) return '<div class="desc-placeholder desc-placeholder--loading">正在加载题面…<div class="statement-skeleton"><i></i><i></i><i></i></div></div>'
   const esc = (value = '') => value.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
   if (!p.description) return `<div class="desc-placeholder">题面抓取失败或暂不可用<br/><a href="${esc(p.url)}" target="_blank">在原 OJ 打开 →</a></div>`
-  const translated = ai.translationFor(p)
+  const translated = currentTranslation.value
   if (translated && !showOriginal.value) return safeRichText(translated, 'markdown', p.url)
   const format = p.contentFormat ?? 'text'
   const section = (title: string, value?: string) => value ? `<h2 class="desc-h2">${title}</h2><div>${safeRichText(value, format, p.url)}</div>` : ''
@@ -201,8 +193,8 @@ const statementHtmlCache = new Map<string, string>()
 let cancelStatementRender: (() => void) | undefined
 watch(() => {
   const p = store.currentProblem
-  return [p?.platform, p?.id, p?.description, p?.input, p?.output, p?.note, p?.contentFormat, p?.url,
-    store.isLoadingDetail, store.isPreparingStatement, showOriginal.value, p ? ai.translationFor(p) : undefined]
+  return [p?.platform, p?.id, p?.title, p?.source, p?.description, p?.input, p?.output, p?.note, p?.contentFormat, p?.url,
+    store.isLoadingDetail, store.isPreparingStatement, showOriginal.value, currentTranslation.value]
 }, source => {
   cancelStatementRender?.()
   const key = JSON.stringify(source)
@@ -220,11 +212,11 @@ onBeforeUnmount(() => cancelStatementRender?.())
 
 
 async function translate() {
-  try { await ai.translateCurrentProblem() } catch (e) { ai.error = String(e) }
+  try { await ai.translateCurrentProblem(); pdfMode.value = 'text'; showOriginal.value = false } catch (e) { ai.error = String(e) }
 }
 
 async function retranslate() {
-  try { await ai.translateCurrentProblem(true) } catch (e) { ai.error = String(e) }
+  try { await ai.translateCurrentProblem(true); pdfMode.value = 'text'; showOriginal.value = false } catch (e) { ai.error = String(e) }
 }
 
 watch(() => [problemKey.value, store.currentProblem ? statementSource(store.currentProblem) : '', store.isLoadingDetail, store.isPreparingStatement], async () => {
@@ -357,7 +349,7 @@ async function closeLocalStatement() {
     <div class="problem-desc__content">
       <div v-if="pdfUrl" class="qoj-pdf-tools">
         <button :class="{ active: pdfMode === 'pdf' }" @click="pdfMode = 'pdf'; showOriginal = true">原始 PDF</button>
-        <button :class="{ active: pdfMode === 'text' }" @click="pdfMode = 'text'">提取文字</button>
+        <button :class="{ active: pdfMode === 'text' }" @click="pdfMode = 'text'" title="仅供复制和检索，公式与排版可能不完整">提取文字</button>
         <a :href="pdfUrl" @click="openStatementLink">打开原始 PDF ↗</a><span>公式和版式请以原始 PDF 为准</span>
       </div>
       <iframe v-if="showPdf" class="qoj-pdf-preview" :src="pdfUrl!" title="QOJ 原始 PDF 题面" />

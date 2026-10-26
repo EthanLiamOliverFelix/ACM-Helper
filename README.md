@@ -27,7 +27,8 @@ Monaco Editor、Rust 与 Tauri 2 开发。
 - 提供包含 130 个节点的算法技能树、VP 知识缺口分析、间隔错题复习和题目笔记。
 - 将草稿、笔记、翻译、设置、题单和诊断信息存入可移动的本地数据中心，支持
   校验迁移、备份、恢复、导入与导出。
-- 将 Codeforces 的 AI 翻译缓存在本地，并支持主动重新翻译。
+- 将支持翻译的英文题面翻译结果缓存在本地，支持重新翻译和切换原文；中文 PDF
+  默认展示原始文件，不对提取文字重复翻译。
 - 按需加载 Monaco 与 Markdown 渲染器，缩短软件首屏加载时间。
 
 ## 隐私与数据边界
@@ -43,9 +44,13 @@ Monaco Editor、Rust 与 Tauri 2 开发。
 
 ## 安装与运行
 
-正式版本发布后，可以从 [GitHub Releases](https://github.com/EthanLiamOliverFelix/ACM-Helper/releases)
-页面下载最新版安装包，双击安装即可。最终用户运行安装版
-不需要安装 Node.js 或 Rust。
+可以从 [GitHub Releases](https://github.com/EthanLiamOliverFelix/ACM-Helper/releases/latest)
+页面下载最新版 Windows x64 安装包。一般用户选择 EXE，也可选择 MSI；两者任选其一，
+双击安装即可。最终用户运行安装版不需要安装 Node.js 或 Rust。
+
+当前发布为 **20.0.0**（安装包构建日期：2026-10-25）。本次更新修复 Codeforces
+英文公式重复显示、调整中文 PDF 展示与翻译规则、补全 QOJ 比赛题单的通过队伍统计，
+并优化题单批量添加与 CPH 报错显示。详细说明见 [20.0.0 更新记录](docs/releases/20.0.0.md)。
 
 从源码运行需要安装：
 
@@ -177,7 +182,8 @@ OJ 诊断页面展示题面、登录、提交和判定详情等链路的状态�
 ![AI 生成的学习题单](docs/images/tutorial/16-ai-generated-list.png)
 
 手工创建题单时，可以直接加入当前题目，也可以输入题号、题目名称或题目链接。
-目前支持 Codeforces、洛谷与 AtCoder；暂不支持识别 Codeforces Gym 题目。
+目前支持 Codeforces、洛谷、AtCoder 与 QOJ，输入框下方可展开各平台的题号格式说明；
+非法题号会跳过并在最终结果中提示。暂不支持识别 Codeforces Gym 题目。
 
 ![手工创建题单](docs/images/tutorial/17-manual-list-import.png)
 

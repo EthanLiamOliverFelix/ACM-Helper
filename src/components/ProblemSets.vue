@@ -109,7 +109,7 @@ const menuItem = computed(() => itemMenu.value?.id
 const menuIsGroup = computed(() => sets.groups.some(group => group.id === itemMenu.value?.id))
 const setStats = computed(() => new Map(sets.sets.map(set => {
   const visible = set.problems
-  const solved = visible.filter(problem => learning.profile.solvedProblems.includes(`${problem.platform}:${problem.id}`)).length
+  const solved = visible.filter(problem => learning.isSolved(`${problem.platform}:${problem.id}`)).length
   return [set.id, { total: visible.length, solved, percent: visible.length ? solved / visible.length * 100 : 0 }]
 })))
 
@@ -363,7 +363,7 @@ const pagedSets = computed(() => {
 })
 const selection = useMultiSelection(() => [...visibleGroups.value, ...pagedSets.value].map(item => item.id), () => [...sets.groups, ...sets.sets].map(item => item.id))
 const selectedSetIds = computed(() => selection.selected)
-const contestSolvedCount = computed(() => contestProblems.value.filter((problem) => learning.profile.solvedProblems.includes(`${problem.platform}:${problem.id}`)).length)
+const contestSolvedCount = computed(() => contestProblems.value.filter((problem) => learning.isSolved(`${problem.platform}:${problem.id}`)).length)
 const activeSmartProblems = computed(() => activeSmartId.value === 'today' ? practice.todayProblems : practice.wrongProblems)
 const filteredSmartProblems = computed(() => {
   const query = problemSearch.value.trim().toLowerCase()
@@ -376,7 +376,7 @@ const filteredProblems = computed(() => {
   return query ? list.filter((problem) => problem.id.toLowerCase().includes(query) || problem.title.toLowerCase().includes(query) || problem.tags.some((tag) => tag.toLowerCase().includes(query))) : list
 })
 const visibleActiveSetProblemCount = computed(() => sets.activeSet?.problems.length ?? 0)
-const solvedCount = computed(() => sets.activeSet?.problems.filter((problem) => learning.profile.solvedProblems.includes(`${problem.platform}:${problem.id}`)).length ?? 0)
+const solvedCount = computed(() => sets.activeSet?.problems.filter((problem) => learning.isSolved(`${problem.platform}:${problem.id}`)).length ?? 0)
 const plazaPages = computed(() => Math.max(1, Math.ceil(plazaCount.value / plazaPerPage.value)))
 const filteredContestCatalog = computed(() => {
   const query = contestSearch.value.trim().toLowerCase()
@@ -893,7 +893,7 @@ watch(() => itemDialog.mode, mode => {
         <li v-for="problem in filteredProblems" :key="`${problem.platform}:${problem.id}`" :data-problem-key="`${problem.platform}:${problem.id}`" :class="{ moving: movingProblemKey === `${problem.platform}:${problem.id}`, 'drop-before': problemDrop?.key === `${problem.platform}:${problem.id}` && problemDrop.side === 'before', 'drop-after': problemDrop?.key === `${problem.platform}:${problem.id}` && problemDrop.side === 'after' }">
           <div class="set-problem-line">
             <button v-if="editingSet" class="problem-grip" :aria-label="`调整 ${problem.id} 的顺序`" title="拖动排序，也可使用上下方向键" @pointerdown.stop="beginProblemMove(`${problem.platform}:${problem.id}`, $event)" @keydown.up.prevent="moveProblemByKeyboard(`${problem.platform}:${problem.id}`, -1)" @keydown.down.prevent="moveProblemByKeyboard(`${problem.platform}:${problem.id}`, 1)"><i class="codicon codicon-menu" aria-hidden="true" /></button>
-            <span v-if="learning.profile.solvedProblems.includes(`${problem.platform}:${problem.id}`)" class="set-problem-solved" title="已完成">✓</span>
+            <span v-if="learning.isSolved(`${problem.platform}:${problem.id}`)" class="set-problem-solved" title="已完成">✓</span>
             <button class="set-problem-name" :title="`${problem.id} ${problem.title}`" @click="openSetProblem(problem)"><small>{{ problem.platform === 'codeforces' ? 'CF' : problem.platform === 'atcoder' ? 'ATC' : problem.platform === 'luogu' ? '洛谷' : 'QOJ' }} · {{ problem.id }}</small><strong>{{ problem.title }}</strong></button>
             <span v-if="problem.platform === 'luogu' && problem.difficulty" class="set-problem-difficulty" :style="{ backgroundColor: difficultyColors[problem.difficulty] }">{{ problem.difficulty }}</span>
             <span v-else-if="problem.rating" class="set-problem-rating">★ {{ problem.rating }}</span>
@@ -938,7 +938,7 @@ watch(() => itemDialog.mode, mode => {
     <template v-else-if="view === 'contest-detail' && activeContest">
       <header class="panel-header detail-header"><button class="back" @click="view = contestDetailBack">‹ 返回</button><div><strong>{{ activeContest.title }}</strong><span>{{ contestSolvedCount }}/{{ contestProblems.length }} 道题目 · {{ contestPlatformLabel(activeContest.platform) }}</span></div><div class="detail-header__actions"><button v-if="activeContest.platform !== 'luogu'" :disabled="learning.isAnalyzing || contestProblemsLoading || !contestProblems.length" @click="analyzeActiveContest">{{ learning.isAnalyzing ? '分析中…' : 'VP 分析' }}</button><button :disabled="!!addingContest || contestProblemsLoading || sets.containsContest(activeContest.platform, activeContest.contestId)" @click="addContestToSets(activeContest)">{{ addingContest ? '加入中…' : sets.containsContest(activeContest.platform, activeContest.contestId) ? '✓ 已加入题单' : '＋ 加入题单' }}</button></div></header>
       <div v-if="error" class="error">{{ error }}</div><div v-if="contestProblemsLoading" class="empty">正在读取比赛题目…</div>
-      <ul v-else class="problem-items contest-problem-items"><li v-for="problem in contestProblems" :key="`${problem.platform}:${problem.id}`" @click="openContestProblem(problem)"><span class="solved">{{ learning.profile.solvedProblems.includes(`${problem.platform}:${problem.id}`) ? '✓' : '' }}</span><div><small>{{ problem.id }}</small><strong>{{ problem.title }}</strong><p><span v-if="problem.rating">★ {{ problem.rating }}</span><template v-if="problems.showProblemTags"><span v-for="tag in problem.tags" :key="tag">{{ tag }}</span></template></p></div><button>打开 ›</button></li></ul>
+      <ul v-else class="problem-items contest-problem-items"><li v-for="problem in contestProblems" :key="`${problem.platform}:${problem.id}`" @click="openContestProblem(problem)"><span class="solved">{{ learning.isSolved(`${problem.platform}:${problem.id}`) ? '✓' : '' }}</span><div><small>{{ problem.id }}</small><strong>{{ problem.title }}</strong><p><span v-if="problem.rating">★ {{ problem.rating }}</span><template v-if="problems.showProblemTags"><span v-for="tag in problem.tags" :key="tag">{{ tag }}</span></template></p></div><button>打开 ›</button></li></ul>
       <div v-if="!contestProblemsLoading && !contestProblems.length && !error" class="empty">当前比赛没有公开题目</div>
     </template>
     <div v-if="itemDialog.mode" class="item-dialog" @click.self="itemDialog.mode = ''" @keydown.esc="itemDialog.mode = ''">

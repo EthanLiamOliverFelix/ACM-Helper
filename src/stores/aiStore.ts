@@ -75,7 +75,6 @@ export const useAiStore = defineStore('ai', () => {
     const problems = useProblemStore()
     const learning = useLearningStore()
     const problem = problems.currentProblem
-    const solved = new Set(learning.profile.solvedProblems)
     const acceptedRatings = problems.submissions
       .filter((submission) => submission.status === 'Accepted')
       .map((submission) => problems.problems.find((candidate) => candidate.id === submission.problemId && (!submission.platform || candidate.platform === submission.platform))?.rating)
@@ -84,7 +83,7 @@ export const useAiStore = defineStore('ai', () => {
       ? Math.round(acceptedRatings.reduce((sum, rating) => sum + rating, 0) / acceptedRatings.length / 100) * 100 + 100
       : 1000
     const candidateProblems = problems.problems
-      .filter((candidate) => !solved.has(`${candidate.platform}:${candidate.id}`))
+      .filter((candidate) => !learning.isSolved(`${candidate.platform}:${candidate.id}`))
       .filter((candidate) => candidate.rating == null || Math.abs(candidate.rating - targetRating) <= 500)
       .sort((a, b) => Math.abs((a.rating ?? targetRating) - targetRating) - Math.abs((b.rating ?? targetRating) - targetRating))
       .slice(0, 60)
@@ -247,7 +246,6 @@ export const useAiStore = defineStore('ai', () => {
       difficulty: null,
       tagNames: skill.tags,
     }).catch(() => null)
-    const solved = new Set(learningStore.profile.solvedProblems)
     const previousPlans = learningStore.plansFor(skill.id)
     const previousProblems = previousPlans.flatMap((plan) => plan.problems)
     const previousKeys = new Set(previousProblems.map((problem) => `${problem.platform}:${problem.id.toUpperCase()}`))
@@ -259,7 +257,7 @@ export const useAiStore = defineStore('ai', () => {
     const skillTags = new Set(skill.tags.map((tag) => tag.toLowerCase()))
     const sortedCandidates = [...problemStore.problems, ...problemStore.importedProblems, ...(luoguPage?.problems ?? [])]
       .filter((problem) => problem.platform === 'codeforces' || problem.platform === 'luogu' || problem.platform === 'atcoder')
-      .filter((problem) => !solved.has(`${problem.platform}:${problem.id}`))
+      .filter((problem) => !learningStore.isSolved(`${problem.platform}:${problem.id}`))
       .filter((problem) => {
         const key = `${problem.platform}:${problem.id}`
         if (seen.has(key)) return false

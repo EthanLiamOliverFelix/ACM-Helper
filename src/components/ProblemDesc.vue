@@ -340,7 +340,7 @@ async function closeLocalStatement() {
         <button v-if="translationSupported && !currentTranslation" class="translate-btn" :disabled="ai.isTranslating || store.isLoadingDetail || store.isPreparingStatement || !ai.translationConfigured" :title="ai.translationConfigured ? '使用已配置的翻译模型翻译完整题面' : '请先在顶部设置中配置翻译模型'" @click="translate">{{ ai.isTranslating ? '翻译中…' : '译 AI 翻译' }}</button>
         <button v-if="translationSupported && currentTranslation" class="retranslate-btn" :disabled="ai.isTranslating || store.isLoadingDetail || store.isPreparingStatement || !ai.translationConfigured" :title="ai.translationConfigured ? '重新调用翻译模型并覆盖本地译文' : '请先在顶部设置中配置翻译模型'" @click="retranslate">{{ ai.isTranslating ? '重新翻译中…' : '译 重新翻译' }}</button>
         <button v-if="translationSupported && currentTranslation" class="original-btn" :aria-pressed="showOriginal" :disabled="store.isLoadingDetail || store.isPreparingStatement" @click="toggleOriginal">{{ showOriginal ? '显示译文' : '显示原文' }}</button>
-        <span v-if="learning.profile.solvedProblems.includes(problemKey)" class="solved-btn solved-btn--active">✓ 已完成</span>
+        <span v-if="learning.isSolved(problemKey)" class="solved-btn solved-btn--active">✓ 已完成</span>
       </div>
     </div>
     <div v-else class="problem-desc__header problem-desc__header--empty">

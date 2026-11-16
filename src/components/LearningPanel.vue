@@ -26,8 +26,7 @@ const selectedPlans = computed(() => learning.selectedSkillId ? learning.plansFo
 const selectedPlan = computed(() => selectedPlans.value[selectedPageIndex.value] ?? null)
 const selectedPlanProblems = computed(() => selectedPlan.value?.problems.filter((problem) => problem.platform !== 'qoj') ?? [])
 const selectedPlanProgress = computed(() => {
-  const solved = new Set(learning.profile.solvedProblems)
-  return { solved: selectedPlanProblems.value.filter((problem) => solved.has(`${problem.platform}:${problem.id}`)).length, total: selectedPlanProblems.value.length }
+  return { solved: selectedPlanProblems.value.filter((problem) => learning.isSolved(`${problem.platform}:${problem.id}`)).length, total: selectedPlanProblems.value.length }
 })
 
 watch(() => learning.selectedSkillId, () => {
@@ -184,8 +183,8 @@ onMounted(() => learning.init())
         <p v-if="selectedPlan">本页完成 {{ selectedPlanProgress.solved }}/{{ selectedPlanProgress.total }} 道 · {{ new Date(selectedPlan.generatedAt).toLocaleDateString() }} 生成；任意一页全部完成后点亮知识点。<span class="freshness" :class="`freshness--${learning.skillFreshness(selectedSkill.id).level}`">{{ learning.skillFreshness(selectedSkill.id).label }}</span></p>
         <p v-else>这是旧版本保留的历史掌握记录，尚未生成 AI 题单。</p>
         <ol v-if="selectedPlan" class="plan-list">
-          <li v-for="problem in selectedPlanProblems" :key="`${problem.platform}:${problem.id}`" :class="{ solved: learning.profile.solvedProblems.includes(`${problem.platform}:${problem.id}`) }">
-            <span class="plan-list__check">{{ learning.profile.solvedProblems.includes(`${problem.platform}:${problem.id}`) ? '✓' : '' }}</span>
+          <li v-for="problem in selectedPlanProblems" :key="`${problem.platform}:${problem.id}`" :class="{ solved: learning.isSolved(`${problem.platform}:${problem.id}`) }">
+            <span class="plan-list__check">{{ learning.isSolved(`${problem.platform}:${problem.id}`) ? '✓' : '' }}</span>
             <div><strong>{{ problem.id }} · {{ problem.title }}</strong><small>{{ problem.platform === 'luogu' ? '洛谷' : problem.platform === 'atcoder' ? 'AtCoder' : 'Codeforces' }}<template v-if="problem.rating"> · {{ problem.rating }}</template></small><p>{{ problem.reason }}</p></div>
             <button @click="openPlanProblem(problem)">在工作台打开</button>
           </li>

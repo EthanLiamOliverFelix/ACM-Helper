@@ -185,7 +185,7 @@ async function openProblem(problem: typeof store.problems[number]) {
       >
         <div class="problem-item__id">{{ problem.id }}</div>
         <div class="problem-item__body">
-          <span class="problem-item__title"><span v-if="learning.profile.solvedProblems.includes(`${problem.platform}:${problem.id}`)" class="problem-item__solved" title="已完成">✓</span>{{ problem.title }}</span>
+          <span class="problem-item__title"><span v-if="learning.isSolved(`${problem.platform}:${problem.id}`)" class="problem-item__solved" title="已完成">✓</span>{{ problem.title }}</span>
           <div v-if="problem.platform !== 'qoj'" class="problem-item__meta">
             <span
               v-if="problem.platform === 'luogu' && problem.difficulty"

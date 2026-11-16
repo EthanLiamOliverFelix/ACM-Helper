@@ -391,26 +391,34 @@ fn section_html(document: &Html, class_name: &str) -> Option<String> {
 }
 
 fn pre_text(element: scraper::ElementRef<'_>) -> String {
-    let div_selector = Selector::parse("div").unwrap();
+    // Codeforces uses either one div per line or inline text separated by br.
+    // In both forms, blank lines at the edges are part of the sample.
     let lines: Vec<String> = element
-        .select(&div_selector)
-        .map(|div| div.text().collect::<String>())
+        .child_elements()
+        .filter(|child| child.value().name() == "div")
+        .map(|line| {
+            let text = pre_inline_text(line);
+            // A lone br in a line div is a placeholder for an empty line.
+            if text == "\n" { String::new() } else { text }
+        })
         .collect();
     if lines.is_empty() {
-        // WebView 序列化后的 Codeforces 样例通常用 <br>，scraper::text()
-        // 不会自动把它转换成换行，必须先显式保留这些边界。
-        let html = element.inner_html();
-        let br_re = Regex::new(r"(?i)<br\s*/?>").unwrap();
-        let normalized = br_re.replace_all(&html, "\n");
-        Html::parse_fragment(&normalized)
-            .root_element()
-            .text()
-            .collect::<String>()
-            .trim()
-            .to_string()
+        pre_inline_text(element)
     } else {
-        lines.join("\n").trim().to_string()
+        lines.join("\n")
     }
+}
+
+fn pre_inline_text(element: scraper::ElementRef<'_>) -> String {
+    let mut text = String::new();
+    for node in element.descendants() {
+        match node.value() {
+            scraper::Node::Text(value) => text.push_str(value),
+            scraper::Node::Element(value) if value.name() == "br" => text.push('\n'),
+            _ => {}
+        }
+    }
+    text
 }
 
 // ── Local HTTP callback servers ───────────────────────────────────
@@ -1381,6 +1389,19 @@ mod tests {
         let selector = Selector::parse("pre").unwrap();
         let sample = document.select(&selector).next().unwrap();
         assert_eq!(pre_text(sample), "3 2\n1 2\n2 3");
+    }
+
+    #[test]
+    fn preserves_leading_and_internal_blank_lines_in_codeforces_samples() {
+        let selector = Selector::parse("pre").unwrap();
+        for (html, expected) in [
+            ("<pre><br>5 4<br><br><br>3 2 1<br></pre>", "\n5 4\n\n\n3 2 1\n"),
+            ("<pre><div></div><div>5 4</div><div><br></div><div></div><div>3 2 1</div><div></div></pre>", "\n5 4\n\n\n3 2 1\n"),
+            ("<pre><span>  &lt;br&gt;</span><br class='line'>x  </pre>", "  <br>\nx  "),
+        ] {
+            let document = Html::parse_fragment(html);
+            assert_eq!(pre_text(document.select(&selector).next().unwrap()), expected);
+        }
     }
 
     #[test]

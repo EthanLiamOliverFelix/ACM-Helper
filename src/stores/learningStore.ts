@@ -8,6 +8,10 @@ import { skillPrerequisitesMet } from '../utils/skillUnlock'
 const REVIEW_AFTER_DAYS = 30
 const DAY_MS = 24 * 60 * 60 * 1000
 
+export function normalizeLearningProblemKey(key: string) {
+  return key.startsWith('atcoder:') ? key.toLowerCase() : key
+}
+
 export type SkillFreshness = {
   level: 'untracked' | 'fresh' | 'aging' | 'stale'
   days: number | null
@@ -28,6 +32,12 @@ export const useLearningStore = defineStore('learning', () => {
   const learning = computed(() => new Set(profile.value.learningSkills))
   const skipped = computed(() => new Set(profile.value.skippedSkills))
   const progress = computed(() => Math.round(profile.value.masteredSkills.length / SKILL_TREE.length * 100))
+
+  const solved = computed(() => new Set(profile.value.solvedProblems.map(normalizeLearningProblemKey)))
+
+  function isSolved(problemKey: string) {
+    return solved.value.has(normalizeLearningProblemKey(problemKey))
+  }
 
   function statusOf(skill: SkillNode): SkillStatus {
     if (mastered.value.has(skill.id)) return 'mastered'
@@ -70,6 +80,7 @@ export const useLearningStore = defineStore('learning', () => {
         skillPlanPages,
         skillLastPracticedAt,
       }
+      reconcilePlanMastery()
     } catch (e) {
       error.value = String(e)
     } finally {
@@ -88,7 +99,6 @@ export const useLearningStore = defineStore('learning', () => {
     const learningSet = new Set(profile.value.learningSkills)
     const masteredSet = new Set(profile.value.masteredSkills)
     const skippedSet = new Set(profile.value.skippedSkills)
-    const solved = new Set(profile.value.solvedProblems)
     let changed = true
     while (changed) {
       changed = false
@@ -97,7 +107,7 @@ export const useLearningStore = defineStore('learning', () => {
         if (!plans.length) continue // 保留旧版本中没有题单的历史掌握记录。
         const unlocked = skillPrerequisitesMet(skill, masteredSet, skippedSet)
         // 重复练习不会撤销已经取得的掌握状态：任意一页完整完成即可。
-        const complete = plans.some((plan) => plan.problems.length > 0 && plan.problems.every((problem) => solved.has(`${problem.platform}:${problem.id}`)))
+        const complete = plans.some((plan) => plan.problems.length > 0 && plan.problems.every((problem) => isSolved(`${problem.platform}:${problem.id}`)))
         if (unlocked && complete) {
           if (!masteredSet.has(skill.id)) { masteredSet.add(skill.id); changed = true }
           skippedSet.delete(skill.id)
@@ -148,14 +158,13 @@ export const useLearningStore = defineStore('learning', () => {
     const pages = plansFor(skillId)
     const plan = pages[pageIndex ?? Math.max(0, pages.length - 1)]
     if (!plan) return { solved: 0, total: 0 }
-    const solved = new Set(profile.value.solvedProblems)
-    return { solved: plan.problems.filter((problem) => solved.has(`${problem.platform}:${problem.id}`)).length, total: plan.problems.length }
+    return { solved: plan.problems.filter((problem) => isSolved(`${problem.platform}:${problem.id}`)).length, total: plan.problems.length }
   }
 
   function touchSkillsForProblem(problemKey: string, tags: string[] = []) {
     const related = new Set(skillsForTags(tags).map((skill) => skill.id))
     for (const skill of SKILL_TREE) {
-      if (plansFor(skill.id).some((plan) => plan.problems.some((problem) => `${problem.platform}:${problem.id}` === problemKey))) related.add(skill.id)
+      if (plansFor(skill.id).some((plan) => plan.problems.some((problem) => normalizeLearningProblemKey(`${problem.platform}:${problem.id}`) === problemKey))) related.add(skill.id)
     }
     if (!related.size) return
     const timestamps = { ...profile.value.skillLastPracticedAt }
@@ -166,14 +175,13 @@ export const useLearningStore = defineStore('learning', () => {
 
   function skillFreshness(skillId: string, now = Date.now()): SkillFreshness {
     const timestamp = profile.value.skillLastPracticedAt[skillId]
-    const solved = new Set(profile.value.solvedProblems)
-    const practicedProblems = new Set(profile.value.skillEvidence[skillId] ?? [])
+    const practicedProblems = new Set((profile.value.skillEvidence[skillId] ?? []).map(normalizeLearningProblemKey))
     let completedPages = 0
     for (const plan of plansFor(skillId)) {
       let pageComplete = plan.problems.length > 0
       for (const problem of plan.problems) {
-        const key = `${problem.platform}:${problem.id}`
-        if (solved.has(key)) practicedProblems.add(key)
+        const key = normalizeLearningProblemKey(`${problem.platform}:${problem.id}`)
+        if (isSolved(key)) practicedProblems.add(key)
         else pageComplete = false
       }
       if (pageComplete) completedPages++
@@ -189,7 +197,8 @@ export const useLearningStore = defineStore('learning', () => {
   }
 
   async function toggleSolved(problemKey: string) {
-    const solved = new Set(profile.value.solvedProblems)
+    problemKey = normalizeLearningProblemKey(problemKey)
+    const solved = new Set(profile.value.solvedProblems.map(normalizeLearningProblemKey))
     if (solved.has(problemKey)) solved.delete(problemKey)
     else {
       solved.add(problemKey)
@@ -201,7 +210,8 @@ export const useLearningStore = defineStore('learning', () => {
   }
 
   async function markSolved(problemKey: string) {
-    if (profile.value.solvedProblems.includes(problemKey)) return
+    problemKey = normalizeLearningProblemKey(problemKey)
+    if (isSolved(problemKey)) return
     profile.value.solvedProblems = [...profile.value.solvedProblems, problemKey]
     touchSkillsForProblem(problemKey)
     reconcilePlanMastery()
@@ -209,10 +219,11 @@ export const useLearningStore = defineStore('learning', () => {
   }
 
   async function recordAccepted(problemKey: string, tags: string[]) {
-    if (!profile.value.solvedProblems.includes(problemKey)) profile.value.solvedProblems = [...profile.value.solvedProblems, problemKey]
+    problemKey = normalizeLearningProblemKey(problemKey)
+    if (!isSolved(problemKey)) profile.value.solvedProblems = [...profile.value.solvedProblems, problemKey]
     const evidence = { ...profile.value.skillEvidence }
     for (const skill of skillsForTags(tags)) {
-      const keys = new Set(evidence[skill.id] ?? [])
+      const keys = new Set((evidence[skill.id] ?? []).map(normalizeLearningProblemKey))
       keys.add(problemKey)
       evidence[skill.id] = [...keys]
     }
@@ -277,5 +288,5 @@ export const useLearningStore = defineStore('learning', () => {
     }
   }
 
-  return { profile, selectedSkillId, initialized, contestUrl, contestAnalysis, isAnalyzing, error, mastered, skipped, progress, init, statusOf, unmetPrerequisites, plansFor, startSkillPlan, openSkillPlan, closeSkillPlan, planProgress, skillFreshness, toggleSkillSkipped, toggleSolved, markSolved, recordAccepted, skillsForTags, knowledgeForTags, analyzeContest, analyzeContestProblems }
+  return { profile, selectedSkillId, initialized, contestUrl, contestAnalysis, isAnalyzing, error, mastered, skipped, progress, init, statusOf, unmetPrerequisites, plansFor, startSkillPlan, openSkillPlan, closeSkillPlan, planProgress, skillFreshness, toggleSkillSkipped, toggleSolved, isSolved, markSolved, recordAccepted, skillsForTags, knowledgeForTags, analyzeContest, analyzeContestProblems }
 })

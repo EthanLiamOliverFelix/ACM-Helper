@@ -1,45 +1,19 @@
 <script setup lang="ts">
 import { ref } from 'vue'
+import DebugVariableNode from './DebugVariableNode.vue'
 import { useProblemStore } from '../stores/problemStore'
 
 const store = useProblemStore()
 const newWatch = ref('')
 const expanded = ref(new Set<string>())
 
-function splitContainer(value = '') {
-  const open = value.indexOf('{')
-  const close = value.lastIndexOf('}')
-  if (open < 0 || close <= open) return []
-  const source = value.slice(open + 1, close)
-  const result: string[] = []
-  let start = 0; let depth = 0; let quote = ''; let escaped = false
-  for (let index = 0; index < source.length; index++) {
-    const char = source[index]
-    if (quote) {
-      if (char === quote && !escaped) quote = ''
-      escaped = char === '\\' && !escaped
-      if (char !== '\\') escaped = false
-      continue
-    }
-    if (char === '"' || char === "'") { quote = char; continue }
-    if ('{[('.includes(char)) depth++
-    else if ('}])'.includes(char)) depth--
-    else if (char === ',' && depth === 0) { result.push(source.slice(start, index).trim()); start = index + 1 }
-  }
-  const tail = source.slice(start).trim()
-  if (tail) result.push(tail)
-  return result.length > 1 || (result.length === 1 && /^\s*\[?\d+\]?\s*=/.test(result[0])) ? result : []
-}
+const watchesOpen = ref(true)
+const localsOpen = ref(true)
 
 function toggleExpanded(key: string) {
   const next = new Set(expanded.value)
   if (next.has(key)) next.delete(key); else next.add(key)
   expanded.value = next
-}
-
-function elementLabel(value: string, index: number) {
-  const match = value.match(/^\s*(\[[^\]]+\]|[^=]+?)\s*=\s*(.*)$/s)
-  return match ? { name: match[1].trim(), value: match[2] } : { name: `[${index}]`, value }
 }
 
 async function addWatch() {
@@ -79,28 +53,24 @@ async function addWatch() {
       <p v-if="store.debugSession?.active" class="debug-panel__hint">循环内的断点每轮都会命中。要运行到循环后，请移除循环内断点，在循环后设置断点，再点“下个断点”；“步出”会返回调用函数。</p>
 
       <section class="watch-section">
-        <h3>变量监视</h3>
-        <form class="watch-section__add" @submit.prevent="addWatch">
-          <input v-model="newWatch" spellcheck="false" placeholder="输入变量或表达式，例如 ans、a[i]" />
-          <button :disabled="!newWatch.trim()">＋</button>
-        </form>
-        <div v-if="!store.watchExpressions.length" class="debug-panel__empty">添加要持续查看的变量或表达式</div>
-        <div v-for="expression in store.watchExpressions" :key="expression" class="variable-tree">
-          <div class="variable-row">
-            <code><button v-if="splitContainer(store.debugSession?.watches.find(item => item.name === expression)?.value).length" class="variable-row__toggle" @click="toggleExpanded(`watch:${expression}`)">{{ expanded.has(`watch:${expression}`) ? '⌄' : '›' }}</button>{{ expression }}</code>
-            <span :class="{ error: store.debugSession?.watches.find(item => item.name === expression)?.error }">{{ store.debugSession?.watches.find(item => item.name === expression)?.error || (splitContainer(store.debugSession?.watches.find(item => item.name === expression)?.value).length ? `容器 · ${splitContainer(store.debugSession?.watches.find(item => item.name === expression)?.value).length} 项` : store.debugSession?.watches.find(item => item.name === expression)?.value) || '—' }}</span>
+        <button type="button" class="watch-section__heading" :aria-expanded="watchesOpen" aria-controls="debug-watches" @click="watchesOpen = !watchesOpen"><span>{{ watchesOpen ? '⌄' : '›' }} 变量监视</span></button>
+        <div v-show="watchesOpen" id="debug-watches">
+          <form class="watch-section__add" @submit.prevent="addWatch">
+            <input v-model="newWatch" spellcheck="false" placeholder="输入变量或表达式，例如 ans、a[i]" />
+            <button :disabled="!newWatch.trim()">＋</button>
+          </form>
+          <div v-if="!store.watchExpressions.length" class="debug-panel__empty">添加要持续查看的变量或表达式</div>
+          <DebugVariableNode v-for="expression in store.watchExpressions" :key="expression" :name="expression" :value="store.debugSession?.watches.find(item => item.name === expression)?.value" :error="store.debugSession?.watches.find(item => item.name === expression)?.error" :node-key="`watch:${expression}`" :expanded="expanded" @toggle="toggleExpanded">
             <button title="移除监视" @click="store.removeWatchExpression(expression)">×</button>
-          </div>
-          <div v-if="expanded.has(`watch:${expression}`)" class="variable-tree__children"><div v-for="(item, index) in splitContainer(store.debugSession?.watches.find(value => value.name === expression)?.value)" :key="index"><code>{{ elementLabel(item, index).name }}</code><span>{{ elementLabel(item, index).value }}</span></div></div>
+          </DebugVariableNode>
         </div>
       </section>
 
       <section class="watch-section">
-        <h3>局部变量</h3>
-        <div v-if="!store.debugSession?.variables.length" class="debug-panel__empty">暂停后显示当前作用域中的变量</div>
-        <div v-for="variable in store.debugSession?.variables" :key="variable.name" class="variable-tree">
-          <div class="variable-row variable-row--local"><code><button v-if="splitContainer(variable.value).length" class="variable-row__toggle" @click="toggleExpanded(`local:${variable.name}`)">{{ expanded.has(`local:${variable.name}`) ? '⌄' : '›' }}</button>{{ variable.name }}</code><span>{{ splitContainer(variable.value).length ? `容器 · ${splitContainer(variable.value).length} 项` : variable.value }}</span></div>
-          <div v-if="expanded.has(`local:${variable.name}`)" class="variable-tree__children"><div v-for="(item, index) in splitContainer(variable.value)" :key="index"><code>{{ elementLabel(item, index).name }}</code><span>{{ elementLabel(item, index).value }}</span></div></div>
+        <button type="button" class="watch-section__heading" :aria-expanded="localsOpen" aria-controls="debug-locals" @click="localsOpen = !localsOpen"><span>{{ localsOpen ? '⌄' : '›' }} 局部变量</span></button>
+        <div v-show="localsOpen" id="debug-locals">
+          <div v-if="!store.debugSession?.variables.length" class="debug-panel__empty">暂停后显示当前作用域中的变量</div>
+          <DebugVariableNode v-for="variable in store.debugSession?.variables" :key="variable.name" :name="variable.name" :value="variable.value" :error="variable.error" :node-key="`local:${variable.name}`" :expanded="expanded" @toggle="toggleExpanded" />
         </div>
       </section>
 
@@ -124,10 +94,13 @@ textarea { box-sizing: border-box; width: 100%; min-height: 92px; max-height: 21
 .debug-panel__error { margin-top: 8px; padding: 8px; border: 1px solid var(--color-tone-713838); border-radius: 4px; background: var(--color-tone-351d1d); color: var(--color-danger); font-size: 13px; line-height: 1.45; word-break: break-word; }
 .debug-panel__controls { display: grid; grid-template-columns: repeat(4, 1fr); gap: 5px; margin: 10px 0 14px; button { min-width: 0; padding: 7px 2px; border: 1px solid var(--color-tone-4c3b5c); border-radius: 4px; background: var(--color-tone-30243b); color: var(--color-purple); font-size: 18px; cursor: pointer; span { display: block; margin-top: 2px; font-family: var(--font-ui); font-size: 12px; } &:disabled { opacity: .35; cursor: not-allowed; } } }
 .debug-panel__hint { margin: -6px 0 12px; color: var(--color-text-faint); font-size: 12px; line-height: 1.45; }
-.watch-section, .debug-output { margin-top: 12px; border-top: 1px solid var(--color-tone-353535); padding-top: 10px; h3 { margin: 0 0 7px; color: var(--color-text-secondary); font-size: 13px; } }
+.debug-output { margin-top: 12px; border-top: 1px solid var(--color-tone-353535); padding-top: 10px; h3 { margin: 0 0 7px; color: var(--color-text-secondary); font-size: 13px; } }
+.watch-section { margin-top: 12px; }
+.watch-section__heading { display: block; width: 100%; padding: 10px 0 7px; border: 0; border-top: 1px solid var(--color-tone-353535); background: transparent; color: var(--color-text-secondary); text-align: left; font: inherit; font-weight: 600; cursor: pointer;
+  &:hover { border-top-color: var(--color-accent-text); color: var(--color-accent-text); }
+  &:focus-visible { outline: 1px solid var(--color-accent-text); outline-offset: 2px; }
+}
 .watch-section__add { display: flex; gap: 5px; margin-bottom: 6px; input { min-width: 0; flex: 1; padding: 6px 7px; border: 1px solid var(--color-border-control); border-radius: 4px; outline: none; background: var(--color-bg-deep); color: var(--color-text-strong); font: 13px/1.45 Consolas, monospace; &:focus { border-color: var(--color-tone-6d4d91); } } button { width: 32px; border: 1px solid var(--color-tone-4f6f89); border-radius: 4px; background: var(--color-tone-243747); color: var(--color-accent-text); font-size: 16px; cursor: pointer; } }
-.variable-row { display: grid; grid-template-columns: minmax(65px, .8fr) minmax(0, 1.3fr) 20px; align-items: start; gap: 6px; padding: 7px 6px; border-bottom: 1px solid var(--color-bg-raised); background: var(--color-tone-222); font: 13px/1.45 Consolas, monospace; code { overflow: hidden; color: var(--color-accent-text); font: inherit; text-overflow: ellipsis; } span { overflow-wrap: anywhere; color: var(--color-code); font: inherit; &.error { color: var(--color-danger); } } button { border: 0; background: transparent; color: var(--color-text-faint); cursor: pointer; &:hover { color: var(--color-danger); } } &--local { grid-template-columns: minmax(65px, .8fr) minmax(0, 1.3fr); } }
-.variable-row__toggle { width: 18px; padding: 0 !important; color: var(--color-accent-text) !important; font-size: 16px; text-align: left; }.variable-tree__children { border-left: 1px solid var(--color-border-input); margin-left: 12px; > div { display: grid; grid-template-columns: minmax(55px,.55fr) 1fr; gap: 8px; padding: 6px 8px; border-bottom: 1px solid var(--color-tone-2d2d2d); background: var(--color-tone-1b1b1b); font: 13px/1.45 Consolas, monospace; code { color: var(--color-tone-d16dce); } span { overflow-wrap: anywhere; color: var(--color-tone-b5cea8); } } }
 .debug-panel__empty { padding: 10px 4px; color: var(--color-text-disabled); font-size: 12px; text-align: center; }
 .debug-output pre { max-height: 140px; overflow: auto; margin: 0; padding: 7px; background: var(--color-bg-deep); color: var(--color-text-strong); font: 13px/1.45 Consolas, monospace; white-space: pre-wrap; &.error { color: var(--color-danger); } }
 </style>

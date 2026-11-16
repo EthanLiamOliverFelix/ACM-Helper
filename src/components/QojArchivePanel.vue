@@ -71,7 +71,7 @@ onMounted(() => { if (!store.qojArchivePage) void load() })
     <div v-else class="archive-content">
       <template v-if="store.qojSelectedContest">
         <button v-for="problem in contestProblems" :key="problem.id" class="problem-row" :disabled="!!opening" @click="openProblem(problem)">
-          <span class="problem-label">{{ problem.label }}</span><span class="problem-name"><span v-if="learning.profile.solvedProblems.includes(`qoj:${problem.id}`)" class="problem-solved" title="已完成" aria-label="已完成">✓</span>{{ problem.title }}<small v-if="opening === problem.id">正在打开…</small></span>
+          <span class="problem-label">{{ problem.label }}</span><span class="problem-name"><span v-if="learning.isSolved(`qoj:${problem.id}`)" class="problem-solved" title="已完成" aria-label="已完成">✓</span>{{ problem.title }}<small v-if="opening === problem.id">正在打开…</small></span>
           <span v-if="problem.acceptedTeams != null && problem.submittedTeams != null" class="team-ratio" title="通过队伍 / 所有提交队伍">{{ problem.acceptedTeams }}/{{ problem.submittedTeams }}</span>
         </button>
         <p v-if="!contestProblems.length" class="empty">没有找到对应题目</p>

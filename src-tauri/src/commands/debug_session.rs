@@ -287,21 +287,50 @@ fn capture_field(text: &str, field: &str) -> Option<String> {
 fn parse_gdb_variables(text: &str) -> Vec<DebugVariable> {
     let mut result = Vec::new();
     let mut seen = HashSet::new();
-    let mut rest = text;
-    while let Some(name_at) = rest.find("name=\"") {
-        rest = &rest[name_at..];
-        let Some(name) = capture_field(rest, "name") else {
-            break;
-        };
-        let value = capture_field(rest, "value").unwrap_or_else(|| "<不可用>".into());
-        if seen.insert(name.clone()) {
-            result.push(DebugVariable {
-                name,
-                value,
-                error: None,
-            });
+    // A missing value belongs to this record only; never scan into the next variable.
+    let mut start = None;
+    let mut depth = 0;
+    let mut quoted = false;
+    let mut escaped = false;
+    for (index, character) in text.char_indices() {
+        if quoted {
+            if character == '"' && !escaped {
+                quoted = false;
+            }
+            escaped = character == '\\' && !escaped;
+            if character != '\\' {
+                escaped = false;
+            }
+            continue;
         }
-        rest = &rest[6..];
+        match character {
+            '"' => quoted = true,
+            '{' => {
+                if depth == 0 {
+                    start = Some(index);
+                }
+                depth += 1;
+            }
+            '}' if depth > 0 => {
+                depth -= 1;
+                if depth != 0 {
+                    continue;
+                }
+                let record = &text[start.take().unwrap()..=index];
+                let Some(name) = capture_field(record, "name") else {
+                    continue;
+                };
+                let value = capture_field(record, "value").unwrap_or_else(|| "<不可用>".into());
+                if seen.insert(name.clone()) {
+                    result.push(DebugVariable {
+                        name,
+                        value,
+                        error: None,
+                    });
+                }
+            }
+            _ => {}
+        }
     }
     result
 }
@@ -367,7 +396,7 @@ async fn inspect_gdb(
     let frame = gdb_command(session, "-stack-info-frame")
         .await
         .unwrap_or_default();
-    let variables_raw = gdb_command(session, "-stack-list-variables --simple-values")
+    let variables_raw = gdb_command(session, "-stack-list-variables --all-values")
         .await
         .unwrap_or_default();
     let mut watched = Vec::new();
@@ -536,6 +565,8 @@ pub async fn start_debug_session(
         let mut session = spawn_session(gdb, "gdb").await?;
         gdb_until_prompt(&mut session).await?;
         gdb_command(&mut session, "-gdb-set pagination off").await?;
+        gdb_command(&mut session, "-gdb-set print elements 200").await?;
+        gdb_command(&mut session, "-gdb-set print max-depth 20").await?;
         gdb_command(&mut session, "-file-exec-and-symbols \"debug-main.exe\"").await?;
         let initial_breakpoints = if breakpoints.is_empty() {
             vec![0]
@@ -682,6 +713,17 @@ mod tests {
     }
 
     #[test]
+    fn gdb_variables_do_not_borrow_values_from_following_records() {
+        let variables = parse_gdb_variables(r#"^done,variables=[{name="dp",type="std::vector<int>"},{name="dfs",value="{<lambda> = {}}"},{name="trees",type="std::vector<tree>"},{name="total",value="7"},{name="text",value="\"a, {name=\\\"fake\\\"}\""}]"#);
+        assert_eq!(variables.len(), 5);
+        assert_eq!(variables[0].value, "<不可用>");
+        assert_eq!(variables[1].value, "{<lambda> = {}}");
+        assert_eq!(variables[2].value, "<不可用>");
+        assert_eq!(variables[3].value, "7");
+        assert_eq!(variables[4].name, "text");
+    }
+
+    #[test]
     fn interactive_python_steps_and_watches_expression() {
         let runtime = tokio::runtime::Runtime::new().unwrap();
         runtime.block_on(async {
@@ -757,6 +799,38 @@ mod tests {
             write_command(&mut session, r#"{"action":"continue","breakpoints":[7]}"#).await.unwrap();
             let state = python_state("test", "python-trace", &read_line(&mut session, Duration::from_secs(10)).await.unwrap()).unwrap();
             assert!(!state.active);
+            let _ = session.child.kill().await;
+            let _ = fs::remove_dir_all(dir);
+        });
+    }
+
+    #[test]
+    fn interactive_gdb_reads_nested_containers_in_locals_and_watches() {
+        let runtime = tokio::runtime::Runtime::new().unwrap();
+        runtime.block_on(async {
+            let dir = test_dir("gdb-nested-containers");
+            let source = dir.join("main.cpp");
+            let executable = dir.join("debug-main.exe");
+            fs::write(&source, "#include <vector>\nstruct tree { std::vector<std::vector<int>> tt; };\nint main() {\n int n = 7;\n std::vector<std::vector<int>> dp{{1, 2}, {3}};\n std::vector<tree> trees(2);\n trees[1].tt = {{}, {3, 4}};\n int total = 7;\n volatile int sink = total;\n return sink;\n}\n").unwrap();
+            let mut compile = Command::new("g++");
+            compile.args(["-g", "-O0"]).arg(&source).arg("-o").arg(&executable);
+            assert!(command_output(compile).await.unwrap().status.success());
+            let mut command = Command::new("gdb");
+            command.args(["--interpreter=mi2", "--quiet"]).current_dir(&dir);
+            let mut session = spawn_session(command, "gdb").await.unwrap();
+            gdb_until_prompt(&mut session).await.unwrap();
+            gdb_command(&mut session, "-file-exec-and-symbols \"debug-main.exe\"").await.unwrap();
+            gdb_command(&mut session, "-gdb-set print elements 200").await.unwrap();
+            gdb_command(&mut session, "-gdb-set print max-depth 20").await.unwrap();
+            gdb_command(&mut session, "-break-insert main.cpp:9").await.unwrap();
+            let execution = gdb_execute(&mut session, "-exec-run").await.unwrap();
+            let state = inspect_gdb("test", &mut session, &execution, &["trees".into()]).await.unwrap();
+            let dp = &state.variables.iter().find(|v| v.name == "dp").unwrap().value;
+            let trees = &state.variables.iter().find(|v| v.name == "trees").unwrap().value;
+            assert!(dp.contains("1, 2"), "{}", dp);
+            assert!(trees.contains("tt =") && trees.contains("3, 4"), "{}", trees);
+            assert_eq!(trees, &state.watches[0].value);
+            assert_eq!(state.variables.iter().find(|v| v.name == "total").unwrap().value, "7");
             let _ = session.child.kill().await;
             let _ = fs::remove_dir_all(dir);
         });

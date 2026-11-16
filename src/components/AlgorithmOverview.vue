@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import { computed, ref } from 'vue'
 import { SKILL_TREE } from '../data/skillTree'
-import { useLearningStore } from '../stores/learningStore'
+import { normalizeLearningProblemKey, useLearningStore } from '../stores/learningStore'
 import type { SkillNode } from '../types'
 
 const emit = defineEmits<{
@@ -10,15 +10,15 @@ const emit = defineEmits<{
 }>()
 
 const learning = useLearningStore()
-const solved = computed(() => new Set(learning.profile.solvedProblems))
+const solved = computed(() => new Set(learning.profile.solvedProblems.map(normalizeLearningProblemKey)))
 const selectedCategoryName = ref<string | null>(null)
 
 function practiceCount(skill: SkillNode) {
-  const problems = new Set(learning.profile.skillEvidence[skill.id] ?? [])
+  const problems = new Set((learning.profile.skillEvidence[skill.id] ?? []).map(normalizeLearningProblemKey))
   for (const plan of learning.plansFor(skill.id)) {
     for (const problem of plan.problems) {
-      const key = `${problem.platform}:${problem.id}`
-      if (solved.value.has(key)) problems.add(key)
+      const key = normalizeLearningProblemKey(`${problem.platform}:${problem.id}`)
+      if (learning.isSolved(key)) problems.add(key)
     }
   }
   return problems.size

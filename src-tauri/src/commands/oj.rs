@@ -60,6 +60,8 @@ pub async fn fetch_problems_atcoder() -> Result<Vec<Problem>, String> {
     );
     let raw: Vec<Value> = problems_response
         .map_err(|error| format!("拉取 AtCoder 题库失败: {error}"))?
+        .error_for_status()
+        .map_err(|error| format!("AtCoder 题库请求失败: {error}"))?
         .json()
         .await
         .map_err(|error| format!("解析 AtCoder 题库失败: {error}"))?;

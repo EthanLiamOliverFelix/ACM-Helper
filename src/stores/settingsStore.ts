@@ -32,6 +32,7 @@ export const useSettingsStore = defineStore('settings', () => {
     luoguCppLanguageId?: number
     luoguPythonLanguageId?: number
     luoguEnableO2?: boolean
+    luoguO2PreferenceVersion?: number
     toolchainPaths?: Partial<ToolchainPaths>
     theme?: ThemeMode
     zoomLevel?: number
@@ -63,7 +64,9 @@ export const useSettingsStore = defineStore('settings', () => {
   const pythonLanguageIds = [7, 25]
   const luoguCppLanguageId = ref(cppLanguageIds.includes(Number(saved.luoguCppLanguageId)) ? Number(saved.luoguCppLanguageId) : 34)
   const luoguPythonLanguageId = ref(pythonLanguageIds.includes(Number(saved.luoguPythonLanguageId)) ? Number(saved.luoguPythonLanguageId) : 25)
-  const luoguEnableO2 = ref(saved.luoguEnableO2 ?? false)
+  // Earlier versions persisted a disabled default. Enable it once when upgrading,
+  // then honor all choices saved with the new preference version.
+  const luoguEnableO2 = ref(saved.luoguO2PreferenceVersion === 1 ? saved.luoguEnableO2 ?? true : true)
   const toolchainPaths = reactive<ToolchainPaths>({
     cppCompiler: saved.toolchainPaths?.cppCompiler ?? '',
     cppDebugger: saved.toolchainPaths?.cppDebugger ?? '',
@@ -85,6 +88,7 @@ export const useSettingsStore = defineStore('settings', () => {
       luoguCppLanguageId: luoguCppLanguageId.value,
       luoguPythonLanguageId: luoguPythonLanguageId.value,
       luoguEnableO2: luoguEnableO2.value,
+      luoguO2PreferenceVersion: 1,
       toolchainPaths,
       theme: theme.value,
       zoomLevel: zoomLevel.value,

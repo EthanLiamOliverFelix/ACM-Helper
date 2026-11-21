@@ -398,6 +398,7 @@ pub async fn fetch_problems_qoj(
     app: AppHandle,
     page: Option<u32>,
     keyword: Option<String>,
+    force: Option<bool>,
 ) -> Result<QojProblemPage, String> {
     let page = page.unwrap_or(1).max(1);
     let keyword = keyword.unwrap_or_default();
@@ -411,7 +412,7 @@ pub async fn fetch_problems_qoj(
         .lock()
         .await
         .get(&keyword)
-        .filter(|(time, _)| time.elapsed() < Duration::from_secs(60))
+        .filter(|(time, _)| !force.unwrap_or(false) && time.elapsed() < Duration::from_secs(60))
         .map(|(_, pages)| *pages);
     let mut result = parse_qoj_catalog(&qoj_catalog_html(app.clone(), url, false).await?, page)?;
     // QOJ deliberately shows only a moving window of page links. Its out-of-range

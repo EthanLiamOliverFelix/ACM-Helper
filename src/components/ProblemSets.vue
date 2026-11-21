@@ -388,6 +388,7 @@ const pagedContestCatalog = computed(() => {
   const start = (contestPage.value - 1) * contestPageSize
   return filteredContestCatalog.value.slice(start, start + contestPageSize)
 })
+const loadedContestProblems = ref<Record<string, Problem[]>>({})
 const contestProgressByKey = computed(() => {
   const result = new Map<string, { solved: number; total: number }>()
   const solved = new Set(learning.profile.solvedProblems.map(key => key.toLowerCase()))
@@ -403,11 +404,15 @@ const contestProgressByKey = computed(() => {
     if (solved.has(`${problem.platform}:${problem.id}`.toLowerCase())) progress.solved++
     result.set(key, progress)
   }
+  for (const [key, entries] of Object.entries(loadedContestProblems.value)) {
+    const unique = new Map(entries.map(problem => [`${problem.platform}:${problem.id.toLowerCase()}`, problem]))
+    result.set(key, { total: unique.size, solved: [...unique.values()].filter(problem => learning.isSolved(`${problem.platform}:${problem.id}`)).length })
+  }
   return result
 })
 
 const contestPlatformLabel = (platform: string) => platform === 'codeforces' ? 'CF' : platform === 'luogu' ? '洛谷' : platform === 'atcoder' ? 'AtCoder' : ''
-const contestProgress = (contest: ContestCatalogEntry) => contestProgressByKey.value.get(`${contest.platform}:${contest.id.toLowerCase()}`) ?? { solved: 0, total: 0 }
+const contestProgress = (contest: ContestCatalogEntry) => contestProgressByKey.value.get(`${contest.platform}:${contest.id.toLowerCase()}`)
 
 function flash(message: string) {
   notice.value = message
@@ -685,10 +690,14 @@ async function readContest(contest: ImportableContest) {
   if (contest.platform === 'atcoder') {
     if (!problems.problems.some(p => p.platform === 'atcoder')) await problems.fetchAtCoderProblems()
     const prefix = `${contest.contestId.toLowerCase()}_`
-    return { title: contest.title, problems: problems.problems.filter(p => p.platform === 'atcoder' && p.id.toLowerCase().startsWith(prefix)) }
+    const entries = problems.problems.filter(p => p.platform === 'atcoder' && p.id.toLowerCase().startsWith(prefix))
+    if (entries.length) loadedContestProblems.value[`atcoder:${contest.contestId.toLowerCase()}`] = entries
+    return { title: contest.title, problems: entries }
   }
   const analysis = await invoke<ContestAnalysis>(contest.platform === 'luogu' ? 'analyze_contest_luogu' : 'analyze_contest_cf', { contestUrl: contest.url })
-  return { title: analysis.title, problems: analysisProblems(analysis) }
+  const entries = analysisProblems(analysis)
+  loadedContestProblems.value[`${contest.platform}:${contest.contestId.toLowerCase()}`] = entries
+  return { title: analysis.title, problems: entries }
 }
 async function addContestToSets(contest: { platform: string; contestId: string; title: string; url: string }) {
   if (addingContest.value || contest.platform === 'qoj') return
@@ -925,7 +934,7 @@ watch(() => itemDialog.mode, mode => {
       <div v-if="contestCatalogLoading && !contestCatalog.length" class="empty">正在读取比赛目录…</div>
       <ul v-else :key="`${contestCatalogPlatform}:${contestPage}:${contestSearch}`" class="contest-items contest-catalog-items">
         <li v-for="contest in pagedContestCatalog" :key="`${contest.platform}:${contest.id}`">
-          <button class="contest-open" @click="openContest({ ...contest, contestId: contest.id })"><span>{{ contestPlatformLabel(contest.platform) }}</span><div><strong>{{ contest.title }}</strong><small><span>{{ contest.id }}</span><em :class="{ complete: contestProgress(contest).total > 0 && contestProgress(contest).solved === contestProgress(contest).total }">已做 {{ contestProgress(contest).solved }}/{{ contestProgress(contest).total }}</em></small></div></button>
+          <button class="contest-open" @click="openContest({ ...contest, contestId: contest.id })"><span>{{ contestPlatformLabel(contest.platform) }}</span><div><strong>{{ contest.title }}</strong><small><span>{{ contest.id }}</span><em :class="{ complete: (contestProgress(contest)?.total ?? 0) > 0 && contestProgress(contest)?.solved === contestProgress(contest)?.total }"><template v-if="contestProgress(contest)">已做 {{ contestProgress(contest)?.solved }}/{{ contestProgress(contest)?.total }}</template><template v-else>题数待读取</template></em></small></div></button>
           <button class="contest-favorite" :class="{ active: sets.containsContest(contest.platform, contest.id) }" :disabled="!!addingContest || sets.containsContest(contest.platform, contest.id)" title="加入题单" @click="addContestToSets({ ...contest, contestId: contest.id })">{{ addingContest === `${contest.platform}:${contest.id}` ? '…' : sets.containsContest(contest.platform, contest.id) ? '✓' : '＋' }}</button>
         </li>
       </ul>

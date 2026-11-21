@@ -287,7 +287,7 @@ export const useProblemStore = defineStore('problem', () => {
     qojCatalogPage.value = qojCatalogCache[key] ?? null
     try {
       const result = !force && qojCatalogCache[key] ? qojCatalogCache[key]
-        : await withOjDiagnostic('qoj', 'fetch-catalog', () => invoke<QojProblemPage>('fetch_problems_qoj', { page: targetPage, keyword }))
+        : await withOjDiagnostic('qoj', 'fetch-catalog', () => invoke<QojProblemPage>('fetch_problems_qoj', { page: targetPage, keyword, force }))
       result.updatedAt ??= Date.now()
       qojCatalogCache[key] = result
       void saveDataCenterValue('qoj-catalog-pages', qojCatalogCache)

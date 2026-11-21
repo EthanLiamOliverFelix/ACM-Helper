@@ -22,6 +22,16 @@ const contest: QojArchiveEntry = { id: '2', kind: 'contest', title: 'Finals', ur
 beforeEach(() => { vi.clearAllMocks(); mocks.data.clear(); mocks.listeners.clear(); setActivePinia(createPinia()) })
 
 describe('QOJ catalogs and archives', () => {
+  it('forces both the page and backend total to refresh', async () => {
+    let totalPages = 12
+    mocks.invoke.mockImplementation(async (_command, args) => ({ ...catalogPage(args.page), totalPages }))
+    const store = useProblemStore()
+    await store.setPlatform('qoj')
+    totalPages = 13
+    await store.fetchQojProblems(1, true)
+    expect(mocks.invoke).toHaveBeenLastCalledWith('fetch_problems_qoj', { page: 1, keyword: '', force: true })
+    expect(store.totalPages).toBe(13)
+  })
   it('refetches cached numbered input-format examples even when another sample was already extracted', async () => {
     mocks.invoke.mockImplementation(async command => command === 'import_problem_url'
       ? { id: '10', title: '混乱的密码', platform: 'qoj', tags: [], description: '<p>正文</p>', contentFormat: 'html', samples: [{ input: '8\nabaaaaaa', output: '4' }] } : null)

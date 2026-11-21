@@ -684,7 +684,7 @@ pub async fn login_via_browser(
 }
 
 /// 获取 Codeforces 题目列表（公开 API，无需登录）
-/// 返回所有有 rating 的题目，按 ID 倒序排列
+/// 保留尚未评级的新题，按 ID 倒序排列。
 #[tauri::command]
 pub async fn fetch_problems_cf() -> Result<Vec<Problem>, String> {
     let client = build_client()?;
@@ -695,6 +695,8 @@ pub async fn fetch_problems_cf() -> Result<Vec<Problem>, String> {
         .map_err(|e| format!("请求题目列表失败: {}", e))?;
 
     let body: CfProblemsetResponse = resp
+        .error_for_status()
+        .map_err(|e| format!("Codeforces 题库请求失败: {e}"))?
         .json()
         .await
         .map_err(|e| format!("解析 JSON 失败: {}", e))?;
@@ -705,14 +707,13 @@ pub async fn fetch_problems_cf() -> Result<Vec<Problem>, String> {
     }
 
     let result = body.result.ok_or_else(|| "API 返回结果为空".to_string())?;
-    let mut problems: Vec<Problem> = result
-        .problems
-        .iter()
-        .filter(|p| p.rating.is_some())
-        .map(convert_problem)
-        .collect();
+    Ok(convert_cf_catalog(&result.problems))
+}
+
+fn convert_cf_catalog(raw: &[CfProblemRaw]) -> Vec<Problem> {
+    let mut problems: Vec<Problem> = raw.iter().map(convert_problem).collect();
     problems.sort_by(|a, b| b.id.cmp(&a.id));
-    Ok(problems)
+    problems
 }
 
 /// 抓取 Codeforces 题面、输入输出说明与样例。
@@ -1384,6 +1385,19 @@ mod tests {
     }
 
     #[test]
+    fn catalog_keeps_new_problems_without_ratings() {
+        let raw = serde_json::from_value::<Vec<CfProblemRaw>>(serde_json::json!([
+            {"contestId":2290,"index":"A","name":"New","tags":[]},
+            {"contestId":2276,"index":"B","name":"Rated","tags":[],"rating":1200}
+        ])).unwrap();
+        let problems = convert_cf_catalog(&raw);
+        assert_eq!(problems.len(), 2);
+        assert_eq!(problems[0].id, "2290A");
+        assert_eq!(problems[0].rating, None);
+        assert_eq!(problems[1].rating, Some(1200));
+    }
+
+    #[test]
     fn preserves_breaks_in_browser_serialized_samples() {
         let document = Html::parse_fragment("<pre>3 2<br>1 2<br/>2 3</pre>");
         let selector = Selector::parse("pre").unwrap();
@@ -1443,7 +1457,7 @@ mod tests {
             "unexpectedly small problemset: {}",
             problems.len()
         );
-        assert!(problems.iter().all(|problem| problem.rating.is_some()));
+        assert!(problems.iter().all(|problem| !problem.id.is_empty()));
     }
 
     #[test]

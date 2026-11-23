@@ -1,4 +1,5 @@
 <script setup lang="ts">
+import UiIcon from './UiIcon.vue'
 import { afterPaint } from '../utils/afterPaint'
 import { useProblemStore } from '../stores/problemStore'
 import { computed, ref, watch, onBeforeUnmount } from 'vue'
@@ -180,7 +181,7 @@ function renderStatementHtml() {
   if (!p) return '<p style="color:var(--color-text-muted)">请从左侧列表选择一道题目</p>'
   if (store.isPreparingStatement || store.isLoadingDetail) return '<div class="desc-placeholder desc-placeholder--loading">正在加载题面…<div class="statement-skeleton"><i></i><i></i><i></i></div></div>'
   const esc = (value = '') => value.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
-  if (!p.description) return `<div class="desc-placeholder">题面抓取失败或暂不可用<br/><a href="${esc(p.url)}" target="_blank">在原 OJ 打开 →</a></div>`
+  if (!p.description) return `<div class="desc-placeholder">题面抓取失败或暂不可用<br/><a href="${esc(p.url)}" target="_blank">在原 OJ 打开 <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true" focusable="false"><path d="M14 4h6v6m0-6L10 14M10 4H4v16h16v-6"/></svg></a></div>`
   const translated = currentTranslation.value
   if (translated && !showOriginal.value) return safeRichText(translated, 'markdown', p.url)
   const format = p.contentFormat ?? 'text'
@@ -325,7 +326,7 @@ async function closeLocalStatement() {
           <div><span>题目难度</span><strong :style="{ color: store.currentProblem.difficulty ? difficultyColors[store.currentProblem.difficulty] : undefined }">{{ store.currentProblem.difficulty || (store.currentProblem.rating ? `★ ${store.currentProblem.rating}` : '暂无评定') }}</strong></div>
           <div class="problem-desc__tags" tabindex="0">
             <span>题目标签</span>
-            <strong class="problem-desc__tags-arrow" aria-hidden="true">⌄</strong>
+            <strong class="problem-desc__tags-arrow" aria-hidden="true"><UiIcon name="chevron-down" /></strong>
             <div class="problem-desc__tags-popup" role="tooltip">
               <span v-for="tag in store.currentProblem.tags" :key="tag">{{ tag }}</span>
               <em v-if="!store.currentProblem.tags.length">暂无标签</em>
@@ -336,7 +337,7 @@ async function closeLocalStatement() {
       <div class="problem-desc__actions">
         <button class="note-btn" :disabled="noteLoading" title="在编辑区打开这道题的本地 Markdown 笔记" @click="openProblemNote">{{ noteLoading ? '打开中…' : '▧ 题目笔记' }}</button>
         <button v-if="store.currentProblem.platform === 'local' && store.draftPath" class="statement-edit-btn" title="用 Markdown 记录这份本地代码对应的题面" @click="openLocalStatement">▤ 编辑题面</button>
-        <button v-if="store.currentProblem.platform !== 'local'" class="refresh-btn" :disabled="store.isLoadingDetail || ai.isTranslating" title="忽略已有题面，重新从原 OJ 抓取；不会影响本地代码" @click="refreshStatement">{{ store.isLoadingDetail ? '抓取中…' : '↻ 重新抓取' }}</button>
+        <button v-if="store.currentProblem.platform !== 'local'" class="refresh-btn" :disabled="store.isLoadingDetail || ai.isTranslating" title="忽略已有题面，重新从原 OJ 抓取；不会影响本地代码" @click="refreshStatement"><UiIcon name="refresh" />{{ store.isLoadingDetail ? '抓取中…' : '重新抓取' }}</button>
         <button v-if="translationSupported && !currentTranslation" class="translate-btn" :disabled="ai.isTranslating || store.isLoadingDetail || store.isPreparingStatement || !ai.translationConfigured" :title="ai.translationConfigured ? '使用已配置的翻译模型翻译完整题面' : '请先在顶部设置中配置翻译模型'" @click="translate">{{ ai.isTranslating ? '翻译中…' : '译 AI 翻译' }}</button>
         <button v-if="translationSupported && currentTranslation" class="retranslate-btn" :disabled="ai.isTranslating || store.isLoadingDetail || store.isPreparingStatement || !ai.translationConfigured" :title="ai.translationConfigured ? '重新调用翻译模型并覆盖本地译文' : '请先在顶部设置中配置翻译模型'" @click="retranslate">{{ ai.isTranslating ? '重新翻译中…' : '译 重新翻译' }}</button>
         <button v-if="translationSupported && currentTranslation" class="original-btn" :aria-pressed="showOriginal" :disabled="store.isLoadingDetail || store.isPreparingStatement" @click="toggleOriginal">{{ showOriginal ? '显示译文' : '显示原文' }}</button>
@@ -350,7 +351,7 @@ async function closeLocalStatement() {
       <div v-if="pdfUrl" class="qoj-pdf-tools">
         <button :class="{ active: pdfMode === 'pdf' }" @click="pdfMode = 'pdf'; showOriginal = true">原始 PDF</button>
         <button :class="{ active: pdfMode === 'text' }" @click="pdfMode = 'text'" title="仅供复制和检索，公式与排版可能不完整">提取文字</button>
-        <a :href="pdfUrl" @click="openStatementLink">打开原始 PDF ↗</a><span>公式和版式请以原始 PDF 为准</span>
+        <a :href="pdfUrl" @click="openStatementLink">打开原始 PDF <UiIcon name="external" /></a><span>公式和版式请以原始 PDF 为准</span>
       </div>
       <iframe v-if="showPdf" class="qoj-pdf-preview" :src="pdfUrl!" title="QOJ 原始 PDF 题面" />
       <MarkdownNoteEditor
@@ -440,7 +441,7 @@ async function closeLocalStatement() {
   &__heading { min-width: 0; h1 { margin: 0; color: var(--color-text-strong); font-size: clamp(19px, 2vw, 27px); line-height: 1.25; overflow-wrap: anywhere; word-break: normal; } small { display: block; margin-top: 6px; color: var(--color-text-faint); font-size: 10px; text-transform: uppercase; letter-spacing: .08em; } }
   &__facts { min-width: 0; display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); > div { min-width: 0; min-height: 42px; display: flex; flex-direction: column; align-items: center; justify-content: center; padding: 4px 10px; border-left: 1px solid var(--color-border-control); text-align: center; } > div:nth-child(n + 3) { border-top: 1px solid var(--color-border-control); } span, strong { display: block; max-width: 100%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; } span { color: var(--color-text-soft); font-size: 12px; font-weight: 600; } strong { margin-top: 3px; color: var(--color-text-primary); font-size: 13px; font-weight: 600; } }
   &__tags { position: relative; cursor: default; outline: none; }
-  &__tags-arrow { margin-top: 1px !important; overflow: visible !important; color: var(--color-text-soft) !important; font-size: 20px !important; line-height: 12px; transition: transform .15s ease; }
+  &__tags-arrow { margin-top: 1px !important; overflow: visible !important; color: var(--color-text-soft) !important; display: inline-flex !important; align-items: center; justify-content: center; width: 18px; height: 18px; font-size: 18px !important; line-height: 1; transition: transform .15s ease; }
   &__tags:hover &__tags-arrow, &__tags:focus-within &__tags-arrow { transform: rotate(180deg); }
   &__tags-popup { position: absolute; z-index: 40; top: calc(100% + 8px); right: 0; width: max-content; min-width: 210px; max-width: min(360px, 70vw); display: flex; flex-wrap: wrap; align-items: center; gap: 7px; padding: 14px 16px; border: 1px solid var(--color-border-strong); border-radius: 10px; background: var(--color-bg-panel); box-shadow: 0 10px 28px var(--color-shadow); opacity: 0; visibility: hidden; pointer-events: none; transform: translateY(-5px); transition: opacity .14s ease, transform .14s ease, visibility .14s; span { display: inline-block; max-width: none; padding: 3px 9px; border-radius: 4px; background: var(--color-accent-strong); color: var(--color-text-on-accent); font-size: 12px; line-height: 1.35; white-space: normal; } em { color: var(--color-text-muted); font-size: 12px; font-style: normal; } }
   &__tags:hover &__tags-popup, &__tags:focus-within &__tags-popup { opacity: 1; visibility: visible; pointer-events: auto; transform: translateY(0); }

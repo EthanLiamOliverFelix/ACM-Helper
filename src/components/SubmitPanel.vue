@@ -1,4 +1,5 @@
 <script setup lang="ts">
+import UiIcon from './UiIcon.vue'
 import { useProblemStore } from '../stores/problemStore'
 import { openUrl } from '@tauri-apps/plugin-opener'
 import { ref } from 'vue'
@@ -127,7 +128,7 @@ function formatMem(bytes?: number): string {
       </div>
       <div class="runner__toolbar">
         <button class="run-btn" :disabled="store.isLoadingTests || store.isRunning || !store.currentCode.trim() || !store.testCases.length" @click="store.runAllTestCases">
-          {{ store.isRunning ? '运行中…' : '▶ 运行全部' }}
+          <UiIcon name="play" />{{ store.isRunning ? '运行中…' : '运行全部' }}
         </button>
       </div>
       <div v-if="store.isLoadingTests" class="runner__cases" role="status">正在加载测试点…</div>
@@ -143,7 +144,7 @@ function formatMem(bytes?: number): string {
             <strong>测试点 {{ index + 1 }}</strong>
             <span class="test-status" :class="testStatusInfo[test.status].className" :title="test.status === 'error' ? test.stderr : undefined">{{ getTestCaseStatusText(test) }}</span>
             <span v-if="test.durationMs != null && !test.compileFailed && test.status !== 'idle' && test.status !== 'running'" class="test-case__time" title="程序运行耗时">{{ test.durationMs }}ms</span>
-            <button class="test-case__run" :disabled="store.isRunning || !store.currentCode.trim()" @click.stop="store.runTestCase(test.id)">▶</button>
+            <button class="test-case__run" title="运行测试点" aria-label="运行测试点" :disabled="store.isRunning || !store.currentCode.trim()" @click.stop="store.runTestCase(test.id)"><UiIcon name="play" /></button>
             <button class="test-case__delete" title="删除测试点" @click.stop="store.removeTestCase(test.id)">×</button>
           </div>
           <div class="io-box">
@@ -188,7 +189,7 @@ function formatMem(bytes?: number): string {
         @click="handleSubmit"
       >
         <span v-if="store.isSubmitting" class="spinner" />
-        {{ store.isSubmitting ? '正在打开…' : store.cfManualConfirmation ? '请先确认上次提交结果' : '复制代码并打开 CF 提交页 ↗' }}
+        {{ store.isSubmitting ? '正在打开…' : store.cfManualConfirmation ? '请先确认上次提交结果' : '复制代码并打开 CF 提交页' }}<UiIcon v-if="!store.isSubmitting" name="external" />
       </button>
       <template v-else-if="store.currentProblem?.platform === 'luogu'">
         <div v-if="store.luoguCaptchaImage && store.currentProblem?.id === store.luoguCaptchaProblemId" class="captcha-box">
@@ -200,9 +201,9 @@ function formatMem(bytes?: number): string {
         <button v-else-if="store.luoguCaptchaImage" class="submit-btn" disabled>请先完成 {{ store.luoguCaptchaProblemId }} 的验证码</button>
         <button v-else class="submit-btn" :disabled="store.isSubmitting || !store.currentCode.trim()" @click="store.submitLuogu">{{ store.isSubmitting ? '等待洛谷评测…' : '🚀 提交到洛谷' }}</button>
       </template>
-      <button v-else-if="store.currentProblem?.platform === 'atcoder'" class="submit-btn" :disabled="!store.currentProblem?.url || !store.currentCode.trim() || store.isSubmitting || !!store.cfManualConfirmation" @click="handleSubmit">{{ store.isSubmitting ? '正在打开…' : store.cfManualConfirmation ? '请先确认上次提交结果' : '复制代码并打开 AtCoder ↗' }}</button>
-      <button v-else-if="store.currentProblem?.platform === 'qoj'" class="submit-btn" :disabled="!store.currentCode.trim() || store.isSubmitting || !!store.cfManualConfirmation" @click="handleSubmit">{{ store.isSubmitting ? '正在打开…' : store.cfManualConfirmation ? '请先确认上次提交结果' : '复制代码并打开 QOJ ↗' }}</button>
-      <button v-else class="submit-btn submit-btn--external" :disabled="!store.currentProblem?.url" @click="openOriginalOj">在原 OJ 打开提交页 ↗</button>
+      <button v-else-if="store.currentProblem?.platform === 'atcoder'" class="submit-btn" :disabled="!store.currentProblem?.url || !store.currentCode.trim() || store.isSubmitting || !!store.cfManualConfirmation" @click="handleSubmit">{{ store.isSubmitting ? '正在打开…' : store.cfManualConfirmation ? '请先确认上次提交结果' : '复制代码并打开 AtCoder' }}<UiIcon v-if="!store.isSubmitting" name="external" /></button>
+      <button v-else-if="store.currentProblem?.platform === 'qoj'" class="submit-btn" :disabled="!store.currentCode.trim() || store.isSubmitting || !!store.cfManualConfirmation" @click="handleSubmit">{{ store.isSubmitting ? '正在打开…' : store.cfManualConfirmation ? '请先确认上次提交结果' : '复制代码并打开 QOJ' }}<UiIcon v-if="!store.isSubmitting" name="external" /></button>
+      <button v-else class="submit-btn submit-btn--external" :disabled="!store.currentProblem?.url" @click="openOriginalOj">在原 OJ 打开提交页 <UiIcon name="external" /></button>
       <div v-if="store.currentProblem?.platform === 'codeforces'" class="submit-panel__notice">提交前会检测登录状态。代码将复制到剪贴板并打开 Codeforces 官方提交页；账号管理请使用顶部“设置”。</div>
       <div v-if="store.cfManualConfirmation" class="cf-confirm">
         <strong>{{ store.cfManualConfirmation.problemId }} 提交后是否 AC？</strong>

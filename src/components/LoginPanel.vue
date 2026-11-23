@@ -1,4 +1,5 @@
 <script setup lang="ts">
+import UiIcon from './UiIcon.vue'
 import { useProblemStore } from '../stores/problemStore'
 
 const store = useProblemStore()
@@ -46,7 +47,7 @@ async function handleSkip() {
           class="login-form__skip"
           @click="handleSkip"
         >
-          跳过登录，直接浏览题目 →
+          跳过登录，直接浏览题目 <UiIcon name="arrow-right" />
         </button>
       </div>
 

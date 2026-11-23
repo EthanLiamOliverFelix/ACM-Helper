@@ -129,7 +129,7 @@ function confirmResetCode() {
 }
 
 // A stable editor switches Monaco models, preserving each file's undo and view state.
-const modelPath = computed(() => `acm-editor://${props.groupId || 'main'}/${encodeURIComponent(store.draftPath || `${store.currentProblem?.platform}:${store.currentProblem?.id}`)}/${store.currentLanguage}`)
+const modelPath = computed(() => `acm-editor://${props.groupId || 'main'}/${encodeURIComponent(store.editorDocumentKey)}/${store.currentLanguage}`)
 const ownedModels = new Set<any>()
 watch(modelPath, async () => {
   const previous = editorRef.value?.getModel()
@@ -281,6 +281,6 @@ onBeforeUnmount(() => {
 .monaco-editor .margin-view-overlays .acm-breakpoint-hover { background: var(--color-tone-e64a4a55); box-shadow: inset 0 0 0 1px var(--color-tone-e64a4a); }
 .monaco-editor .margin-view-overlays .acm-breakpoint-line { border-left: 2px solid var(--color-tone-e64a4a); }
 .monaco-editor .view-overlays .acm-debug-current-line { background: var(--color-tone-rgba-255-210-73-13); border-top: 1px solid var(--color-tone-rgba-255-210-73-35); border-bottom: 1px solid var(--color-tone-rgba-255-210-73-2); }
-.monaco-editor .margin-view-overlays .acm-debug-current-arrow::before { content: '▶'; color: var(--color-tone-ffd249); font-size: 10px; line-height: 19px; margin-left: 2px; }
+.monaco-editor .margin-view-overlays .acm-debug-current-arrow::before { content: ''; display: inline-block; width: 0; height: 0; border-top: 5px solid transparent; border-bottom: 5px solid transparent; border-left: 8px solid var(--color-tone-ffd249); margin: 4px 0 0 2px; }
 .monaco-editor .margin-view-overlays .line-numbers { cursor: pointer !important; }
 </style>

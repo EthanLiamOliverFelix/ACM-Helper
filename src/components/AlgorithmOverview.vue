@@ -1,4 +1,5 @@
 <script setup lang="ts">
+import UiIcon from './UiIcon.vue'
 import { computed, ref } from 'vue'
 import { SKILL_TREE } from '../data/skillTree'
 import { normalizeLearningProblemKey, useLearningStore } from '../stores/learningStore'
@@ -116,7 +117,7 @@ function openSkill(skill: SkillNode) {
       <article class="overview-card structure-card">
         <header>
           <div>
-            <button v-if="selectedCategory" class="structure-back" @click="selectedCategoryName = null">‹ 返回知识结构</button>
+            <button v-if="selectedCategory" class="structure-back" @click="selectedCategoryName = null"><UiIcon name="chevron-left" /> 返回知识结构</button>
             <h3>{{ selectedCategory ? selectedCategory.name : '知识结构' }}</h3>
             <p v-if="selectedCategory">{{ selectedCategory.mastered }} 个已掌握，{{ selectedCategory.active }} 个正在推进；点击子知识点可继续学习。</p>
             <p v-else>按知识领域查看真实练习覆盖；点击任一领域查看细分知识点。</p>
@@ -127,7 +128,7 @@ function openSkill(skill: SkillNode) {
           <button v-for="category in categories" :key="category.name" class="category-row" @click="selectedCategoryName = category.name">
             <div class="category-row__label"><strong>{{ category.name }}</strong><span>{{ category.mastered }} 掌握 · {{ category.active }} 推进中 · 共 {{ category.total }}</span></div>
             <div class="category-row__bar"><i :style="{ width: `${category.coverage}%` }"></i></div>
-            <b>{{ category.coverage }}% <i>›</i></b>
+            <b>{{ category.coverage }}% <i><UiIcon name="chevron-right" /></i></b>
           </button>
         </div>
         <div v-else class="category-detail">
@@ -145,7 +146,7 @@ function openSkill(skill: SkillNode) {
               <small>{{ skill.description }}</small>
               <em>{{ statusHint(skill) }} · {{ learning.skillFreshness(skill.id).label }}</em>
             </span>
-            <span class="detail-skill__action">{{ learning.statusOf(skill) === 'locked' ? '等待前置' : learning.plansFor(skill.id).length ? '查看题单 ›' : '开始学习 ›' }}</span>
+            <span class="detail-skill__action">{{ learning.statusOf(skill) === 'locked' ? '等待前置' : learning.plansFor(skill.id).length ? '查看题单' : '开始学习' }}<UiIcon v-if="learning.statusOf(skill) !== 'locked'" name="chevron-right" /></span>
           </button>
         </div>
       </article>
@@ -165,7 +166,7 @@ function openSkill(skill: SkillNode) {
           <header><div><h3>优先巩固</h3><p>综合已解锁状态、学习进度和练习衰减排序。</p></div><span>!</span></header>
           <div v-if="weaknesses.length" class="skill-list">
             <button v-for="skill in weaknesses" :key="skill.id" @click="emit('selectSkill', skill)">
-              <span><strong>{{ skill.name }}</strong><small>{{ weaknessReason(skill) }}</small></span><em>去练习 ›</em>
+              <span><strong>{{ skill.name }}</strong><small>{{ weaknessReason(skill) }}</small></span><em>去练习 <UiIcon name="chevron-right" /></em>
             </button>
           </div>
           <div v-else class="empty-insight">当前没有明显短板，继续挑战更高阶段即可。</div>

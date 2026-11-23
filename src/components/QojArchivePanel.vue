@@ -1,4 +1,5 @@
 <script setup lang="ts">
+import UiIcon from './UiIcon.vue'
 import { computed, onMounted, ref } from 'vue'
 import { useProblemStore } from '../stores/problemStore'
 import { useProblemSetStore } from '../stores/problemSetStore'
@@ -64,7 +65,7 @@ onMounted(() => { if (!store.qojArchivePage) void load() })
 
 <template>
   <section class="qoj-archive">
-    <header><button class="back" @click="back">‹ 返回</button><div><strong>QOJ 比赛归档</strong><span>{{ title }}</span></div><button v-if="store.qojSelectedContest" :disabled="!!importing || sets.containsContest('qoj', store.qojSelectedContest.id)" title="一键导入题单" aria-label="一键导入题单" @click="importContest(store.qojSelectedContest)"><i :class="['codicon', importing ? 'codicon-loading codicon-modifier-spin' : sets.containsContest('qoj', store.qojSelectedContest.id) ? 'codicon-check' : 'codicon-add']" /> {{ sets.containsContest('qoj', store.qojSelectedContest.id) ? '已导入' : '导入题单' }}</button><button :disabled="store.isLoadingQojArchive" title="更新当前归档" @click="load(true)"><i class="codicon codicon-refresh" /></button></header>
+    <header><button class="back" @click="back"><UiIcon name="chevron-left" /> 返回</button><div><strong>QOJ 比赛归档</strong><span>{{ title }}</span></div><button v-if="store.qojSelectedContest" :disabled="!!importing || sets.containsContest('qoj', store.qojSelectedContest.id)" title="一键导入题单" aria-label="一键导入题单" @click="importContest(store.qojSelectedContest)"><i :class="['codicon', importing ? 'codicon-loading codicon-modifier-spin' : sets.containsContest('qoj', store.qojSelectedContest.id) ? 'codicon-check' : 'codicon-add']" /> {{ sets.containsContest('qoj', store.qojSelectedContest.id) ? '已导入' : '导入题单' }}</button><button :disabled="store.isLoadingQojArchive" title="更新当前归档" @click="load(true)"><i class="codicon codicon-refresh" /></button></header>
     <div v-if="notice" class="notice" role="status">{{ notice }}</div>
     <div v-if="error" class="error">{{ error }}<button :disabled="store.isLoadingQojArchive" @click="load(true)">重试</button></div>
     <div v-if="store.isLoadingQojArchive" class="loading"><i class="codicon codicon-loading codicon-modifier-spin" />正在读取 QOJ 归档…</div>

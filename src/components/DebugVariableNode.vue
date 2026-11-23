@@ -1,4 +1,5 @@
 <script setup lang="ts">
+import UiIcon from './UiIcon.vue'
 import { computed } from 'vue'
 import { parseDebugValue } from '../utils/debugValue'
 
@@ -18,7 +19,7 @@ const isOpen = computed(() => props.expanded.has(props.nodeKey))
 <template>
   <div class="variable-tree">
     <div class="variable-row">
-      <code :title="name"><button v-if="view.expandable && depth < 20" type="button" class="variable-row__toggle" :aria-label="`${isOpen ? '收起' : '展开'} ${name}`" :aria-expanded="isOpen" @click="emit('toggle', nodeKey)">{{ isOpen ? '⌄' : '›' }}</button>{{ name }}</code>
+      <code :title="name"><button v-if="view.expandable && depth < 20" type="button" class="variable-row__toggle" :aria-label="`${isOpen ? '收起' : '展开'} ${name}`" :aria-expanded="isOpen" @click="emit('toggle', nodeKey)"><UiIcon :name="isOpen ? 'chevron-down' : 'chevron-right'" /></button>{{ name }}</code>
       <span :class="{ error }" :title="value">{{ error || view.summary }}</span>
       <slot />
     </div>

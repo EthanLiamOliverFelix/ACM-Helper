@@ -1,4 +1,5 @@
 <script setup lang="ts">
+import UiIcon from './UiIcon.vue'
 import { computed, nextTick, onBeforeUnmount, ref, shallowRef, watch } from 'vue'
 import { invoke } from '@tauri-apps/api/core'
 import DOMPurify from 'dompurify'
@@ -240,7 +241,7 @@ onBeforeUnmount(() => {
       <div v-if="imageLayouts.length && !readonly" class="markdown-note__layout-toolbar"><span>{{ imageLayouts.length }} 张本地图片</span><button :class="{ active: arrangingImages }" @click="arrangingImages = !arrangingImages">{{ arrangingImages ? '完成排版' : '调整图片' }}</button><em v-if="arrangingImages">拖动图片移动，选中后拖动右下角缩放</em></div>
       <div class="markdown-note__canvas">
         <article ref="preview" class="markdown-note__preview" :class="{ arranging: arrangingImages }" :style="{ minHeight: `${canvasMinHeight}px` }" @pointerdown="startImageDrag" @load.capture="updateImageBounds" v-html="rendered" />
-        <button v-if="arrangingImages && !readonly && selectedImageId" class="markdown-note__resize-handle" :style="{ left: `${resizeHandle.x}px`, top: `${resizeHandle.y}px` }" title="拖动缩放图片（保持比例）" aria-label="拖动缩放图片" @pointerdown.prevent.stop="startImageResize">↘</button>
+        <button v-if="arrangingImages && !readonly && selectedImageId" class="markdown-note__resize-handle" :style="{ left: `${resizeHandle.x}px`, top: `${resizeHandle.y}px` }" title="拖动缩放图片（保持比例）" aria-label="拖动缩放图片" @pointerdown.prevent.stop="startImageResize"><UiIcon name="resize" /></button>
       </div>
     </div>
     <div v-else class="markdown-note__empty">这篇笔记还没有内容，切换到编辑模式开始记录。</div>

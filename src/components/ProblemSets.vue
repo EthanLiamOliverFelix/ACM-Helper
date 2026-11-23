@@ -1,4 +1,5 @@
 <script setup lang="ts">
+import UiIcon from './UiIcon.vue'
 import { computed, nextTick, onBeforeUnmount, onMounted, reactive, ref, watch } from 'vue'
 import { invoke } from '@tauri-apps/api/core'
 import QojArchivePanel from './QojArchivePanel.vue'
@@ -800,7 +801,7 @@ watch(() => itemDialog.mode, mode => {
         <button v-if="currentGroup" class="row-tool" title="返回上一级" aria-label="返回上一级" @click="enterGroup(currentGroup.parentId)"><i aria-hidden="true" class="codicon codicon-arrow-left" /></button>
         <nav class="group-path" aria-label="题单分组路径">
           <button data-group-target="" :class="{ current: !currentGroup, 'drop-into': dropPreview?.kind === 'into' && dropPreview.id === null }" @click="enterGroup(null)" @dragover.stop.prevent="previewDrop" @drop.stop.prevent="finishNativeDrop">全部题单</button>
-          <template v-for="group in groupPath" :key="group.id"><span>›</span><button :title="group.name" :class="{ current: group.id === currentGroupId, ...dropClasses(group.id) }" :data-group-target="group.id" @click="enterGroup(group.id)" @dragover.stop.prevent="previewDrop" @drop.stop.prevent="finishNativeDrop">{{ group.name }}</button></template>
+          <template v-for="group in groupPath" :key="group.id"><span><UiIcon name="chevron-right" /></span><button :title="group.name" :class="{ current: group.id === currentGroupId, ...dropClasses(group.id) }" :data-group-target="group.id" @click="enterGroup(group.id)" @dragover.stop.prevent="previewDrop" @drop.stop.prevent="finishNativeDrop">{{ group.name }}</button></template>
         </nav>
         <button v-if="currentGroup" class="row-tool" :aria-label="`管理组 ${currentGroup.name}`" title="管理当前组" aria-haspopup="menu" @click="openItemMenu($event, currentGroup.id)"><i aria-hidden="true" class="codicon codicon-ellipsis" /></button>
       </div>
@@ -832,15 +833,15 @@ watch(() => itemDialog.mode, mode => {
         <div v-if="!filteredSets.length && !visibleGroups.length" class="empty">{{ setSearch ? '没有找到对应题单或组' : '此组为空，可以新建或拖入题单、组' }}</div>
       </div>
       <div v-if="setPages > 1" class="pagination set-pagination">
-        <button :disabled="setPage <= 1" title="上一页" @click="setPage--">‹</button>
+        <button :disabled="setPage <= 1" title="上一页" @click="setPage--"><UiIcon name="chevron-left" /></button>
         <span>{{ setPage }} / {{ setPages }} · 每页 {{ setPageSize }} 个</span>
-        <button :disabled="setPage >= setPages" title="下一页" @click="setPage++">›</button>
+        <button :disabled="setPage >= setPages" title="下一页" @click="setPage++"><UiIcon name="chevron-right" /></button>
       </div>
       <footer class="bottom-search collection-search"><i aria-hidden="true" class="codicon codicon-search" /><input v-model="setSearch" placeholder="搜索题单或组…" aria-label="搜索题单或组" /></footer>
     </template>
 
     <template v-else-if="view === 'smart'">
-      <header class="panel-header detail-header"><button class="back" @click="view = 'list'">‹ 返回</button><div><strong>错题本</strong><span>{{ practice.wrongProblems.length }} 道 · 今日复习 {{ practice.todayProblems.length }} 道</span></div><div class="detail-header__actions"><button class="tag-toggle" :class="{ active: problems.showProblemTags }" @click="problems.toggleProblemTags">{{ problems.showProblemTags ? '隐藏算法标签' : '显示算法标签' }}</button></div></header>
+      <header class="panel-header detail-header"><button class="back" @click="view = 'list'"><UiIcon name="chevron-left" /> 返回</button><div><strong>错题本</strong><span>{{ practice.wrongProblems.length }} 道 · 今日复习 {{ practice.todayProblems.length }} 道</span></div><div class="detail-header__actions"><button class="tag-toggle" :class="{ active: problems.showProblemTags }" @click="problems.toggleProblemTags">{{ problems.showProblemTags ? '隐藏算法标签' : '显示算法标签' }}</button></div></header>
       <div class="smart-tabs"><button :class="{ active: activeSmartId === 'wrongbook' }" @click="openSmart('wrongbook')">全部错题 {{ practice.wrongProblems.length }}</button><button :class="{ active: activeSmartId === 'today' }" @click="openSmart('today')">今日复习 {{ practice.todayProblems.length }}</button></div>
       <div class="smart-explanation">
         <template v-if="activeSmartId === 'today'">从仍需复习的错题中按失败次数、到期时间和知识点陈旧程度选取；每天最多 {{ practice.dailyLimit }} 题。</template>
@@ -849,7 +850,7 @@ watch(() => itemDialog.mode, mode => {
       <div v-if="notice" class="notice">{{ notice }}</div><div v-if="error" class="error">{{ error }}</div>
       <ul class="problem-items practice-items">
         <li v-for="problem in filteredSmartProblems" :key="problem.practice.key" @click="openPracticeProblem(problem)">
-          <span class="review-state" :class="{ unresolved: problem.practice.unresolved }">{{ problem.practice.unresolved ? '!' : '↻' }}</span>
+          <span class="review-state" :class="{ unresolved: problem.practice.unresolved }"><template v-if="problem.practice.unresolved">!</template><UiIcon v-else name="refresh" /></span>
           <div>
             <small>{{ problem.platform === 'codeforces' ? 'CF' : problem.platform === 'atcoder' ? 'AtCoder' : '洛谷' }} · {{ problem.id }}</small>
             <strong>{{ problem.title }}</strong>
@@ -872,7 +873,7 @@ watch(() => itemDialog.mode, mode => {
     </template>
 
     <template v-else-if="view === 'detail' && sets.activeSet">
-      <header class="panel-header detail-header"><button class="back" @click="view = 'list'">‹ 返回</button><div><strong>{{ sets.activeSet.name }}</strong></div><div class="detail-header__actions"><button v-if="sets.activeSet.source" :disabled="importingTrainingId != null" @click="importTraining(sets.activeSet.source.trainingId)">同步</button><button class="tag-toggle" :class="{ active: problems.showProblemTags }" @click="problems.toggleProblemTags">{{ problems.showProblemTags ? '隐藏算法标签' : '显示算法标签' }}</button><button class="edit-set" :class="{ active: editingSet }" :aria-pressed="editingSet" :disabled="batchAdding || exporting" @click="editingSet = !editingSet">{{ editingSet ? '完成编辑' : '编辑' }}</button></div></header>
+      <header class="panel-header detail-header"><button class="back" @click="view = 'list'"><UiIcon name="chevron-left" /> 返回</button><div><strong>{{ sets.activeSet.name }}</strong></div><div class="detail-header__actions"><button v-if="sets.activeSet.source" :disabled="importingTrainingId != null" @click="importTraining(sets.activeSet.source.trainingId)">同步</button><button class="tag-toggle" :class="{ active: problems.showProblemTags }" @click="problems.toggleProblemTags">{{ problems.showProblemTags ? '隐藏算法标签' : '显示算法标签' }}</button><button class="edit-set" :class="{ active: editingSet }" :aria-pressed="editingSet" :disabled="batchAdding || exporting" @click="editingSet = !editingSet">{{ editingSet ? '完成编辑' : '编辑' }}</button></div></header>
       <div v-if="editingSet" class="set-edit-toolbar">
         <span class="editing-status">编辑中</span>
         <details class="set-export" :open="exportMenuOpen" @toggle="exportMenuOpen = ($event.currentTarget as HTMLDetailsElement).open" @keydown.esc="exportMenuOpen = false">
@@ -917,17 +918,17 @@ watch(() => itemDialog.mode, mode => {
     </template>
 
     <template v-else-if="view === 'plaza'">
-      <header class="panel-header detail-header"><button class="back" @click="view = 'list'">‹ 返回</button><div><strong>洛谷题单广场</strong><span>按需浏览与导入</span></div></header>
+      <header class="panel-header detail-header"><button class="back" @click="view = 'list'"><UiIcon name="chevron-left" /> 返回</button><div><strong>洛谷题单广场</strong><span>按需浏览与导入</span></div></header>
       <form class="training-link" @submit.prevent="importTraining(problemUrl)"><input v-model="problemUrl" placeholder="粘贴洛谷题单链接或编号" /><button :disabled="!problemUrl.trim() || importingTrainingId != null">{{ importingTrainingId != null ? '导入中…' : '导入' }}</button></form>
       <div class="categories"><button :class="{ active: plazaCategory === 'public' }" @click="changePlazaCategory('public')">精选分享</button><button v-for="category in plazaCategories" :key="category.key" :class="{ active: plazaCategory === category.key }" @click="changePlazaCategory(category.key)">{{ category.name }}</button></div>
       <div v-if="error" class="error">{{ error }}</div><div v-if="plazaLoading" class="empty">正在读取洛谷题单…</div>
       <ul v-else class="training-items"><li v-for="training in plazaTrainings" :key="training.id"><div><small>#{{ training.id }} · {{ training.providerName }}</small><strong>{{ training.name }}</strong><span><template v-if="training.problemCount">{{ training.problemCount }} 题 · </template>★ {{ training.markCount }} 收藏</span></div><button :disabled="importingTrainingId != null" @click="importTraining(training.id)">{{ importingTrainingId === training.id ? '导入中…' : '导入' }}</button></li></ul>
-      <div class="pagination"><button :disabled="plazaPage <= 1 || plazaLoading" @click="fetchPlaza(plazaPage - 1)">‹</button><span>{{ plazaPage }} / {{ plazaPages }}</span><button :disabled="plazaPage >= plazaPages || plazaLoading" @click="fetchPlaza(plazaPage + 1)">›</button></div>
+      <div class="pagination"><button :disabled="plazaPage <= 1 || plazaLoading" @click="fetchPlaza(plazaPage - 1)" aria-label="上一页"><UiIcon name="chevron-left" /></button><span>{{ plazaPage }} / {{ plazaPages }}</span><button :disabled="plazaPage >= plazaPages || plazaLoading" @click="fetchPlaza(plazaPage + 1)"><UiIcon name="chevron-right" /></button></div>
       <footer class="bottom-search"><span>⌕</span><input v-model="plazaSearch" placeholder="搜索洛谷题单名称" @keyup.enter="fetchPlaza(1)" /><button @click="fetchPlaza(1)">搜索</button></footer>
     </template>
 
     <template v-else-if="view === 'contests'">
-      <header class="panel-header detail-header"><button class="back" @click="view = 'list'">‹ 返回</button><div><strong>CF / AtCoder 比赛</strong><span>比赛将以本地题目目录打开</span></div><button :disabled="contestCatalogLoading" @click="loadContestCatalog(true)">{{ contestCatalogLoading ? '更新中…' : '更新' }}</button></header>
+      <header class="panel-header detail-header"><button class="back" @click="view = 'list'"><UiIcon name="chevron-left" /> 返回</button><div><strong>CF / AtCoder 比赛</strong><span>比赛将以本地题目目录打开</span></div><button :disabled="contestCatalogLoading" @click="loadContestCatalog(true)">{{ contestCatalogLoading ? '更新中…' : '更新' }}</button></header>
       <div v-if="notice" class="notice">{{ notice }}</div><div v-if="error" class="error">{{ error }}</div>
       <div class="contest-tabs"><button :class="{ active: contestCatalogPlatform === 'codeforces' }" @click="contestCatalogPlatform = 'codeforces'">Codeforces Div</button><button :class="{ active: contestCatalogPlatform === 'atcoder' }" @click="contestCatalogPlatform = 'atcoder'">AtCoder</button></div>
       <strong class="contest-section-title">cf/atc比赛</strong>
@@ -938,16 +939,16 @@ watch(() => itemDialog.mode, mode => {
           <button class="contest-favorite" :class="{ active: sets.containsContest(contest.platform, contest.id) }" :disabled="!!addingContest || sets.containsContest(contest.platform, contest.id)" title="加入题单" @click="addContestToSets({ ...contest, contestId: contest.id })">{{ addingContest === `${contest.platform}:${contest.id}` ? '…' : sets.containsContest(contest.platform, contest.id) ? '✓' : '＋' }}</button>
         </li>
       </ul>
-      <div v-if="contestPages > 1" class="pagination contest-pagination"><button :disabled="contestPage <= 1" @click="contestPage--">‹</button><span>{{ contestPage }} / {{ contestPages }}</span><button :disabled="contestPage >= contestPages" @click="contestPage++">›</button></div>
+      <div v-if="contestPages > 1" class="pagination contest-pagination"><button :disabled="contestPage <= 1" @click="contestPage--" aria-label="上一页"><UiIcon name="chevron-left" /></button><span>{{ contestPage }} / {{ contestPages }}</span><button :disabled="contestPage >= contestPages" @click="contestPage++"><UiIcon name="chevron-right" /></button></div>
       <footer class="bottom-search"><span>⌕</span><input v-model="contestSearch" placeholder="搜索 CF / AtCoder 比赛" /></footer>
     </template>
 
     <QojArchivePanel v-else-if="view === 'qoj-archive'" @back="view = 'list'" />
 
     <template v-else-if="view === 'contest-detail' && activeContest">
-      <header class="panel-header detail-header"><button class="back" @click="view = contestDetailBack">‹ 返回</button><div><strong>{{ activeContest.title }}</strong><span>{{ contestSolvedCount }}/{{ contestProblems.length }} 道题目 · {{ contestPlatformLabel(activeContest.platform) }}</span></div><div class="detail-header__actions"><button v-if="activeContest.platform !== 'luogu'" :disabled="learning.isAnalyzing || contestProblemsLoading || !contestProblems.length" @click="analyzeActiveContest">{{ learning.isAnalyzing ? '分析中…' : 'VP 分析' }}</button><button :disabled="!!addingContest || contestProblemsLoading || sets.containsContest(activeContest.platform, activeContest.contestId)" @click="addContestToSets(activeContest)">{{ addingContest ? '加入中…' : sets.containsContest(activeContest.platform, activeContest.contestId) ? '✓ 已加入题单' : '＋ 加入题单' }}</button></div></header>
+      <header class="panel-header detail-header"><button class="back" @click="view = contestDetailBack"><UiIcon name="chevron-left" /> 返回</button><div><strong>{{ activeContest.title }}</strong><span>{{ contestSolvedCount }}/{{ contestProblems.length }} 道题目 · {{ contestPlatformLabel(activeContest.platform) }}</span></div><div class="detail-header__actions"><button v-if="activeContest.platform !== 'luogu'" :disabled="learning.isAnalyzing || contestProblemsLoading || !contestProblems.length" @click="analyzeActiveContest">{{ learning.isAnalyzing ? '分析中…' : 'VP 分析' }}</button><button :disabled="!!addingContest || contestProblemsLoading || sets.containsContest(activeContest.platform, activeContest.contestId)" @click="addContestToSets(activeContest)">{{ addingContest ? '加入中…' : sets.containsContest(activeContest.platform, activeContest.contestId) ? '✓ 已加入题单' : '＋ 加入题单' }}</button></div></header>
       <div v-if="error" class="error">{{ error }}</div><div v-if="contestProblemsLoading" class="empty">正在读取比赛题目…</div>
-      <ul v-else class="problem-items contest-problem-items"><li v-for="problem in contestProblems" :key="`${problem.platform}:${problem.id}`" @click="openContestProblem(problem)"><span class="solved">{{ learning.isSolved(`${problem.platform}:${problem.id}`) ? '✓' : '' }}</span><div><small>{{ problem.id }}</small><strong>{{ problem.title }}</strong><p><span v-if="problem.rating">★ {{ problem.rating }}</span><template v-if="problems.showProblemTags"><span v-for="tag in problem.tags" :key="tag">{{ tag }}</span></template></p></div><button>打开 ›</button></li></ul>
+      <ul v-else class="problem-items contest-problem-items"><li v-for="problem in contestProblems" :key="`${problem.platform}:${problem.id}`" @click="openContestProblem(problem)"><span class="solved">{{ learning.isSolved(`${problem.platform}:${problem.id}`) ? '✓' : '' }}</span><div><small>{{ problem.id }}</small><strong>{{ problem.title }}</strong><p><span v-if="problem.rating">★ {{ problem.rating }}</span><template v-if="problems.showProblemTags"><span v-for="tag in problem.tags" :key="tag">{{ tag }}</span></template></p></div><button>打开 <UiIcon name="chevron-right" /></button></li></ul>
       <div v-if="!contestProblemsLoading && !contestProblems.length && !error" class="empty">当前比赛没有公开题目</div>
     </template>
     <div v-if="itemDialog.mode" class="item-dialog" @click.self="itemDialog.mode = ''" @keydown.esc="itemDialog.mode = ''">

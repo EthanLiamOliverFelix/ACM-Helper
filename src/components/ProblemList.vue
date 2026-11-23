@@ -1,4 +1,5 @@
 <script setup lang="ts">
+import UiIcon from './UiIcon.vue'
 import { useProblemStore } from '../stores/problemStore'
 import { computed, defineAsyncComponent, ref, watch } from 'vue'
 import { useProblemSetStore } from '../stores/problemSetStore'
@@ -105,7 +106,7 @@ async function openProblem(problem: typeof store.problems[number]) {
 
     <div v-if="store.currentPlatform !== 'qoj'" class="problem-list__filter-row">
       <details class="filter-menu">
-        <summary>题目难度范围⌄</summary>
+        <summary>题目难度范围<UiIcon name="chevron-down" /></summary>
         <div class="filter-menu__popup">
           <template v-if="store.currentPlatform === 'luogu'">
             <button v-for="p in luoguDifficulties" :key="p.label" class="rating-chip" :class="{ 'rating-chip--active': store.luoguDifficulty === p.value }" @click.prevent="applyLuoguDifficulty(p.value)">{{ p.label }}</button>
@@ -116,13 +117,13 @@ async function openProblem(problem: typeof store.problems[number]) {
         </div>
       </details>
       <details v-if="store.currentPlatform === 'luogu'" class="filter-menu">
-        <summary>题库来源⌄</summary>
+        <summary>题库来源<UiIcon name="chevron-down" /></summary>
         <div class="filter-menu__popup">
           <button v-for="source in luoguSources" :key="source.value" class="rating-chip" :class="{ 'rating-chip--active': store.luoguType === source.value }" @click.prevent="applyLuoguSource(source.value)">{{ source.label }}</button>
         </div>
       </details>
       <details v-if="store.allTags.length" class="filter-menu filter-menu--wide">
-        <summary>知识点分类⌄</summary>
+        <summary>知识点分类<UiIcon name="chevron-down" /></summary>
         <div class="filter-menu__popup problem-list__tags-scroll">
         <button
           v-for="tag in store.allTags"
@@ -219,7 +220,7 @@ async function openProblem(problem: typeof store.problems[number]) {
         :disabled="store.page <= 1"
         @click="store.setPage(store.page - 1)"
       >
-        ‹ 上一页
+        <UiIcon name="chevron-left" /> 上一页
       </button>
       <span class="page-info">{{ store.page }} / {{ store.totalPages }}</span>
       <button
@@ -227,7 +228,7 @@ async function openProblem(problem: typeof store.problems[number]) {
         :disabled="store.page >= store.totalPages"
         @click="store.setPage(store.page + 1)"
       >
-        下一页 ›
+        下一页 <UiIcon name="chevron-right" />
       </button>
     </div>
     </div>
@@ -309,7 +310,7 @@ async function openProblem(problem: typeof store.problems[number]) {
 
 .problem-item { content-visibility: auto; contain-intrinsic-size: 76px; }
 .problem-item__solved { display: inline-flex; align-items: center; justify-content: center; width: 13px; height: 13px; margin-right: 6px; border: 1px solid var(--color-tone-36b36a); border-radius: 2px; color: var(--color-success-bright); font-size: 9px; font-weight: 700; vertical-align: 1px; }
-.filter-menu { position: relative; flex: 1; min-width: 0; summary { padding: 7px 8px; border: 1px solid var(--color-border-control); border-radius: 4px; color: var(--color-text-secondary); background: var(--color-bg-panel); font-size: 12px; cursor: pointer; list-style: none; } &__popup { position: absolute; z-index: 50; top: calc(100% + 3px); left: 0; display: flex; flex-wrap: wrap; gap: 4px; width: 210px; max-height: 240px; overflow: auto; padding: 8px; border: 1px solid var(--color-border-strong); border-radius: 5px; background: var(--color-bg-panel); box-shadow: 0 8px 22px var(--color-tone-0008); } &--wide .filter-menu__popup { left: auto; right: 0; width: 300px; } }
+.filter-menu { position: relative; flex: 1; min-width: 0; summary { display: flex; align-items: center; justify-content: space-between; gap: 6px; padding: 7px 8px; border: 1px solid var(--color-border-control); border-radius: 4px; color: var(--color-text-secondary); background: var(--color-bg-panel); font-size: 12px; cursor: pointer; list-style: none; } &__popup { position: absolute; z-index: 50; top: calc(100% + 3px); left: 0; display: flex; flex-wrap: wrap; gap: 4px; width: 210px; max-height: 240px; overflow: auto; padding: 8px; border: 1px solid var(--color-border-strong); border-radius: 5px; background: var(--color-bg-panel); box-shadow: 0 8px 22px var(--color-tone-0008); } &--wide .filter-menu__popup { left: auto; right: 0; width: 300px; } }
 .problem-import { display: flex; gap: 5px; padding: 8px 12px 2px; input { min-width: 0; flex: 1; padding: 7px 8px; border: 1px solid var(--color-border); border-radius: 4px; background: var(--color-bg-panel); color: var(--color-text-strong); font-size: 12px; outline: none; } input:focus { border-color: var(--color-accent); } button { padding: 0 10px; border: 0; border-radius: 4px; background: var(--color-accent-strong); color: var(--color-text-on-accent); font-size: 12px; cursor: pointer; } button:disabled { opacity: .4; } &__error { padding: 4px 12px; color: var(--color-danger); font-size: 11px; line-height: 1.4; } }
 
 // ── 搜索输入 ──
@@ -453,4 +454,7 @@ async function openProblem(problem: typeof store.problems[number]) {
   color: var(--color-text-muted);
   font-family: 'Consolas', 'Courier New', monospace;
 }
+.filter-menu summary::-webkit-details-marker { display: none; }
+.filter-menu summary .ui-icon { width: 14px; height: 14px; transition: transform .15s ease; }
+.filter-menu[open] > summary .ui-icon { transform: rotate(180deg); }
 </style>

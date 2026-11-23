@@ -1,4 +1,5 @@
 <script setup lang="ts">
+import UiIcon from './UiIcon.vue'
 import { ref } from 'vue'
 import DebugVariableNode from './DebugVariableNode.vue'
 import { useProblemStore } from '../stores/problemStore'
@@ -35,7 +36,7 @@ async function addWatch() {
       <textarea id="debug-input" v-model="store.debugInput" :disabled="!!store.debugSession?.active" spellcheck="false" placeholder="程序的标准输入将在开始调试时一次性提供" />
 
       <button class="debug-panel__start" :disabled="store.isDebugging || !store.currentCode.trim()" @click="store.startDebugSession">
-        {{ store.isDebugging && !store.debugSession ? '正在启动调试器…' : store.debugSession?.active ? '重新开始调试' : '▶ 开始调试' }}
+        <UiIcon name="play" />{{ store.isDebugging && !store.debugSession ? '正在启动调试器…' : store.debugSession?.active ? '重新开始调试' : '开始调试' }}
       </button>
 
       <div v-if="store.debugSession" class="debug-panel__status" :class="{ ended: !store.debugSession.active }">
@@ -45,15 +46,15 @@ async function addWatch() {
       <div v-if="store.debugError" class="debug-panel__error">{{ store.debugError }}</div>
 
       <div class="debug-panel__controls">
-        <button :disabled="store.isDebugging || !store.debugSession?.active" title="运行到下一个断点" @click="store.debugAction('continue')">▶<span>下个断点</span></button>
-        <button :disabled="store.isDebugging || !store.debugSession?.active" title="执行当前行，但不进入函数" @click="store.debugAction('next')">↷<span>下一步</span></button>
-        <button :disabled="store.isDebugging || !store.debugSession?.active" title="进入当前行调用的函数" @click="store.debugAction('step')">↓<span>步入</span></button>
-        <button :disabled="store.isDebugging || !store.debugSession?.active" title="运行到当前函数返回" @click="store.debugAction('finish')">↑<span>步出</span></button>
+        <button :disabled="store.isDebugging || !store.debugSession?.active" title="运行到下一个断点" @click="store.debugAction('continue')"><UiIcon name="play" /><span>下个断点</span></button>
+        <button :disabled="store.isDebugging || !store.debugSession?.active" title="执行当前行，但不进入函数" @click="store.debugAction('next')"><UiIcon name="step-over" /><span>下一步</span></button>
+        <button :disabled="store.isDebugging || !store.debugSession?.active" title="进入当前行调用的函数" @click="store.debugAction('step')"><UiIcon name="step-into" /><span>步入</span></button>
+        <button :disabled="store.isDebugging || !store.debugSession?.active" title="运行到当前函数返回" @click="store.debugAction('finish')"><UiIcon name="step-out" /><span>步出</span></button>
       </div>
       <p v-if="store.debugSession?.active" class="debug-panel__hint">循环内的断点每轮都会命中。要运行到循环后，请移除循环内断点，在循环后设置断点，再点“下个断点”；“步出”会返回调用函数。</p>
 
       <section class="watch-section">
-        <button type="button" class="watch-section__heading" :aria-expanded="watchesOpen" aria-controls="debug-watches" @click="watchesOpen = !watchesOpen"><span>{{ watchesOpen ? '⌄' : '›' }} 变量监视</span></button>
+        <button type="button" class="watch-section__heading" :aria-expanded="watchesOpen" aria-controls="debug-watches" @click="watchesOpen = !watchesOpen"><span><UiIcon :name="watchesOpen ? 'chevron-down' : 'chevron-right'" /> 变量监视</span></button>
         <div v-show="watchesOpen" id="debug-watches">
           <form class="watch-section__add" @submit.prevent="addWatch">
             <input v-model="newWatch" spellcheck="false" placeholder="输入变量或表达式，例如 ans、a[i]" />
@@ -67,7 +68,7 @@ async function addWatch() {
       </section>
 
       <section class="watch-section">
-        <button type="button" class="watch-section__heading" :aria-expanded="localsOpen" aria-controls="debug-locals" @click="localsOpen = !localsOpen"><span>{{ localsOpen ? '⌄' : '›' }} 局部变量</span></button>
+        <button type="button" class="watch-section__heading" :aria-expanded="localsOpen" aria-controls="debug-locals" @click="localsOpen = !localsOpen"><span><UiIcon :name="localsOpen ? 'chevron-down' : 'chevron-right'" /> 局部变量</span></button>
         <div v-show="localsOpen" id="debug-locals">
           <div v-if="!store.debugSession?.variables.length" class="debug-panel__empty">暂停后显示当前作用域中的变量</div>
           <DebugVariableNode v-for="variable in store.debugSession?.variables" :key="variable.name" :name="variable.name" :value="variable.value" :error="variable.error" :node-key="`local:${variable.name}`" :expanded="expanded" @toggle="toggleExpanded" />

@@ -1,4 +1,5 @@
 <script setup lang="ts">
+import UiIcon from './UiIcon.vue'
 import { computed, onMounted, ref, watch } from 'vue'
 import { SKILL_BY_ID, SKILL_TREE } from '../data/skillTree'
 import { useLearningStore } from '../stores/learningStore'
@@ -176,9 +177,9 @@ onMounted(() => learning.init())
           </div>
         </header>
         <div v-if="selectedPlans.length" class="plan-pager">
-          <button :disabled="selectedPageIndex <= 0" @click="selectedPageIndex--">‹ 上一页</button>
+          <button :disabled="selectedPageIndex <= 0" @click="selectedPageIndex--"><UiIcon name="chevron-left" /> 上一页</button>
           <span>第 {{ selectedPageIndex + 1 }} / {{ selectedPlans.length }} 页</span>
-          <button :disabled="selectedPageIndex >= selectedPlans.length - 1" @click="selectedPageIndex++">下一页 ›</button>
+          <button :disabled="selectedPageIndex >= selectedPlans.length - 1" @click="selectedPageIndex++">下一页 <UiIcon name="chevron-right" /></button>
         </div>
         <p v-if="selectedPlan">本页完成 {{ selectedPlanProgress.solved }}/{{ selectedPlanProgress.total }} 道 · {{ new Date(selectedPlan.generatedAt).toLocaleDateString() }} 生成；任意一页全部完成后点亮知识点。<span class="freshness" :class="`freshness--${learning.skillFreshness(selectedSkill.id).level}`">{{ learning.skillFreshness(selectedSkill.id).label }}</span></p>
         <p v-else>这是旧版本保留的历史掌握记录，尚未生成 AI 题单。</p>

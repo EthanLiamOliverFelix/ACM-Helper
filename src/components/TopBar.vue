@@ -1,4 +1,5 @@
 <script setup lang="ts">
+import UiIcon from './UiIcon.vue'
 import { ref } from 'vue'
 import { invoke } from '@tauri-apps/api/core'
 import { useAiStore } from '../stores/aiStore'
@@ -237,7 +238,7 @@ async function moveDataCenter() {
 
   <div v-if="settingsOpen" class="settings-modal" @click.self="settingsOpen = false">
     <section class="settings-card">
-      <header><button v-if="settingsPage !== 'main'" class="settings-back" @click="settingsPage = 'main'">‹</button><div><h2>{{ settingsPage === 'main' ? '设置' : settingsPage === 'translation' ? '翻译模型' : '解题模型' }}</h2><p>{{ settingsPage === 'main' ? '应用、账号与数据管理' : settingsPage === 'translation' ? '用于翻译 Codeforces、AtCoder 与 QOJ 英文题面' : '用于刷题助手、题单生成与学习建议' }}</p></div><button class="settings-close" @click="settingsOpen = false">×</button></header>
+      <header><button v-if="settingsPage !== 'main'" class="settings-back" @click="settingsPage = 'main'" aria-label="返回"><UiIcon name="chevron-left" /></button><div><h2>{{ settingsPage === 'main' ? '设置' : settingsPage === 'translation' ? '翻译模型' : '解题模型' }}</h2><p>{{ settingsPage === 'main' ? '应用、账号与数据管理' : settingsPage === 'translation' ? '用于翻译 Codeforces、AtCoder 与 QOJ 英文题面' : '用于刷题助手、题单生成与学习建议' }}</p></div><button class="settings-close" @click="settingsOpen = false">×</button></header>
       <div v-if="settingsPage === 'main'" class="settings-grid">
         <section>
           <h3>新题目默认代码</h3>
@@ -254,7 +255,7 @@ async function moveDataCenter() {
           <p class="privacy">留空时自动使用系统 PATH；适合免安装 MinGW、多 Python 环境或自定义 JDK。</p>
           <label>本地 C++ 标准<select v-model="settings.cppStandard"><option value="c++17">C++17</option><option value="c++20">C++20</option><option value="c++23">C++23（默认）</option></select></label>
           <label v-for="field in toolchainFields" :key="field.key">{{ field.label }}<div class="path-picker"><input v-model="settings.toolchainPaths[field.key]" :placeholder="`留空使用 ${field.fallback}`" /><button type="button" @click="browseToolchain(field.key, field.label)">浏览</button></div></label>
-          <div class="toolchain-websites"><span>获取工具链</span><button v-for="website in toolchainWebsites" :key="website.url" type="button" @click="openUrl(website.url)">{{ website.label }} ↗</button></div>
+          <div class="toolchain-websites"><span>获取工具链</span><button v-for="website in toolchainWebsites" :key="website.url" type="button" @click="openUrl(website.url)">{{ website.label }} <UiIcon name="external" /></button></div>
         </section>
         <section>
           <h3>外观</h3>
@@ -262,8 +263,8 @@ async function moveDataCenter() {
           <p class="privacy">切换后立即生效，并同步调整代码编辑器配色。</p>
           <h3 class="account-title">AI 模型</h3>
           <div class="ai-entry-list">
-            <button @click="settingsPage = 'translation'"><span>译</span><div><strong>翻译模型</strong><small>题面翻译 · {{ ai.translationConfigured ? ai.translationModel : '未配置' }}</small></div><b>进入 ›</b></button>
-            <button @click="settingsPage = 'solution'"><span>解</span><div><strong>解题模型</strong><small>刷题助手、题单生成 · {{ ai.isConfigured ? ai.model : '未配置' }}</small></div><b>进入 ›</b></button>
+            <button @click="settingsPage = 'translation'"><span>译</span><div><strong>翻译模型</strong><small>题面翻译 · {{ ai.translationConfigured ? ai.translationModel : '未配置' }}</small></div><b>进入 <UiIcon name="chevron-right" /></b></button>
+            <button @click="settingsPage = 'solution'"><span>解</span><div><strong>解题模型</strong><small>刷题助手、题单生成 · {{ ai.isConfigured ? ai.model : '未配置' }}</small></div><b>进入 <UiIcon name="chevron-right" /></b></button>
           </div>
           <h3 class="account-title">洛谷提交</h3>
           <label>C++ 版本<select v-model.number="settings.luoguCppLanguageId"><option :value="3">C++98</option><option :value="4">C++11</option><option :value="11">C++14</option><option :value="28">C++14 (GCC 9)</option><option :value="12">C++17</option><option :value="27">C++20</option><option :value="34">C++23</option></select></label>

@@ -121,6 +121,15 @@ export const useProblemStore = defineStore('problem', () => {
   function workspaceBufferKey(platform: Platform, id: string, language: Language, path = '') {
     return path ? `file:${normalizeWorkspacePath(path)}:${language}` : `problem:${platform}:${id.toUpperCase()}:${language}`
   }
+  // A draft can gain a disk path without becoming a different editor document.
+  const editorKeysByPath = new Map<string, string>()
+  const editorDocumentKey = computed(() => {
+    const problem = currentProblem.value
+    if (!problem) return ''
+    const path = draftPath.value
+    return editorKeysByPath.get(normalizeWorkspacePath(path))
+      ?? workspaceBufferKey(problem.platform, problem.id, currentLanguage.value, path)
+  })
   function captureWorkspace() {
     if (!currentProblem.value) return
     const state: CachedWorkspace = {
@@ -1303,6 +1312,7 @@ export const useProblemStore = defineStore('problem', () => {
       else path = await invoke<string>('save_draft', {
         platform: problem.platform, problemId: problem.id, problemTitle: problem.title, language, code,
       })
+      if (!originalPath && path) editorKeysByPath.set(normalizeWorkspacePath(path), key)
       const latest = workspaceBuffers.get(workspaceBufferKey(problem.platform, problem.id, language, originalPath)) ?? state
       latest.path = path
       if (latest.code === code) { latest.dirty = false; latest.status = 'saved' }
@@ -1407,6 +1417,12 @@ export const useProblemStore = defineStore('problem', () => {
 
   function workspacePathChanged(oldPath: string, newPath: string) {
     const old = normalizeWorkspacePath(oldPath)
+    const next = normalizeWorkspacePath(newPath)
+    for (const [path, key] of [...editorKeysByPath]) {
+      if (path !== old && !path.startsWith(`${old}/`)) continue
+      editorKeysByPath.delete(path)
+      editorKeysByPath.set(next + path.slice(old.length), key)
+    }
     for (const [key, state] of [...workspaceBuffers]) {
       const path = normalizeWorkspacePath(state.path)
       if (path !== old && !path.startsWith(`${old}/`)) continue
@@ -1431,6 +1447,9 @@ export const useProblemStore = defineStore('problem', () => {
 
   async function workspacePathDeleted(path: string) {
     const removed = normalizeWorkspacePath(path)
+    for (const key of editorKeysByPath.keys()) {
+      if (key === removed || key.startsWith(`${removed}/`)) editorKeysByPath.delete(key)
+    }
     for (const [key, state] of workspaceBuffers) {
       const cached = normalizeWorkspacePath(state.path)
       if (cached === removed || cached.startsWith(`${removed}/`)) workspaceBuffers.delete(key)
@@ -1940,6 +1959,7 @@ export const useProblemStore = defineStore('problem', () => {
     allTestRunSummary,
     activeTestCaseId,
     draftPath,
+    editorDocumentKey,
     localStatement,
     contextFileName,
     draftSaveStatus,

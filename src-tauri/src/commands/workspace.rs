@@ -2427,6 +2427,71 @@ async fn command_output(
         .map_err(|e| format!("等待进程失败: {}", e))
 }
 
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct CppSyntaxDiagnostic {
+    line: u32,
+    column: u32,
+    message: String,
+}
+
+fn parse_cpp_syntax_diagnostics(stderr: &str) -> Vec<CppSyntaxDiagnostic> {
+    let location = regex::Regex::new(r"(?m)^<stdin>:(\d+):(\d+): (?:fatal )?error: ([^\r\n]+)")
+        .expect("valid compiler diagnostic pattern");
+    location
+        .captures_iter(stderr)
+        .take(30)
+        .filter_map(|entry| {
+            Some(CppSyntaxDiagnostic {
+                line: entry[1].parse().ok()?,
+                column: entry[2].parse().ok()?,
+                message: entry[3].into(),
+            })
+        })
+        .collect()
+}
+
+#[cfg(test)]
+#[test]
+fn cpp_syntax_diagnostics_keep_editable_source_errors() {
+    let errors = parse_cpp_syntax_diagnostics(
+        "<stdin>:2:5: error: expected ';'\r\nheader.hpp:8:2: error: unrelated\n<stdin>:3:2: warning: unused variable\n<stdin>:4:1: fatal error: missing.h: No such file",
+    );
+    assert_eq!(errors.len(), 2);
+    assert_eq!((errors[0].line, errors[0].column), (2, 5));
+    assert_eq!(errors[0].message, "expected ';'");
+    assert_eq!(errors[1].line, 4);
+}
+
+#[tauri::command]
+pub async fn check_cpp_syntax(
+    app: AppHandle,
+    code: String,
+    path: Option<String>,
+) -> Result<Vec<CppSyntaxDiagnostic>, String> {
+    if code.trim().is_empty() || code.len() > 512 * 1024 {
+        return Ok(Vec::new());
+    }
+    let mut compile = Command::new(data_center::tool_command(&app, "cppCompiler", "g++"));
+    compile
+        .arg(data_center::cpp_standard_flag(&app))
+        .args(["-fsyntax-only", "-fdiagnostics-color=never", "-x", "c++", "-"])
+        .env("LC_ALL", "C");
+    // Preserve local quoted includes while checking the unsaved buffer on stdin.
+    if let Some(parent) = path
+        .as_deref()
+        .and_then(|path| Path::new(path).parent())
+        .filter(|parent| parent.is_dir())
+    {
+        compile.current_dir(parent);
+    }
+    let limit = Duration::from_secs(5);
+    let output = timeout(limit, command_output(compile, Some(&code), limit))
+        .await
+        .map_err(|_| "C++ 语法检查超时".to_string())??;
+    Ok(parse_cpp_syntax_diagnostics(&String::from_utf8_lossy(&output.stderr)))
+}
+
 fn failed(
     message: String,
     started: Instant,

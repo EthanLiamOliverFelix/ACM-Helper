@@ -1,7 +1,17 @@
 import type { Language } from '../types'
 import { formatCode } from './codeFormatter'
+import { getPythonSyntaxDiagnostic } from './pythonSyntaxDiagnostic'
 
 const registered = new WeakSet<object>()
+
+function formattingError(error: unknown, source: string, language: Language) {
+  const message = error instanceof Error ? error.message : String(error)
+  if (language === 'python') {
+    const diagnostic = getPythonSyntaxDiagnostic(error, source)
+    if (diagnostic) return `第 ${diagnostic.line} 行语法错误：${diagnostic.message}`
+  }
+  return `格式化失败：${message}`
+}
 
 /** Monaco providers are global, even when editors are mounted in separate groups. */
 export function registerCodeFormatters(monaco: any, state: { isFormatting: boolean; formatError: string }) {
@@ -21,7 +31,9 @@ export function registerCodeFormatters(monaco: any, state: { isFormatting: boole
           if (token.isCancellationRequested || model.isDisposed() || model.getVersionId() !== version || formatted === source) return []
           return [{ range: model.getFullModelRange(), text: formatted }]
         } catch (error) {
-          state.formatError = `格式化失败：${String(error)}`
+          if (!token.isCancellationRequested && !model.isDisposed() && model.getVersionId() === version) {
+            state.formatError = formattingError(error, source, language)
+          }
           return []
         } finally {
           state.isFormatting = --pending > 0

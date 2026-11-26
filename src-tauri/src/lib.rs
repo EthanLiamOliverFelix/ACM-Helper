@@ -89,6 +89,7 @@ pub fn run() {
             workspace::paste_workspace_entry,
             workspace::import_workspace_entries,
             workspace::run_code,
+            workspace::check_cpp_syntax,
             workspace::run_test_suite,
             workspace::debug_code,
             debug_session::start_debug_session,

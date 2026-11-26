@@ -156,8 +156,12 @@ function formatMem(bytes?: number): string {
             <textarea v-model="test.expectedOutput" spellcheck="false" placeholder="填写后将自动对比；留空则只运行" @input="store.updateTestCase(test.id)" />
           </div>
           <div class="io-box" :class="{ 'io-box--passed': test.status === 'passed', 'io-box--failed': test.status === 'failed' || test.status === 'error' }">
-            <div class="io-box__heading"><span>实际输出</span><button @click.stop="copyBox(test.actualOutput, `${test.id}:actual`)">{{ copiedBox === `${test.id}:actual` ? '已复制' : '复制' }}</button></div>
-            <textarea :value="test.actualOutput" readonly spellcheck="false" placeholder="运行后显示程序输出" />
+            <div class="io-box__heading"><span>实际输出</span><button v-if="test.actualOutput" @click.stop="copyBox(test.actualOutput, `${test.id}:actual`)">{{ copiedBox === `${test.id}:actual` ? '已复制' : '复制' }}</button></div>
+            <textarea v-if="test.actualOutput || !test.stderr || test.compileFailed || test.timedOut" :value="test.actualOutput" aria-label="实际输出" readonly spellcheck="false" placeholder="运行后显示程序输出" />
+            <template v-if="test.stderr && !test.compileFailed && !test.timedOut">
+              <div class="io-box__heading"><span>错误输出</span><button @click.stop="copyBox(test.stderr, `${test.id}:stderr`)">{{ copiedBox === `${test.id}:stderr` ? '已复制' : '复制' }}</button></div>
+              <textarea class="io-box__stderr" :value="test.stderr" aria-label="错误输出" readonly spellcheck="false" />
+            </template>
           </div>
         </section>
       </div>
@@ -408,7 +412,7 @@ function formatMem(bytes?: number): string {
 .test-status { padding: 1px 5px; border-radius: 3px; background: var(--color-bg-subtle); color: var(--color-tone-888); font-size: 12px; font-weight: 700; white-space: nowrap; &--running { color: var(--color-accent-text); } &--passed { background: var(--color-tone-193428); color: var(--color-success); } &--failed, &--error { background: var(--color-tone-3a2020); color: var(--color-danger); } &--completed { color: var(--color-warning); } }
 .io-box { margin-top: 6px; border: 1px solid var(--color-border-soft); border-radius: 4px; overflow: hidden; background: var(--color-bg-deep); &--passed { border-color: var(--color-tone-315b4c); } &--failed { border-color: var(--color-tone-6b3636); } textarea { display: block; width: 100%; min-height: 58px; max-height: 180px; resize: vertical; box-sizing: border-box; padding: 7px; border: 0; outline: none; background: var(--color-bg-deep); color: var(--color-text-primary); font: 11px/1.4 Consolas, monospace; overflow: auto; } textarea:focus { box-shadow: inset 0 0 0 1px var(--color-accent-border); } }
 .io-box__heading { display: flex; align-items: center; justify-content: space-between; padding: 4px 6px; border-bottom: 1px solid var(--color-bg-subtle); background: var(--color-bg-control-alt); color: var(--color-tone-999); font-size: 9px; button { padding: 1px 5px; border: 0; background: transparent; color: var(--color-tone-75a9cf); font-size: 9px; cursor: pointer; } }
-.io-box__stderr { max-height: 90px; overflow: auto; margin: 0; padding: 6px 7px; border-top: 1px solid var(--color-danger-border); color: var(--color-danger) !important; background: var(--color-tone-261b1b); white-space: pre-wrap !important; }
+.io-box textarea.io-box__stderr { min-height: 100px; color: var(--color-danger); }
 
 .run-btn { padding: 8px; border: none; border-radius: 5px; background: var(--color-tone-2e7d32); color: var(--color-text-on-accent); cursor: pointer; }
 .run-btn:hover:not(:disabled) { background: var(--color-tone-388e3c); }

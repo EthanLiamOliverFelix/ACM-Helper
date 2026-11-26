@@ -34,4 +34,13 @@ describe('editor formatting lifecycle', () => {
     expect(await formatting).toEqual([])
     expect(state.isFormatting).toBe(false)
   })
+
+  it('shows the Python error line using Ruff’s UTF-8 offset', async () => {
+    const { providers, state, model } = setup()
+    model.getValue = () => '# 中文注释\r\nnow++\r\n'
+    const offset = new TextEncoder().encode('# 中文注释\r\nnow++').length
+    mocks.format.mockRejectedValueOnce(`Expected an expression at byte range ${offset}..${offset + 1}`)
+    expect(await providers[1].provideDocumentFormattingEdits(model, {}, {})).toEqual([])
+    expect(state.formatError).toBe('第 2 行语法错误：缺少有效的表达式')
+  })
 })

@@ -8,6 +8,7 @@ import { monaco } from '../monaco'
 import { configureMonaco } from '../monaco'
 import { VueMonacoEditor } from '@guolao/vue-monaco-editor'
 import { registerCodeFormatters } from '../utils/editorFormatting'
+import { attachLiveCodeDiagnostics } from '../utils/liveCodeDiagnostics'
 import CodeVersionManager from './CodeVersionManager.vue'
 import EditorRunControl from './EditorRunControl.vue'
 import { useWorkbenchStore } from '../stores/workbenchStore'
@@ -85,6 +86,7 @@ function handleMount(editor: any) {
   debugLineDecorations = editor.createDecorationsCollection([])
   editorDisposables.forEach((item) => item.dispose())
   editorDisposables = [
+    attachLiveCodeDiagnostics(monaco, editor, () => store.draftPath),
     editor.onMouseDown((event: any) => {
       const line = breakpointLine(event)
       if (line) store.toggleBreakpoint(line)
@@ -149,6 +151,7 @@ watch(() => store.debugSession?.line, renderDebugLine)
 
 const editorOptions = {
   automaticLayout: true,
+  autoIndent: 'full' as const,
   fontSize: 14,
   fontFamily: "'Cascadia Code', 'Fira Code', 'Consolas', 'Courier New', monospace",
   minimap: { enabled: true, scale: 1, showSlider: 'mouseover' as const },

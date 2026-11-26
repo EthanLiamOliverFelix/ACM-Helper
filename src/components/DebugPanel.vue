@@ -31,7 +31,7 @@ async function addWatch() {
       <button @click="store.stopDebugSession()">退出调试</button>
     </header>
 
-    <div class="debug-panel__body">
+    <div class="debug-panel__body" role="region" aria-label="调试内容" tabindex="0">
       <label class="debug-panel__label" for="debug-input">输入数据</label>
       <textarea id="debug-input" v-model="store.debugInput" :disabled="!!store.debugSession?.active" spellcheck="false" placeholder="程序的标准输入将在开始调试时一次性提供" />
 
@@ -85,9 +85,9 @@ async function addWatch() {
 </template>
 
 <style scoped lang="scss">
-.debug-panel { flex: 1; min-height: 0; display: flex; flex-direction: column; background: var(--color-bg-app); color: var(--color-tone-ccc); font-size: 13px; }
+.debug-panel { flex: 1; height: 100%; min-height: 0; display: flex; flex-direction: column; overflow: hidden; background: var(--color-bg-app); color: var(--color-tone-ccc); font-size: 13px; }
 .debug-panel__header { display: flex; align-items: center; justify-content: space-between; padding: 11px 13px; border-bottom: 1px solid var(--color-border-soft); div { display: flex; flex-direction: column; gap: 2px; } strong { color: var(--color-tone-eee); font-size: 15px; } span { color: var(--color-text-faint); font-size: 12px; } button { padding: 5px 9px; border: 1px solid var(--color-tone-814242); border-radius: 4px; background: var(--color-tone-3b2525); color: var(--color-tone-f1a3a3); font: inherit; cursor: pointer; } }
-.debug-panel__body { flex: 1; min-height: 0; overflow-y: auto; padding: 12px; }
+.debug-panel__body { flex: 1; min-height: 0; overflow-y: auto; scrollbar-gutter: stable; padding: 12px; }
 .debug-panel__label { display: block; margin-bottom: 5px; color: var(--color-text-soft); font-size: 13px; font-weight: 600; }
 textarea { box-sizing: border-box; width: 100%; min-height: 92px; max-height: 210px; resize: vertical; padding: 8px; border: 1px solid var(--color-border-control); border-radius: 5px; outline: none; background: var(--color-bg-deep); color: var(--color-text-strong); font: 13px/1.45 Consolas, monospace; &:focus { border-color: var(--color-tone-6d4d91); } &:disabled { color: var(--color-tone-888); } }
 .debug-panel__start { width: 100%; margin-top: 8px; padding: 9px; border: 0; border-radius: 5px; background: var(--color-accent-strong); color: var(--color-text-on-accent); font: inherit; font-weight: 600; cursor: pointer; &:disabled { opacity: .45; cursor: not-allowed; } }
